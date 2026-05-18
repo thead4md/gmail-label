@@ -1,0 +1,177 @@
+# MailMind
+
+A local Gmail classification and auto-labelling tool. MailMind fetches your unread emails, classifies them using a hybrid rule-based + ML pipeline, and applies Gmail labels — all from your Mac, with no data leaving your machine.
+
+---
+
+## Features
+
+- **OAuth2 authentication** — token stored in macOS Keychain via `keyring`, with Fernet-encrypted fallback
+- **Hybrid classification pipeline** — rule-based fast pass → ML model (scikit-learn) → optional LLM stage
+- **Sender reputation scoring** — tracks per-sender trust over time
+- **Review dashboard** — read-only Streamlit UI to inspect predictions, actions, and sender stats
+- **Dry-run mode** — classify everything without writing any labels to Gmail
+- **Watch mode** — continuous polling daemon (runs every N seconds)
+
+---
+
+## Setup
+
+### 1. Prerequisites
+
+- Python 3.11+
+- A Google Cloud project with the Gmail API enabled
+- OAuth 2.0 credentials downloaded as `credentials.json`
+
+### 2. Install
+
+```bash
+cd ~/PyProjects          # or wherever you cloned this repo
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### 3. Place credentials
+
+Copy your OAuth client secret file to:
+
+```
+~/.mailmind/credentials.json
+```
+
+> **Never commit this file.** It is gitignored. If it was ever committed, [rotate it](https://console.cloud.google.com/apis/credentials) immediately.
+
+### 4. Authenticate
+
+```bash
+python -m mailmind.main auth
+```
+
+A browser window opens for the Google OAuth consent screen. After approval the token is stored in macOS Keychain (or `~/.mailmind/tokens.json.enc` as a fallback).
+
+---
+
+## Usage
+
+### One-shot run
+
+Fetch the latest unread INBOX messages, classify, and apply labels:
+
+```bash
+python -m mailmind.main run
+```
+
+### Dry run (no label writes)
+
+```bash
+python -m mailmind.main run --dry-run
+```
+
+### Watch mode (continuous daemon)
+
+```bash
+python -m mailmind.main run --watch --poll-seconds 120
+```
+
+### Review dashboard
+
+```bash
+python -m streamlit run mailmind/review_dashboard.py --server.address=127.0.0.1
+```
+
+Open `http://127.0.0.1:8501` in your browser.
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | SQLite database path |
+| `MAILMIND_APP_DIR` | `~/.mailmind` | Config and token directory |
+| `MAILMIND_POLL_SECONDS` | `120` | Watch mode poll interval (seconds) |
+| `MAILMIND_FETCH_MAX` | `50` | Max emails fetched per run |
+| `MAILMIND_DRY_RUN` | `0` | Set to `1` to disable real label writes |
+
+---
+
+## Project structure
+
+```
+mailmind/
+├── main.py                  # CLI entry point (run / auth commands)
+├── ingestion/
+│   ├── auth.py              # OAuth2 flow, token storage
+│   ├── fetcher.py           # Gmail API wrappers
+│   └── parser.py            # Raw Gmail message → Email model
+├── processing/
+│   ├── pipeline.py          # Orchestrates rules → ML → actions
+│   ├── rules.py             # Rule-based classifier
+│   └── scorer.py            # Priority scorer
+├── ml/
+│   ├── model.py             # scikit-learn model definition
+│   ├── train.py             # Training script
+│   ├── features.py          # Feature extraction
+│   └── inference.py         # Inference wrapper
+├── actions/
+│   ├── executor.py          # Applies Gmail labels via API
+│   └── safety.py            # Action safety checks
+├── storage/
+│   ├── database.py          # SQLite abstraction (WAL mode)
+│   ├── migrations.py        # Schema migrations
+│   ├── models.py            # Dataclasses: Email, Prediction, etc.
+│   └── queries.py           # Read-only query helpers (dashboard)
+├── review_dashboard.py      # Streamlit dashboard
+└── tests/                   # pytest suite
+```
+
+---
+
+## Running tests
+
+```bash
+python -m pytest mailmind/tests/ -v
+```
+
+---
+
+## Scheduled runs (macOS launchd)
+
+To run MailMind every 5 minutes automatically, create `~/Library/LaunchAgents/com.mailmind.run.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mailmind.run</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/adamdudas/PyProjects/.venv/bin/python</string>
+    <string>-m</string><string>mailmind.main</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/adamdudas/PyProjects</string>
+  <key>StartInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>/tmp/mailmind.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mailmind.err</string>
+</dict>
+</plist>
+```
+
+Then load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.mailmind.run.plist
+```
+
+---
+
+## Security notes
+
+- No email body text is stored in the review dashboard or logs
+- OAuth tokens are stored in macOS Keychain; never in the repo
+- `credentials.json` must live at `~/.mailmind/credentials.json`, outside the repo
+- All SQLite writes use parameterised queries
