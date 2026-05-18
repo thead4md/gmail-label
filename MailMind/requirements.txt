@@ -12,3 +12,6 @@ keyring>=23.0
 # Pass 4 - ML classification (lightweight, local)
 scikit-learn>=1.2.0
 joblib>=1.2.0
+
+# Pass 4.5 - Review dashboard
+streamlit>=1.35.0
