@@ -1,0 +1,13 @@
+.aider*
+.ai/
+
+# macOS junk
+.DS_Store
+._*
+
+# Python caches
+__pycache__/
+.pytest_cache/
+
+# Packaging artifacts
+*.egg-info/

@@ -7,7 +7,7 @@ The review dashboard provides a **read‑only** Streamlit UI for inspecting pred
 ## How to Run
 
 ```bash
-streamlit run mailmind/review_dashboard.py --server.address=127.0.0.1
+python -m streamlit run mailmind/review_dashboard.py --server.address=127.0.0.1
 ```
 
 The dashboard will be available at `http://127.0.0.1:8501`.
