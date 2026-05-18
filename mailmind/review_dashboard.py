@@ -10,8 +10,8 @@ import streamlit as st
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from MailMind.storage.database import Database
-from MailMind.storage.queries import (
+from mailmind.storage.database import Database
+from mailmind.storage.queries import (
     get_recent_predictions,
     get_predictions_for_email,
     get_recent_actions,
@@ -41,7 +41,6 @@ st.markdown("Read‑only view of predictions, actions, and sender reputations.")
 @st.cache_resource
 def get_db() -> Database:
     """Return a Database instance (cached for the session)."""
-    # Use the default path; user can override via environment variable
     import os
     db_path = os.environ.get("MAILMIND_DB_PATH", "~/.mailmind/mailmind.db")
     return Database(db_path)
@@ -144,7 +143,6 @@ with tab_overview:
 with tab_predictions:
     st.header("Prediction Detail")
 
-    # Allow user to select an email_gmail_id
     all_preds = get_recent_predictions(db, limit=200)
     email_gmail_ids = sorted({p["email_gmail_id"] for p in all_preds})
     selected_email = st.selectbox("Select email (email_gmail_id)", [""] + email_gmail_ids)
