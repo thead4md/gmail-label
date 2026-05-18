@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Optional
 
 import click
@@ -27,7 +26,11 @@ import click
 from mailmind.ingestion.auth import authenticate, build_gmail_service
 from mailmind.ingestion.fetcher import GmailFetcher
 from mailmind.ingestion.parser import parse_message
-from mailmind.processing.pipeline import run_pipeline
+from mailmind.processing.pipeline import Pipeline
+from mailmind.processing.rules import RulesEngine
+from mailmind.processing.scorer import PriorityScorer
+from mailmind.actions.executor import ActionExecutor
+from mailmind.actions.safety import SafetyPolicy
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email
 
@@ -47,7 +50,31 @@ def _get_db() -> Database:
     return Database(db_path)
 
 
-def _process_message_id(message_id: str, fetcher: GmailFetcher, db: Database, dry_run: bool) -> None:
+def _build_pipeline(db: Database, dry_run: bool) -> Pipeline:
+    """Construct a fully wired Pipeline from default components."""
+    rules_engine = RulesEngine()
+    scorer = PriorityScorer()
+    safety = SafetyPolicy(dry_run=dry_run)
+    try:
+        executor = ActionExecutor(db=db, safety_policy=safety)
+    except Exception:
+        LOG.debug("ActionExecutor not available without Gmail service at init; using None")
+        executor = None
+    return Pipeline(
+        db=db,
+        rules_engine=rules_engine,
+        scorer=scorer,
+        executor=executor,
+        safety_policy=safety,
+    )
+
+
+def _process_message_id(
+    message_id: str,
+    fetcher: GmailFetcher,
+    pipeline: Pipeline,
+    dry_run: bool,
+) -> None:
     """Fetch one message, persist it, run the classification pipeline."""
     try:
         raw = fetcher.get_message(message_id)
@@ -55,41 +82,44 @@ def _process_message_id(message_id: str, fetcher: GmailFetcher, db: Database, dr
         LOG.warning("Failed to fetch message %s: %s", message_id, exc)
         return
 
-    # Parse raw Gmail API response into an Email model
     try:
         email: Email = parse_message(raw)
     except Exception as exc:
         LOG.warning("Failed to parse message %s: %s", message_id, exc)
         return
 
-    # Persist email (INSERT OR IGNORE — safe to re-run)
     try:
-        db.insert_email(email)
+        pipeline.db.insert_email(email)
     except Exception as exc:
         LOG.warning("Failed to insert email %s: %s", email.gmail_id, exc)
         return
 
-    # Run the classification + action pipeline
     try:
-        run_pipeline(email=email, db=db, dry_run=dry_run)
-        LOG.info("Processed %s (subject: %s)", email.gmail_id, email.subject[:60] if email.subject else "—")
+        prediction = pipeline.process(email=email, auto_action=(not dry_run))
+        LOG.info(
+            "Processed %s | label=%s score=%.2f",
+            email.gmail_id,
+            prediction.primary_label,
+            prediction.priority_score or 0.0,
+        )
     except Exception as exc:
         LOG.error("Pipeline failed for %s: %s", email.gmail_id, exc, exc_info=True)
 
 
 def _run_once(db: Database, dry_run: bool, fetch_max: int) -> None:
-    """One-shot ingestion: authenticate → fetch unread INBOX → process each."""
+    """One-shot: authenticate → fetch unread INBOX → process each message."""
     LOG.info("Authenticating with Gmail…")
     creds = authenticate()
     service = build_gmail_service(creds)
     fetcher = GmailFetcher(service)
+    pipeline = _build_pipeline(db, dry_run=dry_run)
 
     LOG.info("Fetching up to %d unread INBOX message IDs…", fetch_max)
     message_ids = fetcher.list_message_ids(label_ids=["INBOX", "UNREAD"], max_results=fetch_max)
     LOG.info("Found %d messages.", len(message_ids))
 
     for mid in message_ids:
-        _process_message_id(mid, fetcher, db, dry_run)
+        _process_message_id(mid, fetcher, pipeline, dry_run=dry_run)
 
     LOG.info("Run complete.")
 
