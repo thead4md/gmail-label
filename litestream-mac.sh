@@ -1,16 +1,15 @@
 #!/bin/bash
-# Run on Mac Mini to replicate ~/.mailmind/mailmind.db → S3.
-# Runs litestream in the foreground; wrap in launchd for auto-start.
+# Run on Mac Mini to replicate ~/.mailmind/mailmind.db -> S3.
+# Uses litestream-mac.yml (hardcoded path, no shell expansion issues).
 #
 # Prerequisites:
 #   brew install litestream
 #   export LITESTREAM_ACCESS_KEY_ID=...
 #   export LITESTREAM_SECRET_ACCESS_KEY=...
 #   export LITESTREAM_S3_BUCKET=...
-#   # Optional for Backblaze B2 / Tigris:
-#   export LITESTREAM_S3_ENDPOINT=...
+#   export LITESTREAM_S3_ENDPOINT=...   # e.g. s3.us-west-004.backblazeb2.com
 
 set -euo pipefail
 
-exec litestream replicate \
-  -config "$(dirname "$0")/litestream.yml"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec litestream replicate -config "$DIR/litestream-mac.yml"

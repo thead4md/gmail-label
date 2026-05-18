@@ -1,15 +1,14 @@
-# Litestream config for Render / Fly.io container
-# DB path is /tmp/mailmind.db (set via MAILMIND_DB_PATH env var in render.yaml)
+# Litestream config for Mac Mini (replication source)
+# Run via litestream-mac.sh
 #
-# Required env vars:
-#   MAILMIND_DB_PATH             e.g. /tmp/mailmind.db
+# Required env vars (export before running litestream-mac.sh):
 #   LITESTREAM_ACCESS_KEY_ID
 #   LITESTREAM_SECRET_ACCESS_KEY
 #   LITESTREAM_S3_BUCKET
 #   LITESTREAM_S3_ENDPOINT       (required for Backblaze B2 / Tigris)
 
 dbs:
-  - path: $MAILMIND_DB_PATH
+  - path: /Users/adamdudas/.mailmind/mailmind.db
     replicas:
       - type: s3
         bucket: $LITESTREAM_S3_BUCKET

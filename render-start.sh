@@ -2,18 +2,20 @@
 # Render container startup:
 # 1. Restore latest DB snapshot from S3 via Litestream
 # 2. Start Litestream in replica mode (keeps DB in sync with Mac Mini)
-# 3. Launch Streamlit dashboard
-#
-# Note: Render free tier has no persistent disk.
-# DB lives in /tmp (ephemeral) and is restored fresh from S3 on each deploy/restart.
-# Litestream replica mode then keeps it updated every 10s.
+# 3. Launch Streamlit on port 10000
 
 set -e
 
 DB_PATH="${MAILMIND_DB_PATH:-/tmp/mailmind.db}"
+export MAILMIND_DB_PATH="$DB_PATH"
 
-echo "[render-start] Restoring DB from S3..."
-litestream restore -config /etc/litestream.yml -if-replica-exists "$DB_PATH" || echo "[render-start] No existing replica, starting fresh."
+echo "[render-start] DB path: $DB_PATH"
+echo "[render-start] Restoring from S3 bucket: $LITESTREAM_S3_BUCKET"
+
+litestream restore \
+  -config /etc/litestream.yml \
+  -if-replica-exists \
+  "$DB_PATH" || echo "[render-start] No existing replica found, will start empty."
 
 echo "[render-start] Starting Litestream replica + Streamlit..."
 exec litestream replicate -config /etc/litestream.yml \
