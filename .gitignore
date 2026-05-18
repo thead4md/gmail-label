@@ -1,13 +1,17 @@
-.aider*
-.ai/
+cat >> .gitignore << 'EOF'
 
-# macOS junk
-.DS_Store
+# macOS resource forks
 ._*
+.DS_Store
 
-# Python caches
-__pycache__/
-.pytest_cache/
+# IDE
+.idea/
 
-# Packaging artifacts
+# Build artifacts
+mailmind.egg-info/
 *.egg-info/
+
+# Node stray
+package-lock.json
+node_modules/
+EOF
