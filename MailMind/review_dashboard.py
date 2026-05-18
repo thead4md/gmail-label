@@ -144,13 +144,13 @@ with tab_overview:
 with tab_predictions:
     st.header("Prediction Detail")
 
-    # Allow user to select a gmail_id
+    # Allow user to select an email_gmail_id
     all_preds = get_recent_predictions(db, limit=200)
-    gmail_ids = sorted({p["gmail_id"] for p in all_preds})
-    selected_gmail = st.selectbox("Select email (gmail_id)", [""] + gmail_ids)
+    email_gmail_ids = sorted({p["email_gmail_id"] for p in all_preds})
+    selected_email = st.selectbox("Select email (email_gmail_id)", [""] + email_gmail_ids)
 
-    if selected_gmail:
-        preds = get_predictions_for_email(db, selected_gmail)
+    if selected_email:
+        preds = get_predictions_for_email(db, selected_email)
         filtered_preds = _apply_filters(preds)
         if filtered_preds:
             st.dataframe(filtered_preds, use_container_width=True)
