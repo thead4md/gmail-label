@@ -7,6 +7,7 @@ No body_text is ever exposed.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any, Dict, List, Optional
 
 from mailmind.storage.database import Database
