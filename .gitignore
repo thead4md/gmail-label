@@ -1,17 +1,24 @@
 cat >> .gitignore << 'EOF'
 
-# macOS resource forks
+# Python bytecode
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# SQLite databases (test artifacts)
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets / credentials
+credentials.json
+*.json.key
+
+# Aider
+.aider*
+.ai/
+
+# macOS resource forks (belt-and-suspenders)
+**/._.*/
 ._*
-.DS_Store
-
-# IDE
-.idea/
-
-# Build artifacts
-mailmind.egg-info/
-*.egg-info/
-
-# Node stray
-package-lock.json
-node_modules/
 EOF
