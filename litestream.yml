@@ -1,0 +1,25 @@
+# Litestream configuration — used on BOTH sides:
+#   - Mac Mini (replication SOURCE): replicate local DB → S3
+#   - Fly.io container (replica READER): restore from S3 on startup, then
+#     run in read-only replica mode so the dashboard always sees fresh data.
+#
+# Required environment variables (set as Fly secrets + local shell export):
+#   LITESTREAM_ACCESS_KEY_ID      AWS / Backblaze B2 / Tigris access key
+#   LITESTREAM_SECRET_ACCESS_KEY  Corresponding secret key
+#   LITESTREAM_S3_BUCKET          Bucket name  (e.g. mailmind-db)
+#   LITESTREAM_S3_ENDPOINT        Optional: custom S3 endpoint for B2/Tigris
+
+dbs:
+  - path: ${MAILMIND_DB_PATH:-~/.mailmind/mailmind.db}
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_S3_BUCKET}
+        path: mailmind.db
+        # Uncomment for Backblaze B2 or Tigris:
+        # endpoint: ${LITESTREAM_S3_ENDPOINT}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        # Sync every 10 seconds from Mac Mini
+        sync-interval: 10s
+        # Retain 24h of WAL segments for point-in-time restore
+        retention: 24h

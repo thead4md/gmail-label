@@ -1,0 +1,35 @@
+app = 'mailmind-dashboard'
+primary_region = 'ams'
+
+[build]
+
+[env]
+  MAILMIND_DB_PATH = '/data/mailmind.db'
+
+[[mounts]]
+  source = 'mailmind_data'
+  destination = '/data'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8501
+
+  [[services.ports]]
+    handlers = ['tls', 'http']
+    port = 443
+
+  [[services.ports]]
+    handlers = ['http']
+    port = 80
+    [services.ports.force_https]
+      enabled = true
+
+  [services.concurrency]
+    type = 'requests'
+    hard_limit = 10
+    soft_limit = 5
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
