@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mailmind.ingestion</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Volumes/T7/PyProjects/gmail-label/.venv/bin/python</string>
+    <string>-m</string>
+    <string>mailmind.main</string>
+    <string>run</string>
+    <string>--watch</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Volumes/T7/PyProjects/gmail-label</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MAILMIND_DB_PATH</key>
+    <string>/Users/adamdudas/.mailmind/mailmind.db</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <!-- Restart automatically if it crashes or Mac reboots -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Wait 30s before restarting on crash (avoids tight crash loops) -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/mailmind-ingestion.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/mailmind-ingestion.err</string>
+</dict>
+</plist>
