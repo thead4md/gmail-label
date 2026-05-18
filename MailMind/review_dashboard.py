@@ -10,8 +10,8 @@ import streamlit as st
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from mailmind.storage.database import Database
-from mailmind.storage.queries import (
+from MailMind.storage.database import Database
+from MailMind.storage.queries import (
     get_recent_predictions,
     get_predictions_for_email,
     get_recent_actions,
