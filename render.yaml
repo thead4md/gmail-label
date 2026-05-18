@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: mailmind-dashboard
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: /render-start.sh
+    region: frankfurt
+    plan: free
+    envVars:
+      - key: MAILMIND_DB_PATH
+        value: /tmp/mailmind.db
+      - key: LITESTREAM_ACCESS_KEY_ID
+        sync: false
+      - key: LITESTREAM_SECRET_ACCESS_KEY
+        sync: false
+      - key: LITESTREAM_S3_BUCKET
+        sync: false
+      # Optional: uncomment for Backblaze B2 or Tigris
+      # - key: LITESTREAM_S3_ENDPOINT
+      #   sync: false
+    healthCheckPath: /_stcore/health
