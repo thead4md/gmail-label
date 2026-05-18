@@ -132,7 +132,7 @@ with tab_overview:
     recent_preds = get_recent_predictions(db, limit=10)
     filtered_preds = _apply_filters(recent_preds)
     if filtered_preds:
-        st.dataframe(filtered_preds, use_container_width=True)
+        st.dataframe(filtered_preds, width='stretch')
     else:
         st.info("No predictions match the current filters.")
 
@@ -153,7 +153,7 @@ with tab_predictions:
         preds = get_predictions_for_email(db, selected_email)
         filtered_preds = _apply_filters(preds)
         if filtered_preds:
-            st.dataframe(filtered_preds, use_container_width=True)
+            st.dataframe(filtered_preds, width='stretch')
         else:
             st.info("No predictions match the current filters.")
     else:
@@ -169,7 +169,7 @@ with tab_actions:
     actions = get_recent_actions(db, limit=200)
     filtered_actions = _apply_filters(actions)
     if filtered_actions:
-        st.dataframe(filtered_actions, use_container_width=True)
+        st.dataframe(filtered_actions, width='stretch')
     else:
         st.info("No actions match the current filters.")
 
@@ -182,6 +182,6 @@ with tab_senders:
     st.header("Sender Reputation")
     senders = get_sender_reputations(db)
     if senders:
-        st.dataframe(senders, use_container_width=True)
+        st.dataframe(senders, width='stretch')
     else:
         st.info("No sender reputation records found.")
