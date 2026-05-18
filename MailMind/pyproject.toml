@@ -1,0 +1,21 @@
+[project]
+name = "mailmind"
+version = "0.1.0"
+description = "MailMind: a local-first, privacy-preserving Gmail AI assistant (MVP + Pass 4 ML)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [ { name = "MailMind Contributors" } ]
+dependencies = [
+  "PyYAML>=6.0",
+  "click>=8.0",
+  "scikit-learn>=1.2.0",
+  "joblib>=1.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+gmail = ["google-api-python-client>=2.70.0", "google-auth>=2.20.0", "google-auth-oauthlib>=1.0.0"]
