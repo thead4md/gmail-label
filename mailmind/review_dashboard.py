@@ -13,11 +13,14 @@ from typing import Any, Dict, List, Optional
 from mailmind.storage.database import Database
 from mailmind.storage.queries import (
     get_recent_predictions,
-
     get_predictions_for_email,
     get_recent_actions,
     get_sender_reputations,
     get_summary_metrics,
+    get_pending_queue,        # ADD
+    approve_queue_item,       # ADD
+    reject_queue_item,        # ADD
+    log_correction, 
 )
 
 

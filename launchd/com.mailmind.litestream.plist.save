@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mailmind.litestream</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Volumes/T7/PyProjects/gmail-label/litestream-mac.sh</string>
+  </array>
+
+  <!-- Fill in your Backblaze B2 credentials below -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LITESTREAM_ACCESS_KEY_ID</key>
+    <string>003c4842f97d3930000000002<string<2<<s<string></string>
+    <key>LITESTREAM_SECRET_ACCESS_KEY</key>
+    <string>REPLACE_WITH_B2_APPLICATION_KEY</string>
+    <key>LITESTREAM_S3_BUCKET</key>
+    <string>mailmind-db</string>
+    <key>LITESTREAM_S3_ENDPOINT</key>
+    <string>REPLACE_WITH_B2_ENDPOINT</string>
+  </dict>
+
+  <!-- Restart automatically if it crashes or Mac reboots -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/mailmind-litestream.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/mailmind-litestream.err</string>
+</dict>
+</plist>
