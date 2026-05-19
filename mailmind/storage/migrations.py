@@ -111,6 +111,41 @@ MIGRATIONS: List[Tuple[str, str]] = [
         ALTER TABLE predictions ADD COLUMN llm_confidence REAL;
         """,
     ),
+    (
+        "0008_create_action_queue",
+        """
+        CREATE TABLE IF NOT EXISTS action_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_gmail_id TEXT NOT NULL,
+            prediction_id INTEGER NOT NULL,
+            suggested_action TEXT NOT NULL,
+            primary_label TEXT,
+            confidence REAL,
+            auto_eligible INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'pending',
+            reviewed_at INTEGER,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            FOREIGN KEY (prediction_id) REFERENCES predictions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_action_queue_status ON action_queue(status);
+        """,
+    ),
+    (
+        "0009_create_user_corrections",
+        """
+        CREATE TABLE IF NOT EXISTS user_corrections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_gmail_id TEXT NOT NULL,
+            original_label TEXT,
+            corrected_label TEXT,
+            original_action TEXT,
+            corrected_action TEXT,
+            source TEXT,
+            created_at INTEGER DEFAULT (strftime('%s','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_corrections_email ON user_corrections(email_gmail_id);
+        """,
+    ),
 ]
 
 

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from mailmind.storage.database import Database
 from mailmind.storage.queries import (
     get_recent_predictions,
+
     get_predictions_for_email,
     get_recent_actions,
     get_sender_reputations,
@@ -47,6 +48,23 @@ def get_db() -> Database:
 
 
 db = get_db()
+
+
+@st.cache_resource
+def get_action_executor() -> ActionExecutor:
+    """Build and cache a live-mode ActionExecutor for the dashboard.
+
+    Uses cached Gmail service and safety policy. Runs in live mode
+    (dry_run=False) so that approved actions actually execute.
+    """
+    creds = authenticate()
+    service = build_gmail_service(creds)
+    safety_policy = SafetyPolicy(dry_run=False)
+    return ActionExecutor(
+        service=service,
+        db=db,
+        safety_policy=safety_policy,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +128,17 @@ def _apply_filters(
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_predictions, tab_actions, tab_senders = st.tabs(
-    ["Overview", "Prediction Detail", "Actions Log", "Sender Reputation"]
+pending_queue = get_pending_queue(db)
+pending_count = len(pending_queue)
+
+tab_overview, tab_predictions, tab_actions, tab_queue, tab_senders = st.tabs(
+    [
+        "Overview",
+        "Prediction Detail",
+        "Actions Log",
+        f"Action Queue ({pending_count})",
+        "Sender Reputation",
+    ]
 )
 
 
@@ -173,7 +200,189 @@ with tab_actions:
 
 
 # ---------------------------------------------------------------------------
-# Tab 4 – Sender Reputation
+# Tab 4 – Action Queue
+# ---------------------------------------------------------------------------
+
+with tab_queue:
+    st.header("Pending Actions — Human Review Required")
+
+    if not pending_queue:
+        st.success("🎉 Action queue is empty! All actions have been reviewed.")
+    else:
+        st.info(
+            f"There are **{pending_count}** pending action(s) waiting for your review. "
+            "Approve to execute immediately, or reject to skip."
+        )
+
+        for item in pending_queue:
+            with st.container(border=True):
+                cols = st.columns([2, 1, 1, 1, 1])
+
+                with cols[0]:
+                    st.markdown(
+                        f"**Email:** `{item['email_gmail_id']}`  \n"
+                        f"**Action:** `{item['suggested_action']}`"
+                    )
+
+                with cols[1]:
+                    st.markdown(f"**Label:** `{item['primary_label']}`")
+
+                with cols[2]:
+                    conf = item.get("confidence", 0)
+                    st.markdown(f"**Confidence:** `{conf:.2f}`")
+
+                with cols[3]:
+                    created_dt = datetime.fromtimestamp(
+                        item["created_at"], tz=timezone.utc
+                    )
+                    st.markdown(
+                        f"**Queued:** {created_dt.strftime('%Y-%m-%d %H:%M')}"
+                    )
+
+                with cols[4]:
+                    approve_key = f"approve-{item['id']}"
+                    reject_key = f"reject-{item['id']}"
+
+                    if st.button("✅ Approve", key=approve_key):
+                        try:
+                            # Build the email object from the stored row
+                            email_row = db.get_email_by_gmail_id(
+                                item["email_gmail_id"]
+                            )
+                            if not email_row:
+                                st.error(
+                                    f"Email {item['email_gmail_id']} not found in DB."
+                                )
+                            else:
+                                # Fetch prediction to rebuild ScoreResult
+                                pred_row = db.execute_sql(
+                                    "SELECT * FROM predictions WHERE id = ?",
+                                    (item["prediction_id"],),
+                                ).fetchone()
+                                if not pred_row:
+                                    st.error(
+                                        f"Prediction {item['prediction_id']} not found."
+                                    )
+                                elif not pred_row["scoring_breakdown"]:
+                                    st.error(
+                                        f"Prediction {item['prediction_id']} has no scoring_breakdown."
+                                    )
+                                else:
+                                    # Reconstruct ScoreResult from stored JSON
+                                    score_data = json.loads(
+                                        pred_row["scoring_breakdown"]
+                                    )
+                                    valid_fields = {
+                                        f.name for f in fields(ScoreResult)
+                                    }
+                                    filtered = {
+                                        k: v
+                                        for k, v in score_data.items()
+                                        if k in valid_fields
+                                    }
+                                    score_result = ScoreResult(**filtered)
+
+                                    # Build Email model (safe subset, no body_text)
+                                    from mailmind.storage.models import Email as EmailModel
+
+                                    email = EmailModel(
+                                        gmail_id=email_row["gmail_id"],
+                                        thread_id=email_row["thread_id"],
+                                        sender=email_row["sender"],
+                                        recipients=(
+                                            email_row["recipients"].split(",")
+                                            if email_row["recipients"]
+                                            else []
+                                        ),
+                                        subject=email_row["subject"],
+                                        labels=(
+                                            email_row["labels"].split(",")
+                                            if email_row["labels"]
+                                            else []
+                                        ),
+                                    )
+
+                                    # Execute the action in live mode
+                                    executor = get_action_executor()
+                                    success = executor.execute_action(
+                                        email,
+                                        item["suggested_action"],
+                                        score_result,
+                                    )
+
+                                    # Mark as approved regardless of execution success
+                                    approve_queue_item(db, item["id"])
+                                    if success:
+                                        st.success(
+                                            f"✅ Approved & executed "
+                                            f"'{item['suggested_action']}' on "
+                                            f"{item['email_gmail_id']}"
+                                        )
+                                    else:
+                                        st.warning(
+                                            f"Approved '{item['suggested_action']}' for "
+                                            f"{item['email_gmail_id']}, "
+                                            "but execution may have been blocked "
+                                            "(dry-run or policy)."
+                                        )
+                                    st.rerun()
+
+                        except Exception as exc:
+                            st.error(f"Error during approval: {exc}")
+
+                    if st.button("❌ Reject", key=reject_key):
+                        # Store the rejecting item ID in session state
+                        st.session_state["rejecting_item_id"] = item["id"]
+                        st.rerun()
+
+                # Inline rejection form
+                if (
+                    st.session_state.get("rejecting_item_id") == item["id"]
+                ):
+                    with st.form(key=f"reject-form-{item['id']}"):
+                        st.markdown("**Reason for rejection (optional):**")
+                        corrected_label = st.text_input(
+                            "Corrected label",
+                            value="",
+                            placeholder="e.g. WORK, PERSONAL, NEWSLETTER",
+                        )
+                        col_submit, col_cancel = st.columns(2)
+                        with col_submit:
+                            submitted = st.form_submit_button(
+                                "Confirm Reject", type="primary"
+                            )
+                        with col_cancel:
+                            cancelled = st.form_submit_button("Cancel")
+
+                        if submitted:
+                            # Reject the queue item
+                            reject_queue_item(db, item["id"])
+
+                            # If user provided a corrected label, log it
+                            if corrected_label:
+                                log_correction(
+                                    db,
+                                    email_gmail_id=item["email_gmail_id"],
+                                    original_label=item["primary_label"],
+                                    corrected_label=corrected_label,
+                                    original_action=item["suggested_action"],
+                                )
+
+                            # Clear the rejecting state
+                            del st.session_state["rejecting_item_id"]
+                            st.warning(
+                                f"❌ Rejected '{item['suggested_action']}' for "
+                                f"{item['email_gmail_id']}"
+                            )
+                            st.rerun()
+
+                        if cancelled:
+                            del st.session_state["rejecting_item_id"]
+                            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Tab 5 – Sender Reputation
 # ---------------------------------------------------------------------------
 
 with tab_senders:
