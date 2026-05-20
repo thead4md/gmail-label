@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import logging
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Optional, Dict, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..storage.models import Email, SenderReputation
 from .rules import RuleMatch
@@ -43,6 +43,7 @@ class ScoreResult:
     total_score: int  # Final score 0-100
     base_score: int
     rule_contribution: int
+    direct_mention_bonus: int
     recency_bonus: int
     sender_trust: int
     penalties: Dict[str, int] = field(default_factory=dict)
@@ -51,26 +52,20 @@ class ScoreResult:
 
     def to_dict(self) -> Dict:
         """Convert to dict for logging/storage."""
-        return {
-            "total_score": self.total_score,
-            "base_score": self.base_score,
-            "rule_contribution": self.rule_contribution,
-            "recency_bonus": self.recency_bonus,
-            "sender_trust": self.sender_trust,
-            "penalties": self.penalties,
-            "primary_label": self.primary_label,
-        }
+        return asdict(self)
 
 
 class PriorityScorer:
     """Deterministic priority scoring engine."""
 
-    def __init__(self, recency_hours: int = 24):
+    def __init__(self, user_email: str = "", recency_hours: int = 24):
         """Initialize scorer.
 
         Args:
+            user_email: The user's primary email address (for direct mention bonus).
             recency_hours: Hours threshold for recency bonus.
         """
+        self.user_email = user_email
         self.recency_hours = recency_hours
 
     def compute_score(
@@ -102,13 +97,16 @@ class PriorityScorer:
                 rule_contribution += contribution
                 matched_rule_names.append(f"{match.rule_name}({contribution})")
 
-        # 3. Recency bonus
+        # 3. Direct mention bonus
+        direct_mention_bonus = self._compute_direct_mention_bonus(email)
+
+        # 4. Recency bonus
         recency_bonus = self._compute_recency_bonus(email)
 
-        # 4. Sender trust score
+        # 5. Sender trust score
         sender_trust = self._compute_sender_trust(email, sender_reputation)
 
-        # 5. Penalties accumulate
+        # 6. Penalties accumulate
         penalties = {}
 
         # Newsletter penalty
@@ -121,13 +119,13 @@ class PriorityScorer:
 
         total_penalties = sum(penalties.values())
 
-        # 6. Clamp to 0-100
-        score_before_clamp = base_score + rule_contribution + recency_bonus + sender_trust + total_penalties
+        # 7. Clamp to 0-100
+        score_before_clamp = base_score + rule_contribution + direct_mention_bonus + recency_bonus + sender_trust + total_penalties
         total_score = max(0, min(100, score_before_clamp))
 
-        # 7. Generate breakdown text
+        # 8. Generate breakdown text
         breakdown = self._build_breakdown_text(
-            primary_label, base_score, rule_contribution, recency_bonus,
+            primary_label, base_score, rule_contribution, direct_mention_bonus, recency_bonus,
             sender_trust, penalties, matched_rule_names, score_before_clamp, total_score
         )
 
@@ -135,6 +133,7 @@ class PriorityScorer:
             total_score=total_score,
             base_score=base_score,
             rule_contribution=rule_contribution,
+            direct_mention_bonus=direct_mention_bonus,
             recency_bonus=recency_bonus,
             sender_trust=sender_trust,
             penalties=penalties,
@@ -143,6 +142,13 @@ class PriorityScorer:
         )
         LOG.debug(f"Scored email {email.gmail_id}: {total_score} (primary_label={primary_label})")
         return result
+
+    def _compute_direct_mention_bonus(self, email: Email) -> int:
+        """Give a bonus if the user's email is in the recipients."""
+        if self.user_email and email.recipients:
+            if any(self.user_email.lower() in r.lower() for r in email.recipients):
+                return 30
+        return 0
 
     @staticmethod
     def _determine_primary_label(email: Email, rule_matches: List[RuleMatch]) -> str:
@@ -170,19 +176,18 @@ class PriorityScorer:
 
         return "NOTIFICATION"  # Safe default
 
-    @staticmethod
-    def _compute_recency_bonus(email: Email) -> int:
+    def _compute_recency_bonus(self, email: Email) -> int:
         """Give a bonus to recent emails (within recency_hours)."""
         if not email.date_ts:
             return 0
-        now_ts = int(datetime.utcnow().timestamp())
+        now_ts = int(datetime.now(timezone.utc).timestamp())
         age_seconds = now_ts - email.date_ts
         age_hours = age_seconds / 3600.0
-        # Recency bonus: +5 if within 24 hours, linearly decay to 0 after 48 hours
-        if age_hours <= 24:
+        # Recency bonus: +5 if within recency_hours, linearly decay after
+        if age_hours <= self.recency_hours:
             return 5
-        elif age_hours <= 48:
-            return max(0, int(5 * (2 - age_hours / 24)))
+        elif age_hours <= self.recency_hours * 2:
+            return max(0, int(5 * (2 - age_hours / self.recency_hours)))
         return 0
 
     @staticmethod
@@ -200,6 +205,7 @@ class PriorityScorer:
         primary_label: str,
         base_score: int,
         rule_contribution: int,
+        direct_mention_bonus: int,
         recency_bonus: int,
         sender_trust: int,
         penalties: Dict[str, int],
@@ -212,6 +218,7 @@ class PriorityScorer:
             f"Primary label: {primary_label}",
             f"Base score: {base_score}",
             f"Rule contribution: {rule_contribution} (from: {', '.join(matched_rule_names) or 'none'})",
+            f"Direct mention bonus: {direct_mention_bonus}",
             f"Recency bonus: {recency_bonus}",
             f"Sender trust: {sender_trust}",
         ]

@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 MailMind/__init__.py
 MailMind/main.py
@@ -10,10 +11,10 @@ MailMind/storage/database.py
 MailMind/storage/migrations.py
 MailMind/storage/models.py
 mailmind/__init__.py
+mailmind/config.py
 mailmind/main.py
 mailmind/review_dashboard.py
 mailmind.egg-info/._PKG-INFO
-mailmind.egg-info/._SOURCES.txt
 mailmind.egg-info/._dependency_links.txt
 mailmind.egg-info/._requires.txt
 mailmind.egg-info/._top_level.txt
@@ -29,6 +30,8 @@ mailmind/ingestion/__init__.py
 mailmind/ingestion/auth.py
 mailmind/ingestion/fetcher.py
 mailmind/ingestion/parser.py
+mailmind/llm/__init__.py
+mailmind/llm/deepseek.py
 mailmind/ml/__init__.py
 mailmind/ml/features.py
 mailmind/ml/inference.py
@@ -36,9 +39,9 @@ mailmind/ml/model.py
 mailmind/ml/train.py
 mailmind/processing/__init__.py
 mailmind/processing/pipeline.py
+mailmind/processing/queue_manager.py
 mailmind/processing/rules.py
 mailmind/processing/scorer.py
-mailmind/scripts/debug_pass3_pipeline.py
 mailmind/scripts/train_ml_model.py
 mailmind/storage/__init__.py
 mailmind/storage/database.py
@@ -46,11 +49,19 @@ mailmind/storage/migrations.py
 mailmind/storage/models.py
 mailmind/storage/queries.py
 mailmind/tests/__init__.py
+mailmind/tests/conftest.py
+mailmind/tests/test_config.py
+mailmind/tests/test_deepseek.py
+mailmind/tests/test_hybrid_prediction.py
 mailmind/tests/test_ml_features.py
 mailmind/tests/test_ml_inference.py
 mailmind/tests/test_ml_model.py
 mailmind/tests/test_ml_train.py
+mailmind/tests/test_pass6_e2e.py
 mailmind/tests/test_persistence.py
 mailmind/tests/test_pipeline_integration.py
+mailmind/tests/test_pipeline_llm.py
 mailmind/tests/test_prediction_persistence.py
 mailmind/tests/test_queries.py
+mailmind/tests/test_queue_manager.py
+mailmind/tests/test_scorer.py

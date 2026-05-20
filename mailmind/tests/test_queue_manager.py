@@ -57,6 +57,7 @@ class TestQueueManager(unittest.TestCase):
             total_score=total_score,
             base_score=total_score,
             rule_contribution=0,
+            direct_mention_bonus=0,
             recency_bonus=0,
             sender_trust=0,
             primary_label="IMPORTANT",

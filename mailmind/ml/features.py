@@ -23,7 +23,7 @@ import re
 import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..storage.models import Email
 
@@ -148,7 +148,7 @@ def extract_features(email: Email, true_label: Optional[str] = None) -> FeatureV
     # Recency
     recency_hours = None
     if email.date_ts:
-        now_ts = int(datetime.utcnow().timestamp())
+        now_ts = int(datetime.now(timezone.utc).timestamp())
         age_seconds = now_ts - email.date_ts
         recency_hours = age_seconds / 3600.0
 

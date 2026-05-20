@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -244,7 +244,7 @@ def train_model_from_db(
         class_names=sorted(set(labels)),
         num_samples=len(corpus),
         features_used=["subject", "snippet", "sender", "body_preview"],
-        trained_at=datetime.utcnow().isoformat(),
+        trained_at=datetime.now(timezone.utc).isoformat(),
     )
 
     # Explicit sanity checks before fitting to provide clear error messages
@@ -310,7 +310,7 @@ def train_model_from_data(
         class_names=sorted(set(labels)),
         num_samples=len(corpus),
         features_used=["subject", "snippet", "sender", "body_preview"],
-        trained_at=datetime.utcnow().isoformat(),
+        trained_at=datetime.now(timezone.utc).isoformat(),
     )
 
     classifier = MLClassifier(model_dir=model_dir)
@@ -330,7 +330,7 @@ def _save_model_metadata_to_db(
     value = json.dumps(metadata.to_dict())
     db.execute_sql(
         "INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)",
-        (key, value, int(datetime.utcnow().timestamp())),
+        (key, value, int(datetime.now(timezone.utc).timestamp())),
     )
     LOG.debug(f"Saved ML model metadata to system_state[{key}]")
 

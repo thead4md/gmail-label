@@ -13,7 +13,7 @@ These tests verify field correctness at the model and function level.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -47,7 +47,7 @@ def make_email(gmail_id: str = "test001", sender: str = "alice@example.com",
         snippet=snippet,
         body_text=body_text,
         recipients=["me@example.com"],
-        date_ts=int(datetime.utcnow().timestamp()),
+        date_ts=int(datetime.now(timezone.utc).timestamp()),
         labels=[],
         parsed=True,
     )

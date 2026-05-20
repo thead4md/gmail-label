@@ -12,6 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
+from email.utils import parseaddr
 
 from ..storage.models import Email
 
@@ -50,8 +51,9 @@ class RulesEngine:
     - Mass email penalties
     """
 
-    def __init__(self):
+    def __init__(self, user_email: str = ""):
         self.rules: List[Rule] = []
+        self.user_email = user_email.lower() if user_email else ""
         self._register_baseline_rules()
 
     def _register_baseline_rules(self) -> None:
@@ -183,18 +185,28 @@ class RulesEngine:
         ]
         return any(re.search(pattern, body) for pattern in unsubscribe_patterns)
 
-    @staticmethod
-    def _match_directly_addressed(email: Email) -> bool:
-        """Match emails where recipient is directly in To field (not mailing-list style).
+    def _match_directly_addressed(self, email: Email) -> bool:
+        """Match emails where user_email is a recipient (directly addressed).
 
-        Heuristics to reject likely mailing-list / announcement / alias traffic:
-        - Sender is a known list/automation prefix (noreply, list, bounce, mailer-daemon, postmaster)
-        - Email has strong list/multi-recipient signals (many To: recipients, list-id, list-unsubscribe)
-        - Subject has bulk/list patterns
+        Normalizes each recipient string by extracting the email address
+        (handles "Display Name <email@domain.com>" format) and compares
+        against user_email case-insensitively.
 
-        This rule fires for true 1:1 directed emails from known people/services.
+        Heuristics reject likely mailing-list / announcement / alias traffic.
         """
-        # Check for list-style sender prefixes (very strong signal it's NOT direct)
+        if not self.user_email:
+            return False
+
+        # 1. Normalize recipients and check if user_email is a recipient
+        recipients = email.recipients or []
+        is_recipient = any(
+            self.user_email in parseaddr(r)[1].lower()
+            for r in recipients
+        )
+        if not is_recipient:
+            return False
+
+        # 2. Reject list-style sender prefixes (very strong signal it's NOT direct)
         sender = (email.sender or '').lower()
         list_sender_prefixes = [
             'noreply@',
@@ -219,12 +231,11 @@ class RulesEngine:
         if any(pattern in sender_local for pattern in bulk_patterns):
             return False
 
-        # Reject if there are many To: recipients (indicates list or broad send)
-        to_addrs = getattr(email, 'to_addresses', email.recipients or [])
-        if len(to_addrs) > 3:  # More than 3 direct recipients is unusual for true 1:1
+        # 3. Reject if there are many To: recipients (indicates list or broad send)
+        if len(recipients) > 3:  # More than 3 direct recipients is unusual for true 1:1
             return False
 
-        # Reject if unsubscribe/list signals present
+        # 4. Reject if unsubscribe/list signals present
         body = (email.body_text or '').lower()
         list_signals = [
             'unsubscribe',
@@ -238,7 +249,7 @@ class RulesEngine:
         if any(signal in body for signal in list_signals):
             return False
 
-        # Detect mass-send headers if available (raw headers would help here)
+        # 5. Detect mass-send headers if available (raw headers would help here)
         # For now, use subject heuristics
         subject = (email.subject or '').lower()
         mass_subject_patterns = [
@@ -249,12 +260,12 @@ class RulesEngine:
         if any(pattern in subject for pattern in mass_subject_patterns):
             return False
 
-        # If sender has no domain, likely an internal/system address
+        # 6. If sender has no domain, likely an internal/system address
         if '@' not in sender and sender:
             return False
 
-        # Passed all rejection filters: this appears to be a direct email
-        return len(to_addrs) > 0
+        # Passed all rejection filters: this appears to be a direct email to the user
+        return True
 
     @staticmethod
     def _match_mass_cc(email: Email) -> bool:

@@ -16,3 +16,11 @@ dependencies = [
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mailmind*"]
+exclude = ["launchd*", "Volumes*"]
+
+[tool.pytest.ini_options]
+tmp_path_retention_policy = "failed"
+

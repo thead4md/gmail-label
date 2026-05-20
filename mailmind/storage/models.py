@@ -7,12 +7,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 def now_ts() -> int:
-    return int(datetime.utcnow().timestamp())
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 @dataclass

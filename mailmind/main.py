@@ -1,6 +1,7 @@
 """MailMind — main entry point.
 
 Pass 5: Live Gmail ingestion pipeline.
+Pass 7: Optional DeepSeek LLM classification stage.
 
 Usage:
     python -m mailmind.main run          # one-shot: fetch & classify
@@ -8,11 +9,16 @@ Usage:
     python -m mailmind.main auth         # interactive OAuth flow only
 
 Environment variables:
-    MAILMIND_DB_PATH       Override SQLite DB path (default: ~/.mailmind/mailmind.db)
-    MAILMIND_APP_DIR       Override config dir     (default: ~/.mailmind)
-    MAILMIND_POLL_SECONDS  Poll interval in seconds (default: 120)
-    MAILMIND_FETCH_MAX     Max emails per fetch run (default: 50)
-    MAILMIND_DRY_RUN       Set to '1' to skip real Gmail label writes
+    MAILMIND_DB_PATH           Override SQLite DB path (default: ~/.mailmind/mailmind.db)
+    MAILMIND_APP_DIR           Override config dir     (default: ~/.mailmind)
+    MAILMIND_POLL_SECONDS      Poll interval in seconds (default: 120)
+    MAILMIND_FETCH_MAX         Max emails per fetch run (default: 50)
+    MAILMIND_DRY_RUN           Set to '1' to skip real Gmail label writes
+    MAILMIND_USER_EMAIL        User's primary email address (for scoring boosts)
+    DEEPSEEK_API_KEY           DeepSeek API key (required for LLM stage)
+    DEEPSEEK_MAX_CALLS_PER_RUN Max LLM calls per pipeline run (default: 10)
+    DEEPSEEK_MODEL             DeepSeek model name (default: deepseek-chat)
+    DEEPSEEK_BASE_URL          DeepSeek API base URL (default: https://api.deepseek.com/v1)
 """
 from __future__ import annotations
 
@@ -22,6 +28,14 @@ import time
 from typing import Optional
 
 import click
+
+# Gracefully load .env if python-dotenv is installed
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed; use environment variables directly
+
 
 from mailmind.ingestion.auth import authenticate, build_gmail_service
 from mailmind.ingestion.fetcher import GmailFetcher
@@ -35,6 +49,9 @@ from mailmind.storage.database import Database
 from mailmind.storage.models import Email
 from mailmind.processing.queue_manager import QueueManager
 import json
+
+from mailmind.config import MailMindConfig
+from mailmind.llm.deepseek import DeepSeekClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,15 +71,24 @@ def _get_db() -> Database:
 
 def _build_components(
     db: Database, dry_run: bool, service,
+    llm_client: Optional[DeepSeekClient] = None,
 ) -> tuple[Pipeline, QueueManager]:
     """Build Pipeline and QueueManager from default components.
 
     The ActionExecutor is created explicitly here and shared between
     Pipeline (for backward compatibility) and QueueManager (for
     auto-execute).
+
+    Args:
+        db: Database instance.
+        dry_run: If True, actions are logged but not executed.
+        service: Gmail API service object.
+        llm_client: Optional DeepSeekClient for LLM classification stage.
     """
-    rules_engine = RulesEngine()
-    scorer = PriorityScorer()
+    config = MailMindConfig.from_env()
+    user_email = os.environ.get("MAILMIND_USER_EMAIL", "")
+    rules_engine = RulesEngine(user_email=user_email)
+    scorer = PriorityScorer(user_email=user_email)
     safety = SafetyPolicy(dry_run=dry_run)
     if service is not None:
         executor = ActionExecutor(
@@ -78,6 +104,9 @@ def _build_components(
         scorer=scorer,
         executor=executor,
         safety_policy=safety,
+        llm_client=llm_client,
+        llm_skip_threshold=config.llm_skip_threshold,
+        llm_max_calls_per_run=config.llm_max_calls_per_run,
     )
     queue_manager = QueueManager(executor=executor)
     return pipeline, queue_manager
@@ -159,20 +188,30 @@ def _process_message_id(
         LOG.error("Pipeline failed for %s: %s", email.gmail_id, exc, exc_info=True)
 
 
-def _run_once(db: Database, dry_run: bool, fetch_max: int) -> None:
+def _run_once(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False) -> None:
     """One-shot: authenticate → fetch unread INBOX → process each message.
 
     Args:
         db: Database instance.
         dry_run: If True, actions are logged but not executed.
         fetch_max: Maximum number of messages to fetch per run.
+        no_llm: If True, skip LLM classification even if API key is set.
     """
     LOG.info("Authenticating with Gmail…")
     creds = authenticate()
     service = build_gmail_service(creds)
     fetcher = GmailFetcher(service)
 
-    pipeline, queue_manager = _build_components(db, dry_run, service)
+    # Initialize LLM client (Pass 7+)
+    config = MailMindConfig.from_env()
+    llm_client = None
+    if config.llm_enabled and not no_llm:
+        llm_client = DeepSeekClient(config)
+        LOG.info("LLM stage: enabled (%s)", config.deepseek_model)
+    else:
+        LOG.info("LLM stage: disabled")
+
+    pipeline, queue_manager = _build_components(db, dry_run, service, llm_client=llm_client)
 
     LOG.info("Fetching up to %d unread INBOX message IDs…", fetch_max)
     message_ids = fetcher.list_message_ids(label_ids=["INBOX"], max_results=fetch_max)
@@ -189,8 +228,13 @@ def _run_once(db: Database, dry_run: bool, fetch_max: int) -> None:
 # ---------------------------------------------------------------------------
 
 @click.group()
-def cli() -> None:
+@click.option("--log-level", default="INFO",
+              type=click.Choice(["DEBUG","INFO","WARNING","ERROR"], case_sensitive=False),
+              help="Set logging verbosity.")
+@click.pass_context
+def cli(ctx: click.Context, log_level: str) -> None:
     """MailMind — Gmail classification and labelling tool."""
+    logging.getLogger().setLevel(log_level.upper())
 
 
 @cli.command()
@@ -198,13 +242,21 @@ def cli() -> None:
 @click.option("--dry-run", is_flag=True, default=False, help="Classify but do not write labels to Gmail.")
 @click.option("--fetch-max", default=None, type=int, help="Max emails to fetch per run.")
 @click.option("--poll-seconds", default=None, type=int, help="Poll interval in seconds (--watch mode only).")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Disable DeepSeek LLM classification stage for this run.")
 def run(
     watch: bool,
     dry_run: bool,
     fetch_max: Optional[int],
     poll_seconds: Optional[int],
+    no_llm: bool,
 ) -> None:
     """Fetch recent Gmail messages, classify, and apply labels."""
+    user_email = os.environ.get("MAILMIND_USER_EMAIL")
+    if not user_email:
+        LOG.warning("MAILMIND_USER_EMAIL is not set. "
+                     "The 'directly_addressed' rule will be skipped.")
+
     dry_run = dry_run or os.environ.get("MAILMIND_DRY_RUN", "") == "1"
     fetch_max = fetch_max or int(os.environ.get("MAILMIND_FETCH_MAX", "50"))
     poll_secs = poll_seconds or int(os.environ.get("MAILMIND_POLL_SECONDS", "120"))
@@ -215,7 +267,7 @@ def run(
         LOG.info("Watch mode active — polling every %ds. Ctrl+C to stop.", poll_secs)
         while True:
             try:
-                _run_once(db, dry_run=dry_run, fetch_max=fetch_max)
+                _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
@@ -223,7 +275,7 @@ def run(
             LOG.info("Sleeping %ds…", poll_secs)
             time.sleep(poll_secs)
     else:
-        _run_once(db, dry_run=dry_run, fetch_max=fetch_max)
+        _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
 
 
 @cli.command()

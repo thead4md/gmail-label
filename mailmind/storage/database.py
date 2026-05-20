@@ -119,7 +119,7 @@ class Database:
                     pred.scoring_breakdown,
                     pred.ml_confidence,
                     pred.llm_confidence,
-                    pred.created_at,
+                    pred.created_at or int(__import__("time").time()),
                 ),
             )
             return int(cur.lastrowid)
@@ -129,6 +129,27 @@ class Database:
         cur = self._conn.cursor()
         cur.execute("SELECT * FROM predictions WHERE email_gmail_id = ? ORDER BY created_at DESC", (gmail_id,))
         return cur.fetchall()
+
+    # --- Action Queue ---
+    def update_action_queue_status(self, queue_id: int, status: str) -> None:
+        """Update the status of an item in the action_queue.
+
+        Args:
+            queue_id: The id of the row in action_queue.
+            status: One of 'pending', 'approved', 'rejected', 'executed'.
+
+        Raises:
+            ValueError: If status is not one of the allowed values.
+        """
+        allowed_statuses = {'pending', 'approved', 'rejected', 'executed'}
+        if status not in allowed_statuses:
+            raise ValueError(
+                f"Invalid status '{status}'. Must be one of {allowed_statuses}"
+            )
+
+        sql = "UPDATE action_queue SET status = ? WHERE id = ?"
+        with self.transaction() as cur:
+            cur.execute(sql, (status, queue_id))
 
     # --- Actions logging ---
     def log_action(self, action: ActionApplied) -> int:

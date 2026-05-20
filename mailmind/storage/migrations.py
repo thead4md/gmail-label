@@ -117,7 +117,7 @@ MIGRATIONS: List[Tuple[str, str]] = [
         CREATE TABLE IF NOT EXISTS action_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email_gmail_id TEXT NOT NULL,
-            prediction_id INTEGER NOT NULL,
+            prediction_id INTEGER,
             suggested_action TEXT NOT NULL,
             primary_label TEXT,
             confidence REAL,
@@ -128,6 +128,12 @@ MIGRATIONS: List[Tuple[str, str]] = [
             FOREIGN KEY (prediction_id) REFERENCES predictions(id)
         );
         CREATE INDEX IF NOT EXISTS idx_action_queue_status ON action_queue(status);
+        """,
+    ),
+    (
+        "0008a_add_prediction_id_to_action_queue",
+        """
+        ALTER TABLE action_queue ADD COLUMN prediction_id INTEGER;
         """,
     ),
     (

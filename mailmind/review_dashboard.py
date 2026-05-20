@@ -6,21 +6,31 @@ No body_text is ever exposed.
 
 from __future__ import annotations
 
-import streamlit as st
+import json
+import os
+import time
+from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import streamlit as st
+
+from mailmind.actions.executor import ActionExecutor
+from mailmind.actions.safety import SafetyPolicy
+from mailmind.ingestion.auth import authenticate, build_gmail_service
+from mailmind.processing.scorer import ScoreResult
 from mailmind.storage.database import Database
+from mailmind.storage.models import Email as EmailModel
 from mailmind.storage.queries import (
     get_recent_predictions,
     get_predictions_for_email,
     get_recent_actions,
     get_sender_reputations,
     get_summary_metrics,
-    get_pending_queue,        # ADD
-    approve_queue_item,       # ADD
-    reject_queue_item,        # ADD
-    log_correction, 
+    get_pending_queue,
+    approve_queue_item,
+    reject_queue_item,
+    log_correction,
 )
 
 
@@ -36,6 +46,13 @@ st.set_page_config(
 
 st.title("📬 MailMind Review Dashboard")
 st.markdown("Read‑only view of predictions, actions, and sender reputations.")
+
+# Add a prominent DRY RUN banner when enabled
+if os.environ.get("MAILMIND_DRY_RUN", "0") == "1":
+    st.warning(
+        "**DRY RUN MODE** — Actions approved in the dashboard will be logged but "
+        "not executed on your Gmail account. Set MAILMIND_DRY_RUN=0 for live mode."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,14 +72,16 @@ db = get_db()
 
 @st.cache_resource
 def get_action_executor() -> ActionExecutor:
-    """Build and cache a live-mode ActionExecutor for the dashboard.
+    """Build and cache an ActionExecutor for the dashboard.
 
-    Uses cached Gmail service and safety policy. Runs in live mode
-    (dry_run=False) so that approved actions actually execute.
+    dry_run mode is controlled by the MAILMIND_DRY_RUN environment variable.
+    When dry_run=True (default), actions are logged but not executed.
+    Set MAILMIND_DRY_RUN=0 for live mode where approved actions execute.
     """
     creds = authenticate()
     service = build_gmail_service(creds)
-    safety_policy = SafetyPolicy(dry_run=False)
+    is_dry_run = os.environ.get("MAILMIND_DRY_RUN", "1") != "0"
+    safety_policy = SafetyPolicy(dry_run=is_dry_run)
     return ActionExecutor(
         service=service,
         db=db,
@@ -161,7 +180,40 @@ with tab_overview:
     recent_preds = get_recent_predictions(db, limit=10)
     filtered_preds = _apply_filters(recent_preds)
     if filtered_preds:
-        st.dataframe(filtered_preds, use_container_width=True)
+        # Colour-code pipeline_used column
+        def _color_pipeline(val: str) -> str:
+            if val == "hybrid":
+                return "background-color: #d4edda"  # green
+            elif val == "rules":
+                return "background-color: #fff3cd"  # yellow
+            return ""
+        df = st.dataframe(filtered_preds, use_container_width=True)
+        # Highlight hybrid rows using column configuration
+        st.dataframe(
+            filtered_preds,
+            use_container_width=True,
+            column_config={
+                "pipeline_used": st.column_config.TextColumn(
+                    "Pipeline",
+                    help="rules = rules-only, hybrid = LLM contributed",
+                ),
+                "llm_confidence": st.column_config.NumberColumn(
+                    "LLM Conf.",
+                    help="Confidence score from DeepSeek LLM (0-1)",
+                    format="%.2f",
+                ),
+                "ml_confidence": st.column_config.NumberColumn(
+                    "ML Conf.",
+                    help="Confidence score from local ML model (0-1)",
+                    format="%.2f",
+                ),
+                "priority_score": st.column_config.NumberColumn(
+                    "Score",
+                    help="Priority score (0-100)",
+                    format="%d",
+                ),
+            },
+        )
     else:
         st.info("No predictions match the current filters.")
 
@@ -181,7 +233,28 @@ with tab_predictions:
         preds = get_predictions_for_email(db, selected_email)
         filtered_preds = _apply_filters(preds)
         if filtered_preds:
-            st.dataframe(filtered_preds, use_container_width=True)
+            st.dataframe(
+                filtered_preds,
+                use_container_width=True,
+                column_config={
+                    "pipeline_used": st.column_config.TextColumn(
+                        "Pipeline",
+                        help="rules = rules-only, hybrid = LLM contributed",
+                    ),
+                    "llm_confidence": st.column_config.NumberColumn(
+                        "LLM Conf.",
+                        format="%.2f",
+                    ),
+                    "ml_confidence": st.column_config.NumberColumn(
+                        "ML Conf.",
+                        format="%.2f",
+                    ),
+                    "priority_score": st.column_config.NumberColumn(
+                        "Score",
+                        format="%d",
+                    ),
+                },
+            )
         else:
             st.info("No predictions match the current filters.")
     else:
@@ -208,6 +281,10 @@ with tab_actions:
 
 with tab_queue:
     st.header("Pending Actions — Human Review Required")
+
+    # Manual refresh button
+    if st.button("🔄 Refresh"):
+        st.rerun()
 
     if not pending_queue:
         st.success("🎉 Action queue is empty! All actions have been reviewed.")
@@ -286,8 +363,6 @@ with tab_queue:
                                     score_result = ScoreResult(**filtered)
 
                                     # Build Email model (safe subset, no body_text)
-                                    from mailmind.storage.models import Email as EmailModel
-
                                     email = EmailModel(
                                         gmail_id=email_row["gmail_id"],
                                         thread_id=email_row["thread_id"],

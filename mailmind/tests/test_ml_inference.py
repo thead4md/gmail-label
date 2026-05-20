@@ -11,7 +11,7 @@ Tests cover:
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from mailmind.storage.models import Email
 from mailmind.ml.model import MLClassifier
@@ -32,7 +32,7 @@ def _make_test_email(
         snippet=snippet,
         body_text=body_text,
         recipients=["me@example.com"],
-        date_ts=int(datetime.utcnow().timestamp()),
+        date_ts=int(datetime.now(timezone.utc).timestamp()),
         labels=[],
         parsed=True,
     )

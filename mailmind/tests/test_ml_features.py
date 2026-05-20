@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from mailmind.storage.models import Email
 from mailmind.ml.features import (
@@ -22,7 +22,7 @@ def _make_email(
     snippet: str = "Quick question",
     body_text: str = "Just checking in",
     recipients=None,
-    date_ts: int = int(datetime.utcnow().timestamp()),
+    date_ts: int = int(datetime.now(timezone.utc).timestamp()),
     labels=None,
 ) -> Email:
     return Email(

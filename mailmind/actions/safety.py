@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Set
 
 from ..storage.models import Email
@@ -158,7 +158,7 @@ class SafetyPolicy:
 
     def _is_rate_limited(self) -> bool:
         """Check if we've exceeded max actions in the last hour."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=1)
         # Remove old timestamps
         self._action_timestamps = [ts for ts in self._action_timestamps if ts > cutoff]
@@ -166,7 +166,7 @@ class SafetyPolicy:
 
     def _record_action(self) -> None:
         """Record that an action was executed (for rate limiting)."""
-        self._action_timestamps.append(datetime.utcnow())
+        self._action_timestamps.append(datetime.now(timezone.utc))
 
     def set_protected_sender(self, sender: str) -> None:
         """Add a sender to the protected list."""
