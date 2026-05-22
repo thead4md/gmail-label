@@ -38,9 +38,13 @@ SCOPES = [
 
 
 def _app_dir() -> Path:
-    p = Path(os.environ.get("MAILMIND_APP_DIR", "~/.mailmind")).expanduser()
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    custom = os.environ.get("MAILMIND_DATA_DIR")
+    if custom:
+        path = Path(custom)
+    else:
+        path = Path.home() / ".mailmind"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _credentials_path() -> Path:
@@ -132,13 +136,29 @@ def _load_stored_token() -> Optional[str]:
     if val:
         return val
     # Fallback to local encrypted
-    return _load_token_local_encrypted()
+    val = _load_token_local_encrypted()
+    if val:
+        return val
+    # Plain JSON fallback for headless server environments (e.g. Fly.io)
+    plain_path = _app_dir() / "token.json"
+    if os.environ.get("MAILMIND_DATA_DIR") and plain_path.exists():
+        return plain_path.read_text()
+    return None
 
 
 def _save_stored_token(token_json: str) -> None:
     if not _save_token_to_keyring(token_json):
         if not _save_token_local_encrypted(token_json):
-            LOG.warning("Failed to persist token to keyring or local encrypted file")
+            # Plain JSON fallback for headless server environments (e.g. Fly.io)
+            if os.environ.get("MAILMIND_DATA_DIR"):
+                try:
+                    plain_path = _app_dir() / "token.json"
+                    plain_path.write_text(token_json)
+                    plain_path.chmod(0o600)
+                except Exception:
+                    LOG.warning("Failed to persist token to keyring, encrypted file, or plain JSON")
+            else:
+                LOG.warning("Failed to persist token to keyring or local encrypted file")
 
 
 def authenticate(scopes: Optional[list[str]] = None) -> Credentials:

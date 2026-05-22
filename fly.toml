@@ -1,35 +1,36 @@
-app = 'mailmind-dashboard'
-primary_region = 'ams'
+app = "mailmind-adam"
+primary_region = "ams"
 
 [build]
 
 [env]
-  MAILMIND_DB_PATH = '/data/mailmind.db'
+  MAILMIND_DB_PATH = "/data/mailmind.db"
+  MAILMIND_DATA_DIR = "/data/.mailmind"
+  MAILMIND_MODEL_PATH = "/data/.mailmind/model.pkl"
 
 [[mounts]]
-  source = 'mailmind_data'
-  destination = '/data'
+  source = "mailmind_data"
+  destination = "/data"
 
 [[services]]
-  protocol = 'tcp'
+  protocol = "tcp"
   internal_port = 8501
 
   [[services.ports]]
-    handlers = ['tls', 'http']
+    handlers = ["tls", "http"]
     port = 443
 
   [[services.ports]]
-    handlers = ['http']
+    handlers = ["http"]
     port = 80
-    [services.ports.force_https]
-      enabled = true
+    force_https = true
 
   [services.concurrency]
-    type = 'requests'
+    type = "requests"
     hard_limit = 10
     soft_limit = 5
 
 [[vm]]
-  memory = '256mb'
-  cpu_kind = 'shared'
+  memory = "256mb"
+  cpu_kind = "shared"
   cpus = 1
