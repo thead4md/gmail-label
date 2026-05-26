@@ -5998,7 +5998,7 @@ graph TD
 | `mailmind/storage/database.py` | Database abstraction for MailMind using SQLite. | Database, open_database_from_config_path() | ✅ Complete |
 | `mailmind/storage/migrations.py` | Migration definitions and application helpers for MailMind SQLite schema. | apply_migrations() | ✅ Complete |
 | `mailmind/storage/models.py` | Data models for MailMind storage layer. | now_ts(), Email, Prediction, ActionApplied, Feedback, SenderReputation, SystemState | ✅ Complete |
-| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_pending_queue(), approve_queue_item(), reject_queue_item(), log_correction(), get_recent_corrections() | ✅ Complete |
+| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_pending_queue(), approve_queue_item(), reject_queue_item(), log_correction(), get_recent_corrections(), get_recent_predictions_with_emails() | ✅ Complete |
 <!-- AUTO:END:module_map -->
 
 

@@ -22,7 +22,7 @@ from mailmind.processing.scorer import ScoreResult
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email as EmailModel
 from mailmind.storage.queries import (
-    get_recent_predictions,
+    get_recent_predictions_with_emails,
     get_predictions_for_email,
     get_recent_actions,
     get_sender_reputations,
@@ -177,41 +177,21 @@ with tab_overview:
     col3.metric("Total Actions", metrics["actions"])
 
     st.subheader("Recent Predictions (last 10)")
-    recent_preds = get_recent_predictions(db, limit=10)
-    filtered_preds = _apply_filters(recent_preds)
-    if filtered_preds:
-        # Colour-code pipeline_used column
-        def _color_pipeline(val: str) -> str:
-            if val == "hybrid":
-                return "background-color: #d4edda"  # green
-            elif val == "rules":
-                return "background-color: #fff3cd"  # yellow
-            return ""
-        df = st.dataframe(filtered_preds, use_container_width=True)
-        # Highlight hybrid rows using column configuration
+    recent_preds = get_recent_predictions_with_emails(db, limit=10)
+    if recent_preds:
         st.dataframe(
-            filtered_preds,
+            recent_preds,
             use_container_width=True,
             column_config={
-                "pipeline_used": st.column_config.TextColumn(
-                    "Pipeline",
-                    help="rules = rules-only, hybrid = LLM contributed",
-                ),
-                "llm_confidence": st.column_config.NumberColumn(
-                    "LLM Conf.",
-                    help="Confidence score from DeepSeek LLM (0-1)",
-                    format="%.2f",
-                ),
-                "ml_confidence": st.column_config.NumberColumn(
-                    "ML Conf.",
-                    help="Confidence score from local ML model (0-1)",
-                    format="%.2f",
-                ),
-                "priority_score": st.column_config.NumberColumn(
-                    "Score",
-                    help="Priority score (0-100)",
-                    format="%d",
-                ),
+                "subject": st.column_config.TextColumn("Subject", width="large"),
+                "sender": st.column_config.TextColumn("Sender"),
+                "date": st.column_config.TextColumn("Date"),
+                "preview": st.column_config.TextColumn("Preview", width="large"),
+                "primary_label": st.column_config.TextColumn("Label"),
+                "classifier_source": st.column_config.TextColumn("Source"),
+                "confidence": st.column_config.NumberColumn("Confidence", format="%.2f"),
+                "llm_rationale": st.column_config.TextColumn("LLM Rationale", width="medium"),
+                "action_hint": st.column_config.TextColumn("Action Hint"),
             },
         )
     else:

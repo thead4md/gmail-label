@@ -199,3 +199,54 @@ def get_recent_corrections(db, limit=50):
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Joined prediction+email queries (for dashboard display)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_prediction_with_email_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    """Convert a joined prediction+email row to a safe dict with subject/sender."""
+    return {
+        "subject": row["subject"],
+        "sender": row["sender"],
+        "date": row["date"],
+        "preview": row["preview"],
+        "primary_label": row["primary_label"],
+        "classifier_source": row["classifier_source"],
+        "confidence": row["confidence"],
+        "llm_rationale": row["llm_rationale"],
+        "action_hint": row["action_hint"],
+        "email_gmail_id": row["email_gmail_id"],
+    }
+
+
+def get_recent_predictions_with_emails(db: Database, limit: int = 100) -> List[Dict[str, Any]]:
+    """Return predictions joined with email metadata, excluding unclassified rows.
+
+    Shows subject, sender, date, a body preview, and prediction info.
+    Only returns rows where primary_label is not null.
+    """
+    rows = db.execute_sql(
+        """
+        SELECT
+            e.subject,
+            e.sender,
+            e.date,
+            SUBSTR(e.body_text, 1, 400) AS preview,
+            p.primary_label,
+            p.classifier_source,
+            p.confidence,
+            p.llm_rationale,
+            p.action_hint,
+            p.email_gmail_id
+        FROM predictions p
+        JOIN emails e ON e.gmail_id = p.email_gmail_id
+        WHERE p.primary_label IS NOT NULL
+        ORDER BY p.created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [_row_to_prediction_with_email_dict(r) for r in rows]
