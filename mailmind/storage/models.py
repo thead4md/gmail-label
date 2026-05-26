@@ -76,6 +76,14 @@ class Prediction:
     ml_confidence: Optional[float] = None  # ML model confidence (Phase 4+)
     llm_confidence: Optional[float] = None  # LLM confidence (Phase 5+)
     
+    # LLM classification fields (Phase 7+: third-tier fallback)
+    llm_label: Optional[str] = None  # LLM-classified label
+    llm_rationale: Optional[str] = None  # One-sentence rationale from LLM
+    llm_action_hint: Optional[str] = None  # Suggested action from LLM (nullable)
+    llm_needs_review: bool = False  # True if human review is needed
+    classifier_source: str = "rules"  # "rules" | "ml" | "llm" | "fallback"
+    llm_called_at: Optional[str] = None  # ISO-8601 timestamp when LLM was called
+
     # Legacy field: kept for backward compatibility
     score: Optional[int] = None  # Deprecated in favor of priority_score
     

@@ -5980,8 +5980,10 @@ graph TD
 | `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
 | `mailmind/main.py` | MailMind — main entry point. | cli(), run(), auth() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
+| `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
 | `mailmind/ml/inference.py` | Inference orchestration for MailMind ML classification. | MLResult, predict_label() | ✅ Complete |
+| `mailmind/ml/llm_classifier.py` | Third-tier LLM classifier for MailMind using OpenAI-compatible API. | LLMPrediction, LLMClassifier | ✅ Complete |
 | `mailmind/ml/model.py` | ML model wrapper for MailMind classification. | ModelMetadata, MLClassifier | ✅ Complete |
 | `mailmind/ml/train.py` | Training orchestration for MailMind ML classifier. | train_model_from_db(), train_model_from_data(), get_model_metadata_from_db() | ✅ Complete |
 | `mailmind/processing/__init__.py` | Processing layer for MailMind: rules, scoring, and pipeline orchestration. | — | ✅ Stable |
@@ -6011,7 +6013,7 @@ graph TD
 ### Pipeline
 ```python
 class Pipeline:
-    def __init__(db: Database, rules_engine: RulesEngine, scorer: PriorityScorer, executor: Optional['ActionExecutor'], safety_policy: Optional[SafetyPolicy], llm_client: Optional['DeepSeekClient'], llm_skip_threshold: int, llm_max_calls_per_run: int)
+    def __init__(db: Database, rules_engine: RulesEngine, scorer: PriorityScorer, executor: Optional['ActionExecutor'], safety_policy: Optional[SafetyPolicy], llm_client: Optional['DeepSeekClient'], llm_skip_threshold: int, llm_max_calls_per_run: int, classifier_router: Optional[ClassifierRouter])
     def process(self, email: Email, auto_action: bool)
     def add_ml_stage(self, ml_fn)
     def add_llm_stage(self, llm_fn)
@@ -6079,6 +6081,11 @@ class MailMindConfig:
 | `HOME` | `~` | No | — |
 | `JOBLIB_START_METHOD` | `""` (empty) | No | — |
 | `LESS` | `""` (empty) | No | — |
+| `LLM_ENABLED` | `false` | No | — |
+| `LLM_MAX_BODY_CHARS` | `1500` | No | — |
+| `LLM_ML_THRESHOLD` | `0.65` | No | — |
+| `LLM_MODEL` | `gpt-4o-mini` | No | — |
+| `LLM_RULES_THRESHOLD` | `0.90` | No | — |
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | No | — |
 | `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | No | SQLite database path |
 | `MAILMIND_DRY_RUN` | `""` (empty) | No | Set to "1" to skip real Gmail label writes |
@@ -6087,6 +6094,7 @@ class MailMindConfig:
 | `MAILMIND_USER_EMAIL` | `""` (empty) | No | User's primary email for scoring boosts |
 | `NO_PROXY` | `""` (empty) | No | — |
 | `NPY_PROMOTION_STATE` | `weak` | No | — |
+| `OPENAI_API_KEY` | `""` (empty) | No | — |
 | `PAGER` | `""` (empty) | No | — |
 | `PANDAS_CI` | `0` | No | — |
 | `PANDAS_COPY_ON_WRITE` | `0` | No | — |

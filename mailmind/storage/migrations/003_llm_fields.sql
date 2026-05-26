@@ -1,0 +1,15 @@
+-- Migration 003: Add LLM classification fields to predictions table
+-- This is additive only; does not remove or modify existing columns.
+--
+-- NOTE: This SQL file is referenced by database.py's migration logic.
+-- Columns are added via ALTER TABLE ... ADD COLUMN IF NOT EXISTS
+-- in the Python migration code to ensure idempotency across SQLite versions.
+
+-- The following columns are added programmatically via Python:
+-- llm_label          TEXT      — LLM-classified label
+-- llm_confidence     REAL     — LLM confidence score (0.0–1.0)
+-- llm_rationale      TEXT     — One-sentence rationale from LLM
+-- llm_action_hint    TEXT     — Suggested action from LLM (nullable)
+-- llm_needs_review   INTEGER  — 1 if human review is needed, else 0
+-- classifier_source  TEXT     — "rules" | "ml" | "llm" | "fallback"
+-- llm_called_at      TEXT     — ISO-8601 timestamp when LLM was called

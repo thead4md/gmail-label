@@ -16,6 +16,7 @@ from ..storage.database import Database
 from .rules import RulesEngine
 from .scorer import PriorityScorer, ScoreResult
 from ..actions.safety import SafetyPolicy
+from ..ml.classifier_router import ClassifierRouter, RoutingResult
 
 if TYPE_CHECKING:
     from ..ml.inference import MLResult
@@ -34,11 +35,7 @@ class Pipeline:
     4. Optional safe action execution
     """
 
-    # Configurable ML confidence threshold for hybrid pipeline.
-    # When ml_confidence >= ML_CONFIDENCE_THRESHOLD, the pipeline_used is "hybrid".
     ML_CONFIDENCE_THRESHOLD = 0.3
-
-    # Default LLM confidence threshold for overriding primary_label.
     LLM_CONFIDENCE_OVERRIDE = 0.90
 
     def __init__(
@@ -51,6 +48,7 @@ class Pipeline:
         llm_client: Optional["DeepSeekClient"] = None,
         llm_skip_threshold: int = 70,
         llm_max_calls_per_run: int = 10,
+        classifier_router: Optional[ClassifierRouter] = None,
     ):
         """Initialize pipeline.
 
@@ -63,6 +61,7 @@ class Pipeline:
             llm_client: Optional DeepSeekClient for LLM classification (Pass 7+).
             llm_skip_threshold: Skip LLM if rules score >= this value (default 70).
             llm_max_calls_per_run: Max LLM API calls per pipeline run (default 10).
+            classifier_router: Optional ClassifierRouter for tiered classification.
         """
         self.db = db
         self.rules_engine = rules_engine
@@ -74,47 +73,46 @@ class Pipeline:
         self.llm_max_calls_per_run = llm_max_calls_per_run
         self.llm_confidence_override = self.LLM_CONFIDENCE_OVERRIDE
         self._llm_calls_this_run: int = 0
+        self.classifier_router = classifier_router
 
     def process(
         self,
         email: Email,
         auto_action: bool = False,
     ) -> Prediction:
-        """Process an email through the full pipeline.
-
-        Args:
-            email: Normalized Email model.
-            auto_action: If True, attempt to execute suggested action.
-
-        Returns:
-            Prediction model (persisted to database).
-        """
+        """Process an email through the full pipeline."""
         LOG.info(f"Processing email {email.gmail_id} from {email.sender}")
 
-        # 1. Run rules
         rule_matches = self.rules_engine.evaluate(email)
         matched_rules = [m for m in rule_matches if m.matched]
         LOG.debug(f"Matched {len(matched_rules)} rules: {[m.rule_name for m in matched_rules]}")
 
-        # 2. Compute priority score
         score = self.scorer.compute_score(email, rule_matches)
         LOG.debug(f"Score: {score.total_score} (primary_label: {score.primary_label})")
         LOG.debug(f"Breakdown:\n{score.breakdown_text}")
 
-        # 3. Collect labels from rules and email
         final_labels = list(set(email.labels or []))
         for match in matched_rules:
             if match.labels:
                 final_labels.extend(match.labels)
-        final_labels = list(set(final_labels))  # Deduplicate
+        final_labels = list(set(final_labels))
 
-        # Compute suggested_action unconditionally for queue manager
         suggested_action = self.executor.suggest_action(email, score) if self.executor else None
 
-        # 3b. Run LLM classification (Pass 7+) if:
-        #   - LLM client is available
-        #   - Budget not exhausted
-        #   - Rules score is below skip threshold (cost control)
+        # 3a. Run classifier router (OpenAI LLM third-tier fallback) if available
+        routing_result: Optional[RoutingResult] = None
+        if self.classifier_router is not None:
+            routing_result = self.classifier_router.route(email)
+            if routing_result is not None:
+                LOG.info(
+                    "email %s classified by %s \u2192 %s (%.2f)",
+                    email.gmail_id,
+                    routing_result.source,
+                    routing_result.label,
+                    routing_result.confidence,
+                )
+
+        # 3b. Run LLM classification (Pass 7+ DeepSeek) if applicable
         llm_result = None
         if (
             self.llm_client is not None
@@ -137,21 +135,19 @@ class Pipeline:
                 email.gmail_id, score.total_score, self.llm_skip_threshold,
             )
 
-        # 4. Create Prediction model (with optional LLM result)
         prediction = self._create_prediction(
             email, score, final_labels, matched_rules,
             suggested_action=suggested_action,
             llm_result=llm_result,
+            routing_result=routing_result,
         )
 
-        # 5. Persist prediction
         try:
             self.db.save_prediction(prediction)
             LOG.info(f"Prediction persisted for {email.gmail_id}: score={score.total_score}, label={score.primary_label}")
         except Exception as e:
             LOG.error(f"Failed to persist prediction: {e}", exc_info=True)
 
-        # 6. Optionally execute safe action
         if auto_action and self.executor:
             suggested_action = self.executor.suggest_action(email, score)
             if suggested_action:
@@ -174,38 +170,17 @@ class Pipeline:
         score: ScoreResult,
         labels: list,
         matched_rules: list,
-        ml_result: Optional["MLResult"] = None,  # type: ignore
+        ml_result: Optional["MLResult"] = None,
         suggested_action: Optional[str] = None,
         llm_result: Optional["LLMResult"] = None,
+        routing_result: Optional[RoutingResult] = None,
     ) -> Prediction:
-        """Create a Prediction model combining rules + optional ML/LLM results.
-
-        Hybrid combination strategy (conservative):
-        - Rules always determine the base score and primary_label.
-        - ML contributes ml_confidence and optional label suggestion.
-        - pipeline_used set to "hybrid" when ML contributes, "rules" otherwise.
-        - ML contributions are recorded in scoring_breakdown for full auditability.
-
-        Args:
-            email: The email being processed.
-            score: ScoreResult from PriorityScorer.
-            labels: Final labels from rules and email.
-            matched_rules: List of matched RuleMatch objects.
-            ml_result: Optional MLResult from ML inference.
-
-        Returns:
-            Prediction model with all Pass 4 fields populated.
-        """
+        """Create a Prediction model combining rules + optional ML/LLM results."""
         import json
 
-        # Serialize scoring breakdown as JSON for durable storage
         breakdown_dict = score.to_dict()
         scoring_breakdown = json.dumps(breakdown_dict)
-
-        # Collect matched rule names
         rule_names = [m.rule_name for m in matched_rules]
-
-        # Determine pipeline mode and merge ML result
         final_labels = list(labels)
         pipeline_used = "rules"
         ml_confidence = None
@@ -214,39 +189,57 @@ class Pipeline:
 
         if ml_result and ml_result.model_available and ml_result.primary_label is not None:
             ml_confidence = ml_result.ml_confidence
-
             if ml_confidence is not None and ml_confidence >= self.ML_CONFIDENCE_THRESHOLD:
                 pipeline_used = "hybrid"
-
-                # If ML predicts a different label, add as secondary suggestion
                 if ml_result.primary_label not in final_labels:
                     final_labels.append(ml_result.primary_label)
-
-            # Enrich breakdown with ML data
             breakdown_dict["ml"] = ml_result.to_scoring_breakdown_entry()
             scoring_breakdown = json.dumps(breakdown_dict)
 
-        # Merge LLM result (Pass 7+)
         llm_confidence = None
         if llm_result is not None and llm_result.model_available:
             pipeline_used = "hybrid"
             llm_confidence = llm_result.llm_confidence
-
-            # Override primary_label if LLM confidence is high enough
             if llm_confidence >= self.llm_confidence_override:
                 primary_label = llm_result.primary_label
                 LOG.debug(
                     "LLM override: label=%s (confidence=%.2f >= %.2f threshold)",
                     primary_label, llm_confidence, self.llm_confidence_override,
                 )
-
-            # Add LLM label to labels list if not already present
             if llm_result.primary_label not in final_labels:
                 final_labels.append(llm_result.primary_label)
-
-            # Enrich breakdown with LLM data
             breakdown_dict["llm"] = llm_result.to_scoring_breakdown_entry()
             scoring_breakdown = json.dumps(breakdown_dict)
+
+        # Merge ClassifierRouter result (OpenAI LLM third-tier)
+        classifier_source = "rules"
+        llm_label = None
+        llm_rationale = None
+        llm_action_hint = None
+        llm_needs_review = False
+        llm_called_at = None
+
+        if routing_result is not None:
+            classifier_source = routing_result.source
+            primary_label = routing_result.label
+            pipeline_used = routing_result.source
+            if routing_result.source == "llm" and routing_result.llm_prediction is not None:
+                llm_pred = routing_result.llm_prediction
+                llm_label = llm_pred.label
+                llm_confidence = llm_pred.confidence
+                llm_rationale = llm_pred.rationale
+                llm_action_hint = llm_pred.action_hint
+                llm_needs_review = llm_pred.needs_review
+                from datetime import datetime, timezone
+                llm_called_at = datetime.now(timezone.utc).isoformat()
+                if llm_pred.label not in final_labels:
+                    final_labels.append(llm_pred.label)
+                LOG.debug(
+                    "LLM (router) result: label=%s confidence=%.4f needs_review=%s",
+                    llm_label, llm_confidence, llm_needs_review,
+                )
+            elif routing_result.source == "fallback":
+                classifier_source = "fallback"
 
         prediction = Prediction(
             email_gmail_id=email.gmail_id,
@@ -262,20 +255,20 @@ class Pipeline:
             scoring_breakdown=scoring_breakdown,
             ml_confidence=ml_confidence,
             llm_confidence=llm_confidence,
+            llm_label=llm_label,
+            llm_rationale=llm_rationale,
+            llm_action_hint=llm_action_hint,
+            llm_needs_review=llm_needs_review,
+            classifier_source=classifier_source,
+            llm_called_at=llm_called_at,
         )
         return prediction
 
-    # --- Future extension points (Phase 4+) ---
-
     def add_ml_stage(self, ml_fn) -> None:
-        """TODO: Add ML-based classification stage."""
         raise NotImplementedError("ML stage not yet implemented (Phase 4)")
 
     def add_llm_stage(self, llm_fn) -> None:
-        """TODO: Add LLM-based classification/summarization stage."""
         raise NotImplementedError("LLM stage not yet implemented (Phase 5+)")
 
     def add_feedback_loop(self, feedback_processor) -> None:
-        """TODO: Add feedback loop for online learning."""
         raise NotImplementedError("Feedback loop not yet implemented")
-
