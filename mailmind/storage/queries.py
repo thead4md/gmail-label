@@ -211,7 +211,7 @@ def _row_to_prediction_with_email_dict(row: sqlite3.Row) -> Dict[str, Any]:
     return {
         "subject": row["subject"],
         "sender": row["sender"],
-        "date": row["date"],
+        "date": row["date_ts"],
         "preview": row["preview"],
         "primary_label": row["primary_label"],
         "classifier_source": row["classifier_source"],
@@ -233,13 +233,13 @@ def get_recent_predictions_with_emails(db: Database, limit: int = 100) -> List[D
         SELECT
             e.subject,
             e.sender,
-            e.date,
+            e.date_ts,
             SUBSTR(e.body_text, 1, 400) AS preview,
             p.primary_label,
             p.classifier_source,
             p.confidence,
             p.llm_rationale,
-            p.action_hint,
+            p.llm_action_hint as action_hint,
             p.email_gmail_id
         FROM predictions p
         JOIN emails e ON e.gmail_id = p.email_gmail_id

@@ -23,6 +23,7 @@ from mailmind.storage.database import Database
 from mailmind.storage.models import Email as EmailModel
 from mailmind.storage.queries import (
     get_recent_predictions_with_emails,
+    get_recent_predictions,
     get_predictions_for_email,
     get_recent_actions,
     get_sender_reputations,
