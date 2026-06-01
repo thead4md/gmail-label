@@ -7,6 +7,7 @@ clean and testable.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Optional, List
 import json
@@ -245,6 +246,70 @@ class Database:
                 " ON CONFLICT(sender) DO UPDATE SET score = excluded.score, last_seen = excluded.last_seen",
                 (sender, float(score), int(__import__("time").time())),
             )
+
+    # --- System state (key/value) ---
+    def get_state(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        assert self._conn is not None
+        cur = self._conn.cursor()
+        cur.execute("SELECT value FROM system_state WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row["value"] if row else default
+
+    def set_state(self, key: str, value: str) -> None:
+        assert self._conn is not None
+        with self.transaction() as cur:
+            cur.execute(
+                "INSERT INTO system_state (key, value, updated_at) VALUES (?, ?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
+                " updated_at = excluded.updated_at",
+                (key, str(value), int(time.time())),
+            )
+
+    # --- Retention / maintenance ---
+    def prune_old_data(self, retention_days: int = 90) -> dict:
+        """Delete locally-cached data older than ``retention_days``.
+
+        Removes old emails and their associated predictions / actions /
+        queue items / corrections / feedback from the LOCAL SQLite cache.
+        This never touches the Gmail account — the messages still exist in
+        Gmail. Emails that still have a *pending* action-queue item are
+        preserved regardless of age, so nothing awaiting review is dropped.
+        Emails with a NULL date_ts are also preserved (we can't age them).
+
+        Returns a dict of {table: rows_deleted}.
+        """
+        assert self._conn is not None
+        cutoff = int(time.time()) - retention_days * 86400
+        prunable = (
+            "SELECT gmail_id FROM emails"
+            " WHERE date_ts IS NOT NULL AND date_ts < ?"
+            " AND gmail_id NOT IN (SELECT email_gmail_id FROM action_queue WHERE status = 'pending')"
+        )
+        counts: dict = {}
+        with self.transaction() as cur:
+            # Children first; emails are deleted last so the subquery stays valid.
+            for table in (
+                "predictions",
+                "actions_applied",
+                "feedback",
+                "action_queue",
+                "user_corrections",
+            ):
+                cur.execute(
+                    f"DELETE FROM {table} WHERE email_gmail_id IN ({prunable})",
+                    (cutoff,),
+                )
+                counts[table] = cur.rowcount
+            cur.execute(f"DELETE FROM emails WHERE gmail_id IN ({prunable})", (cutoff,))
+            counts["emails"] = cur.rowcount
+        return counts
+
+    def vacuum(self) -> None:
+        """Checkpoint the WAL and reclaim disk space. Run outside a transaction."""
+        assert self._conn is not None
+        self._conn.commit()
+        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        self._conn.execute("VACUUM;")
 
     # --- Utilities for tests / migrations ---
     def execute_sql(self, sql: str, params: Optional[tuple] = None) -> sqlite3.Cursor:

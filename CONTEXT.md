@@ -5990,7 +5990,7 @@ graph TD
 | `mailmind/intelligence/thread_analyzer.py` |  | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
 | `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
-| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), auth() | ✅ Complete |
+| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), prune(), auth() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
@@ -6104,6 +6104,7 @@ class MailMindConfig:
 | `MAILMIND_DRY_RUN` | `""` (empty) | No | Set to "1" to skip real Gmail label writes |
 | `MAILMIND_FETCH_MAX` | `50` | No | Max emails per fetch run |
 | `MAILMIND_POLL_SECONDS` | `120` | No | Poll interval in seconds (--watch mode) |
+| `MAILMIND_RETENTION_DAYS` | `90` | No | — |
 | `MAILMIND_USER_EMAIL` | `""` (empty) | No | User's primary email for scoring boosts |
 | `NO_PROXY` | `""` (empty) | No | — |
 | `NPY_PROMOTION_STATE` | `weak` | No | — |
@@ -7595,7 +7596,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 221 tests passing.
+Pass 7 complete. 227 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

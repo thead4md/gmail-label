@@ -240,6 +240,26 @@ def _run_once(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False)
     LOG.info("Run complete.")
 
 
+def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 86400) -> None:
+    """Run a retention sweep at most once per ``interval_seconds``.
+
+    Tracks the last run in system_state so the watch loop self-maintains
+    without growing the local cache (or the Litestream S3 replica) forever.
+    Failures here must never take down the watch loop.
+    """
+    try:
+        last = db.get_state("last_prune_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+        counts = db.prune_old_data(retention_days)
+        db.vacuum()
+        db.set_state("last_prune_ts", str(now))
+        LOG.info("Retention sweep (keep %dd): %s", retention_days, counts)
+    except Exception as exc:
+        LOG.error("Retention sweep failed: %s", exc, exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -277,6 +297,7 @@ def run(
     dry_run = dry_run or os.environ.get("MAILMIND_DRY_RUN", "") == "1"
     fetch_max = fetch_max or int(os.environ.get("MAILMIND_FETCH_MAX", "50"))
     poll_secs = poll_seconds or int(os.environ.get("MAILMIND_POLL_SECONDS", "120"))
+    retention_days = int(os.environ.get("MAILMIND_RETENTION_DAYS", "90"))
 
     db = _get_db()
 
@@ -285,6 +306,7 @@ def run(
         while True:
             try:
                 _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+                _maybe_prune(db, retention_days)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
@@ -293,6 +315,25 @@ def run(
             time.sleep(poll_secs)
     else:
         _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+
+
+@cli.command()
+@click.option("--retention-days", default=None, type=int,
+              help="Delete local cache older than N days (default: MAILMIND_RETENTION_DAYS or 90).")
+@click.option("--no-vacuum", is_flag=True, default=False,
+              help="Skip the VACUUM step (faster, no disk reclaim).")
+def prune(retention_days: Optional[int], no_vacuum: bool) -> None:
+    """Prune old locally-cached emails/predictions and reclaim disk space.
+
+    Never touches Gmail — only the local SQLite cache. Pending review items
+    are always preserved.
+    """
+    days = retention_days or int(os.environ.get("MAILMIND_RETENTION_DAYS", "90"))
+    db = _get_db()
+    counts = db.prune_old_data(days)
+    if not no_vacuum:
+        db.vacuum()
+    click.echo(f"Pruned (retention={days}d): {counts}")
 
 
 @cli.command()
