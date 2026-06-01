@@ -118,12 +118,24 @@ def _process_message_id(
     fetcher: GmailFetcher,
     pipeline: Pipeline,
     queue_manager: QueueManager,
+    reclassify: bool = False,
 ) -> None:
     """Fetch one message, persist it, run the classification pipeline.
 
     The QueueManager handles action execution instead of auto_action,
     so the pipeline runs with auto_action=False.
+
+    Args:
+        reclassify: If True, re-run an already-classified email. Default False
+            skips emails that already have a prediction — re-classifying an
+            immutable email every poll cycle just wastes a Gmail fetch and an
+            LLM call. The Gmail message id IS our gmail_id, so this check runs
+            before the expensive get_message() call.
     """
+    if not reclassify and pipeline.db.has_prediction(message_id):
+        LOG.debug("Skipping %s — already classified.", message_id)
+        return
+
     try:
         raw = fetcher.get_message(message_id)
     except Exception as exc:
@@ -215,8 +227,11 @@ def _run_once(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False)
 
     pipeline, queue_manager = _build_components(db, dry_run, service, llm_client=llm_client)
 
+    # Fetch only UNREAD INBOX messages. Gmail treats UNREAD as a label, so
+    # passing both label ids returns their intersection (unread in inbox).
+    # Read mail drops out of the set, so the loop stops re-scanning it.
     LOG.info("Fetching up to %d unread INBOX message IDs…", fetch_max)
-    message_ids = fetcher.list_message_ids(label_ids=["INBOX"], max_results=fetch_max)
+    message_ids = fetcher.list_message_ids(label_ids=["INBOX", "UNREAD"], max_results=fetch_max)
     LOG.info("Found %d messages.", len(message_ids))
 
     for mid in message_ids:

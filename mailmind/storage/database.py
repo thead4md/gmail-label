@@ -160,6 +160,19 @@ class Database:
         cur.execute("SELECT * FROM predictions WHERE email_gmail_id = ? ORDER BY created_at DESC", (gmail_id,))
         return cur.fetchall()
 
+    def has_prediction(self, gmail_id: str) -> bool:
+        """Return True if this email has already been classified.
+
+        Cheap existence check used by the watch loop to skip re-processing
+        (and re-calling the LLM on) emails it has already seen.
+        """
+        assert self._conn is not None
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM predictions WHERE email_gmail_id = ? LIMIT 1", (gmail_id,)
+        )
+        return cur.fetchone() is not None
+
     # --- Action Queue ---
     def update_action_queue_status(self, queue_id: int, status: str) -> None:
         """Update the status of an item in the action_queue.
