@@ -55,6 +55,7 @@ from mailmind.config import MailMindConfig
 from mailmind.llm.deepseek import DeepSeekClient
 from mailmind.ml.classifier_router import ClassifierRouter
 from mailmind.ml.model import MLClassifier
+from mailmind.ml.train import train_model_from_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -382,6 +383,58 @@ def _run_all_accounts(db: Database, dry_run: bool, fetch_max: int, no_llm: bool 
             LOG.error("Run failed for mailbox %s: %s", acct, exc, exc_info=True)
 
 
+def _maybe_retrain(
+    db: Database,
+    interval_seconds: int = 7 * 86400,
+    corrections_threshold: int = 5,
+) -> None:
+    """Retrain the ML model when either trigger fires:
+
+      1. CADENCE: it's been >= interval_seconds since the last retrain.
+      2. CORRECTIONS: the user has logged >= corrections_threshold new
+         corrections since the last retrain.
+
+    Tracked in system_state. The next watch cycle picks up the new model
+    automatically via the mtime hot-reload path. Failures here MUST never
+    take down the watch loop.
+    """
+    try:
+        last_train_ts = int(db.get_state("last_train_ts") or 0)
+        last_train_corrections = int(db.get_state("last_train_corrections_count") or 0)
+
+        now = int(time.time())
+        total_corrections = db.execute_sql(
+            "SELECT COUNT(*) AS c FROM user_corrections"
+        ).fetchone()["c"]
+        new_corrections = max(0, total_corrections - last_train_corrections)
+        age = now - last_train_ts
+
+        cadence_due = last_train_ts == 0 or age >= interval_seconds
+        corrections_due = new_corrections >= corrections_threshold
+
+        if not (cadence_due or corrections_due):
+            return
+
+        trigger = "cadence" if cadence_due else "corrections"
+        LOG.info(
+            "Auto-retrain triggered (%s: age=%ds, new_corrections=%d).",
+            trigger, age, new_corrections,
+        )
+        classifier = train_model_from_db(db)
+        if classifier is None:
+            LOG.info("Auto-retrain skipped (insufficient training data).")
+            return
+
+        db.set_state("last_train_ts", str(now))
+        db.set_state("last_train_corrections_count", str(total_corrections))
+        LOG.info(
+            "Auto-retrain complete (samples=%d).",
+            classifier.metadata.num_samples if classifier.metadata else -1,
+        )
+    except Exception as exc:
+        LOG.error("Auto-retrain failed: %s", exc, exc_info=True)
+
+
 def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 86400) -> None:
     """Run a retention sweep at most once per ``interval_seconds``.
 
@@ -448,6 +501,7 @@ def run(
         while True:
             try:
                 _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+                _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
             except KeyboardInterrupt:
                 raise
