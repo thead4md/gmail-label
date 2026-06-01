@@ -8,12 +8,35 @@ from __future__ import annotations
 
 import pytest
 
+from mailmind.config import MailMindConfig
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email, Prediction
 from mailmind.storage.queries import (
     get_recent_predictions_with_emails,
     get_pending_queue,
 )
+
+
+class TestAccountConfig:
+    def test_accounts_from_mailmind_accounts(self, monkeypatch):
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "a@x.com, b@y.com ")
+        accounts = MailMindConfig.load_accounts()
+        assert accounts == ["a@x.com", "b@y.com"]
+
+    def test_falls_back_to_user_email(self, monkeypatch):
+        monkeypatch.delenv("MAILMIND_ACCOUNTS", raising=False)
+        monkeypatch.setenv("MAILMIND_USER_EMAIL", "solo@x.com")
+        assert MailMindConfig.load_accounts() == ["solo@x.com"]
+
+    def test_primary_account(self, monkeypatch):
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "first@x.com,second@y.com")
+        cfg = MailMindConfig.from_env()
+        assert cfg.primary_account == "first@x.com"
+
+    def test_empty_when_unconfigured(self, monkeypatch):
+        monkeypatch.delenv("MAILMIND_ACCOUNTS", raising=False)
+        monkeypatch.delenv("MAILMIND_USER_EMAIL", raising=False)
+        assert MailMindConfig.load_accounts() == []
 
 
 @pytest.fixture

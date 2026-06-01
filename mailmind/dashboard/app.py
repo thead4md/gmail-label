@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
+from mailmind.config import MailMindConfig
 from mailmind.dashboard.helpers import (
     filter_now_items,
     format_unix_ts,
@@ -56,17 +57,22 @@ def get_db() -> Database:
     return Database(db_path)
 
 
+def get_accounts() -> List[str]:
+    """Configured mailbox accounts (first is primary). Empty if unconfigured."""
+    return MailMindConfig.load_accounts()
+
+
 # ---------------------------------------------------------------------------
 # Tab 1: NOW
 # ---------------------------------------------------------------------------
 
 
-def render_now_tab() -> None:
+def render_now_tab(account: Optional[str] = None) -> None:
     st.header("📍 NOW")
     st.markdown("_Items requiring immediate attention_")
 
     db = get_db()
-    all_items = get_pending_queue_enriched(db, limit=200)
+    all_items = get_pending_queue_enriched(db, limit=200, account=account)
     now_items = filter_now_items(all_items, queue_threshold=QueueManager.QUEUE_THRESHOLD)
 
     if not now_items:
@@ -122,14 +128,14 @@ def render_now_tab() -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_review_tab() -> None:
+def render_review_tab(account: Optional[str] = None) -> None:
     st.header("📋 REVIEW")
 
     db = get_db()
 
     # --- Recent predictions (all processed emails) ---
     st.subheader("Recent Predictions")
-    preds = get_recent_predictions_with_emails(db, limit=200)
+    preds = get_recent_predictions_with_emails(db, limit=200, account=account)
     if preds:
         import pandas as pd
         df = pd.DataFrame(preds)
@@ -142,7 +148,7 @@ def render_review_tab() -> None:
     st.markdown("---")
 
     # --- Pending queue (items needing human approval) ---
-    items = get_pending_queue_enriched(db)
+    items = get_pending_queue_enriched(db, account=account)
     st.subheader(f"Pending Approval ({len(items)})")
 
     if not items:
@@ -264,12 +270,12 @@ def render_review_tab() -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_automate_tab() -> None:
+def render_automate_tab(account: Optional[str] = None) -> None:
     st.header("⚙️ AUTOMATE")
 
     db = get_db()
 
-    # --- Section 1: Sender Profiles ---
+    # --- Section 1: Sender Profiles (shared across accounts) ---
     st.subheader("📧 Sender Profiles")
     profiles = get_sender_profiles(db)
 
@@ -328,7 +334,7 @@ def render_automate_tab() -> None:
 
     # --- Section 3: Queue Statistics ---
     st.subheader("📊 Queue Statistics")
-    stats = get_queue_stats(db)
+    stats = get_queue_stats(db, account=account)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
@@ -358,14 +364,24 @@ def main() -> None:
     st.title("🪃 MailMind Dashboard")
     st.markdown("_AI-powered email prioritisation and automation_")
 
+    # --- Mailbox switcher ---
+    accounts = get_accounts()
+    account: Optional[str] = None
+    if len(accounts) > 1:
+        account = st.sidebar.radio("Mailbox", accounts, index=0)
+        st.sidebar.caption("Showing data for the selected mailbox.")
+    elif len(accounts) == 1:
+        account = accounts[0]
+        st.sidebar.caption(f"Mailbox: {account}")
+
     tab_now, tab_review, tab_automate = st.tabs(["📍 NOW", "📋 REVIEW", "⚙️ AUTOMATE"])
 
     with tab_now:
-        render_now_tab()
+        render_now_tab(account)
     with tab_review:
-        render_review_tab()
+        render_review_tab(account)
     with tab_automate:
-        render_automate_tab()
+        render_automate_tab(account)
 
 
 if __name__ == "__main__":
