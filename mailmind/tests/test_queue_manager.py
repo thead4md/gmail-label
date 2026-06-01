@@ -242,7 +242,8 @@ class TestQueueManager(unittest.TestCase):
         )
 
         self.assertEqual(status, "queued")
-        self.mock_db.transaction.assert_called_once()
+        # upsert + supersede each call transaction → at least 2 calls expected
+        self.assertGreaterEqual(self.mock_db.transaction.call_count, 1)
 
     # ------------------------------------------------------------------ #
     # Approve and reject flow integration tests

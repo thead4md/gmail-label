@@ -16,13 +16,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source
 COPY mailmind/ ./mailmind/
 COPY litestream.yml /etc/litestream.yml
-COPY fly-start.sh /fly-start.sh
-COPY render-start.sh /render-start.sh
-RUN chmod +x /fly-start.sh /render-start.sh
+COPY mailmind/fly-start.sh /fly-start.sh
+RUN chmod +x /fly-start.sh
 
-# Render uses port 10000 by default; Fly uses 8501
-EXPOSE 10000
-EXPOSE 8501
-
-# Default to Render startup (override with fly-start.sh for Fly)
-CMD ["/render-start.sh"]
+# Default to the Fly worker startup
+CMD ["/fly-start.sh"]

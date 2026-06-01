@@ -102,13 +102,8 @@ MIGRATIONS: List[Tuple[str, str]] = [
     (
         "0007_extend_predictions_for_pipeline",
         """
-        ALTER TABLE predictions ADD COLUMN primary_label TEXT;
-        ALTER TABLE predictions ADD COLUMN pipeline_used TEXT DEFAULT 'rules';
-        ALTER TABLE predictions ADD COLUMN action_suggested TEXT;
-        ALTER TABLE predictions ADD COLUMN rule_matches TEXT;
-        ALTER TABLE predictions ADD COLUMN scoring_breakdown TEXT;
-        ALTER TABLE predictions ADD COLUMN ml_confidence REAL;
-        ALTER TABLE predictions ADD COLUMN llm_confidence REAL;
+        -- Handled in apply_migrations() with per-column existence checks.
+        -- Adds the core pipeline fields needed by the dashboard and tests.
         """,
     ),
     (
@@ -118,22 +113,28 @@ MIGRATIONS: List[Tuple[str, str]] = [
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email_gmail_id TEXT NOT NULL,
             prediction_id INTEGER,
-            suggested_action TEXT NOT NULL,
-            primary_label TEXT,
-            confidence REAL,
-            auto_eligible INTEGER DEFAULT 0,
+            action TEXT NOT NULL,
+            params_json TEXT,
+            action_fingerprint TEXT,
             status TEXT DEFAULT 'pending',
-            reviewed_at INTEGER,
+            confidence REAL,
+            priority_score INTEGER,
+            reason_json TEXT,
             created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER DEFAULT (strftime('%s','now')),
+            reviewed_at INTEGER,
+            executed_at INTEGER,
             FOREIGN KEY (prediction_id) REFERENCES predictions(id)
         );
         CREATE INDEX IF NOT EXISTS idx_action_queue_status ON action_queue(status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_action_queue_fingerprint ON action_queue(action_fingerprint);
         """,
     ),
     (
         "0008a_add_prediction_id_to_action_queue",
         """
-        ALTER TABLE action_queue ADD COLUMN prediction_id INTEGER;
+        -- No-op compatibility migration.
+        -- `prediction_id` is already created by 0008_create_action_queue.
         """,
     ),
     (
@@ -152,8 +153,68 @@ MIGRATIONS: List[Tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_user_corrections_email ON user_corrections(email_gmail_id);
         """,
     ),
+    (
+        "0010_extend_predictions_for_llm_metadata",
+        """
+        -- Handled in apply_migrations() with per-column existence checks.
+        -- Adds the LLM metadata used by the dashboard and pipeline audit trail.
+        """,
+    ),
+    (
+        "0011_extend_action_queue",
+        """-- No-op placeholder; handled in Python with column existence checks."""
+    ),
+    (
+        "0012_add_thread_context_to_predictions",
+        """-- No-op placeholder; handled in Python with column existence checks."""
+    ),
+    (
+        "0013_create_sender_profiles",
+        """
+        CREATE TABLE IF NOT EXISTS sender_profiles (
+            sender_email TEXT PRIMARY KEY,
+            display_name TEXT,
+            total_seen INTEGER DEFAULT 0,
+            total_approved INTEGER DEFAULT 0,
+            total_rejected INTEGER DEFAULT 0,
+            last_action_ts INTEGER,
+            trust_tier TEXT DEFAULT 'neutral',
+            auto_action_eligible INTEGER DEFAULT 0
+        );
+        """,
+    ),
 ]
 
+PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
+    ("primary_label", "TEXT"),
+    ("pipeline_used", "TEXT DEFAULT 'rules'"),
+    ("action_suggested", "TEXT"),
+    ("rule_matches", "TEXT"),
+    ("scoring_breakdown", "TEXT"),
+    ("ml_confidence", "REAL"),
+    ("llm_confidence", "REAL"),
+]
+
+PREDICTION_LLM_COLUMNS: List[Tuple[str, str]] = [
+    ("llm_label", "TEXT"),
+    ("llm_rationale", "TEXT"),
+    ("llm_action_hint", "TEXT"),
+    ("llm_needs_review", "INTEGER DEFAULT 0"),
+    ("classifier_source", "TEXT DEFAULT 'rules'"),
+    ("llm_called_at", "TEXT"),
+]
+
+ACTION_QUEUE_COLUMNS: List[Tuple[str, str]] = [
+    ("action", "TEXT"),
+    ("params_json", "TEXT"),
+    ("action_fingerprint", "TEXT"),
+    ("priority_score", "INTEGER"),
+    ("reason_json", "TEXT"),
+    ("updated_at", "INTEGER"),
+    ("executed_at", "INTEGER"),
+]
+
+THREAD_CONTEXT_COLUMN: List[Tuple[str, str]] = [("thread_context_json", "TEXT")]
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -164,6 +225,26 @@ def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+
+def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    cur = conn.execute(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in cur.fetchall()}
+
+
+def _ensure_columns(
+    conn: sqlite3.Connection,
+    table_name: str,
+    columns: List[Tuple[str, str]],
+) -> None:
+    existing = _get_table_columns(conn, table_name)
+    for column_name, column_ddl in columns:
+        if column_name in existing:
+            continue
+        conn.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_ddl}"
+        )
+        existing.add(column_name)
 
 
 def apply_migrations(conn: sqlite3.Connection) -> None:
@@ -178,19 +259,18 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         cur.execute("SELECT 1 FROM _migrations WHERE name = ?", (name,))
         if cur.fetchone():
             continue
-        # Execute migration SQL inside a transaction
-        # For ALTER TABLE migrations, we catch and ignore "column already exists" errors
-        try:
+        if name == "0007_extend_predictions_for_pipeline":
+            _ensure_columns(conn, "predictions", PREDICTION_PIPELINE_COLUMNS)
+        elif name == "0010_extend_predictions_for_llm_metadata":
+            _ensure_columns(conn, "predictions", PREDICTION_LLM_COLUMNS)
+        elif name == "0011_extend_action_queue":
+            _ensure_columns(conn, "action_queue", ACTION_QUEUE_COLUMNS)
+        elif name == "0012_add_thread_context_to_predictions":
+            _ensure_columns(conn, "predictions", THREAD_CONTEXT_COLUMN)
+        else:
             cur.executescript(sql)
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" in str(e).lower() or "column already exists" in str(e).lower():
-                # Column already exists; skip (idempotent)
-                pass
-            else:
-                raise
         cur.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
             (name, int(datetime.now(UTC).timestamp())),
         )
         conn.commit()
-

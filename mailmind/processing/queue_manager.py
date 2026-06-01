@@ -6,7 +6,18 @@ prediction confidence scores.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Optional
+
+from mailmind.utils.fingerprint import make_action_fingerprint
+from mailmind.storage.models import QueueItem
+from mailmind.storage.queries import (
+    get_queue_item_by_fingerprint,
+    upsert_queue_item,
+    supersede_old_queue_items,
+)
+from ..intelligence.explainer import build_reason_payload
+import json
 
 if TYPE_CHECKING:
     from mailmind.storage.database import Database
@@ -43,48 +54,17 @@ class QueueManager:
         email: "Email",
         score_result: "ScoreResult",
         prediction: "Prediction",
-    ) -> str:
-        """Enqueue or execute an action based on a prediction's confidence score.
-
-        Args:
-            db: Database instance for persistence.
-            email: The email being processed.
-            score_result: ScoreResult containing the total score and breakdown.
-            prediction: Prediction model from the pipeline (must have ``id`` set).
-
-        Returns:
-            Status string: 'executed', 'queued', or 'skipped'.
-        """
+        force: bool = False,
+    ) -> Optional[QueueItem]:
+        """Idempotently enqueue or execute based on prediction. Returns QueueItem or None."""
         confidence = score_result.total_score / 100.0
         suggested_action = prediction.action_suggested
 
-        # If no action is suggested, skip
+        # Tier 1: Auto-execute
         if not suggested_action:
-            LOG.debug(
-                "No suggested action for %s; skipping queue.",
-                email.gmail_id,
-            )
+            LOG.debug("No suggested action for %s; skipping queue.", email.gmail_id)
             return "skipped"
 
-        # Ensure we have a prediction ID for the foreign key
-        prediction_id = getattr(prediction, "id", None)
-        if prediction_id is None:
-            LOG.error(
-                "Prediction has no id for email %s; cannot enqueue. "
-                "Falling back to DB lookup.",
-                email.gmail_id,
-            )
-            rows = db.get_predictions_for_email(email.gmail_id)
-            if rows:
-                prediction_id = rows[0]["id"]
-            else:
-                LOG.error(
-                    "No prediction found in DB for email %s; skipping queue.",
-                    email.gmail_id,
-                )
-                return "skipped"
-
-        # Tier 1: High confidence - auto-execute
         if confidence >= self.AUTO_EXECUTE_THRESHOLD:
             LOG.info(
                 "Auto-executing '%s' for %s (confidence=%.2f >= %.2f)",
@@ -93,65 +73,119 @@ class QueueManager:
                 confidence,
                 self.AUTO_EXECUTE_THRESHOLD,
             )
+            if getattr(prediction, 'id', None) is None:
+
+                # Fetch predictions from DB to get an ID
+                rows = db.get_predictions_for_email(email.gmail_id)
+                if rows:
+                    # Set prediction.id for consistency
+                    setattr(prediction, 'id', rows[0]['id'])
+                else:
+                    # No prediction found, skip execution
+                    return 'skipped'
             # Execute the action via executor
-            self.executor.execute_action(email, suggested_action, score_result)
-            # Log to action_queue with auto_eligible=1 and status='executed'
+            try:
+                self.executor.execute_action(email, suggested_action, score_result)
+            except Exception:
+                LOG.exception("Auto-execution failed for %s", email.gmail_id)
+            # Log executed row
             with db.transaction() as cur:
                 cur.execute(
                     """
                     INSERT INTO action_queue
-                        (email_gmail_id, prediction_id, suggested_action,
-                         primary_label, confidence, auto_eligible, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (email_gmail_id, prediction_id, action, params_json, action_fingerprint,
+                         status, confidence, priority_score, reason_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         email.gmail_id,
-                        prediction_id,
+                        getattr(prediction, 'id', None),
                         suggested_action,
-                        prediction.primary_label,
+                        json.dumps({}),
+                        make_action_fingerprint(email.gmail_id, suggested_action, {}),
+                        'executed',
                         confidence,
-                        1,  # auto_eligible
-                        "executed",
+                        score_result.total_score,
+                        json.dumps({'reason': 'auto-executed'}),
+                        int(time.time()),
+                        int(time.time()),
                     ),
                 )
             return "executed"
 
-        # Tier 2: Medium confidence - queue for human review
-        if confidence >= self.QUEUE_THRESHOLD:
-            LOG.info(
-                "Queueing '%s' for %s (confidence=%.2f in [%.2f, %.2f))",
+        # Tier 3: Low confidence - skip
+        if confidence < self.QUEUE_THRESHOLD:
+            LOG.debug(
+                "Skipping '%s' for %s (confidence=%.2f < %.2f)",
                 suggested_action,
                 email.gmail_id,
                 confidence,
                 self.QUEUE_THRESHOLD,
-                self.AUTO_EXECUTE_THRESHOLD,
             )
-            with db.transaction() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO action_queue
-                        (email_gmail_id, prediction_id, suggested_action,
-                         primary_label, confidence, auto_eligible, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        email.gmail_id,
-                        prediction_id,
-                        suggested_action,
-                        prediction.primary_label,
-                        confidence,
-                        0,  # not auto_eligible
-                        "pending",
-                    ),
-                )
-            return "queued"
+            return "skipped"
 
-        # Tier 3: Low confidence - skip
-        LOG.debug(
-            "Skipping '%s' for %s (confidence=%.2f < %.2f)",
-            suggested_action,
-            email.gmail_id,
-            confidence,
-            self.QUEUE_THRESHOLD,
+        # Compute unique fingerprint for queueing
+        fingerprint = make_action_fingerprint(email.gmail_id, suggested_action, score_result.details if hasattr(score_result, 'details') else {})
+        LOG.debug("Computed fingerprint %s for action %s on email %s", fingerprint, suggested_action, email.gmail_id)
+        # Check existing queue item
+        existing = get_queue_item_by_fingerprint(db, fingerprint)
+        if existing:
+            LOG.debug("Found existing queue item with status %s", existing.status)
+            if existing.status == 'pending':
+                # refresh metadata
+                existing.confidence = confidence
+                existing.priority_score = score_result.total_score
+                existing.updated_at = int(time.time())
+                upsert_queue_item(db, existing)
+                return "queued"
+            if existing.status in ('executed', 'rejected'):
+                if not force:
+                    LOG.debug("Existing item status %s and force=%s, no-op", existing.status, force)
+                    return None
+                # force override: delete existing to allow fresh insert
+                LOG.debug("Force re-queuing: deleting existing item with fingerprint %s", fingerprint)
+                with db.transaction() as cur:
+                    cur.execute("DELETE FROM action_queue WHERE action_fingerprint = ?", (fingerprint,))
+                existing = None
+
+        # Build new queue item
+        # Build reason payload from prediction and thread context
+        try:
+            thread_ctx = None
+            if hasattr(prediction, 'thread_context_json') and prediction.thread_context_json:
+                try:
+                    thread_ctx = json.loads(prediction.thread_context_json)
+                except Exception:
+                    thread_ctx = None
+            reason_payload = build_reason_payload(db, prediction, thread_ctx)
+            reason_json_obj = json.loads(reason_payload.to_json())
+        except Exception:
+            reason_json_obj = {'primary_label': getattr(prediction, 'primary_label', None)}
+
+        item = QueueItem(
+            email_gmail_id=email.gmail_id,
+            prediction_id=getattr(prediction, 'id', None),
+            action=suggested_action,
+            params=score_result.details if hasattr(score_result, 'details') else {},
+            action_fingerprint=fingerprint,
+            status='pending',
+            confidence=confidence,
+            priority_score=score_result.total_score,
+            reason_json=reason_json_obj,
         )
-        return "skipped"
+        LOG.debug("Upserting new queue item %s", item)
+        result = upsert_queue_item(db, item)
+        # Supersede old pending items
+        count = supersede_old_queue_items(db, email.gmail_id, fingerprint)
+        LOG.debug("Superseded %d old items for email %s", count, email.gmail_id)
+        return "queued" if result else None
+
+    def execute_action(self, email: "Email", action: str, score_result: "ScoreResult"):
+        """Execute an action on an email.
+
+        Args:
+            email: The email being processed.
+            action: The action to execute.
+            score_result: ScoreResult containing the total score and breakdown.
+        """
+        self.executor.execute_action(email, action, score_result)

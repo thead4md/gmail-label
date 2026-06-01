@@ -98,9 +98,10 @@ class Database:
         sql = (
             "INSERT INTO predictions"
             " (email_gmail_id, model, labels, score, priority_score, confidence,"
-            "  primary_label, pipeline_used, action_suggested, rule_matches, scoring_breakdown,"
-            "  ml_confidence, llm_confidence, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+            "  primary_label, pipeline_used, action_suggested, rule_matches, scoring_breakdown, thread_context_json,"
+            "  ml_confidence, llm_confidence, llm_label, llm_rationale, llm_action_hint,"
+            "  llm_needs_review, classifier_source, llm_called_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
         )
         with self.transaction() as cur:
             cur.execute(
@@ -117,8 +118,15 @@ class Database:
                     pred.action_suggested,
                     rule_matches_s,
                     pred.scoring_breakdown,
+                    getattr(pred, 'thread_context_json', None),
                     pred.ml_confidence,
                     pred.llm_confidence,
+                    pred.llm_label,
+                    pred.llm_rationale,
+                    pred.llm_action_hint,
+                    int(bool(pred.llm_needs_review)),
+                    pred.classifier_source,
+                    pred.llm_called_at,
                     pred.created_at or int(__import__("time").time()),
                 ),
             )
@@ -216,4 +224,3 @@ class Database:
 
 def open_database_from_config_path(db_path: str | Path) -> Database:
     return Database(Path(db_path))
-

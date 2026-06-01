@@ -25,9 +25,11 @@ token.json
 # Python build artifacts
 .pytest_cache/
 *.egg-info/
+mailmind.egg-info/
 
 # Virtual environment
 .venv/
+mailmind/.venv/
 
 # IDE files
 .idea/
@@ -43,3 +45,14 @@ Updating
 
 # Aider continued
 .continue/
+*.egg-info/
+.streamlit/
+
+# Workspace clutter / generated artifacts
+tmp/
+Volumes/
+package-lock.json
+mailmind/.pytest_cache/
+mailmind/__pycache__/
+mailmind/.env
+mailmind/credentials.json

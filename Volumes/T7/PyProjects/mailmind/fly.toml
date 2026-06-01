@@ -1,2 +1,0 @@
-[env]
-MAILMIND_MODEL_PATH = "/data/.mailmind/model.pkl"

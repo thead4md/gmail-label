@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 
 from ..storage.models import Email, SenderReputation
 from .rules import RuleMatch
+from ..intelligence.sender_memory import get_sender_trust_tier
+from ..storage.database import Database
 
 LOG = logging.getLogger(__name__)
 
@@ -73,6 +75,7 @@ class PriorityScorer:
         email: Email,
         rule_matches: List[RuleMatch],
         sender_reputation: Optional[SenderReputation] = None,
+        db: Optional[Database] = None,
     ) -> ScoreResult:
         """Compute priority score for an email.
 
@@ -105,6 +108,23 @@ class PriorityScorer:
 
         # 5. Sender trust score
         sender_trust = self._compute_sender_trust(email, sender_reputation)
+
+        # 5b. Sender memory nudges (modest, deterministic)
+        # Uses sender_profiles table when db is provided. Does not change thresholds.
+        memory_nudge = 0
+        try:
+            if db and email.sender:
+                tier = get_sender_trust_tier(db, email.sender)
+                if tier == 'trusted':
+                    memory_nudge = 5
+                elif tier == 'watchlist':
+                    memory_nudge = -8
+        except Exception:
+            # Fail-safe: do not crash scoring if sender memory unavailable
+            memory_nudge = 0
+
+        # Add memory nudge into sender_trust aggregation
+        sender_trust = int(sender_trust) + int(memory_nudge)
 
         # 6. Penalties accumulate
         penalties = {}

@@ -14,5 +14,4 @@ __all__ = ["features", "model", "train", "inference"]
 
 from mailmind.ml.features import extract_features, FeatureVector
 from mailmind.ml.model import MLClassifier, ModelMetadata
-from mailmind.ml.train import train_model_from_db, train_model_from_data
 from mailmind.ml.inference import predict_label, MLResult

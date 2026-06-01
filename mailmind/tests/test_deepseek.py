@@ -97,7 +97,7 @@ class TestDeepSeekClient:
 
         # Verify API was called with correct parameters
         call_kwargs = mock_instance.chat.completions.create.call_args[1]
-        assert call_kwargs["model"] == "deepseek-chat"
+        assert call_kwargs["model"] == config.deepseek_model
         assert call_kwargs["response_format"] == {"type": "json_object"}
         assert call_kwargs["temperature"] == 0.1
         assert len(call_kwargs["messages"]) == 2

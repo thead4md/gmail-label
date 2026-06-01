@@ -53,6 +53,12 @@ class TestPredictionPersistence:
             scoring_breakdown=json.dumps({"total": 65, "base_score": 50, "ml": {"label": "WORK"}}),
             ml_confidence=0.78,
             llm_confidence=None,
+            llm_label="CALENDAR",
+            llm_rationale="Meeting invite from a colleague.",
+            llm_action_hint="label",
+            llm_needs_review=True,
+            classifier_source="llm",
+            llm_called_at="2026-05-29T12:00:00Z",
             score=65,
         )
         db.save_prediction(pred)
@@ -73,6 +79,12 @@ class TestPredictionPersistence:
         assert row["rule_matches"] == "rule_sender_trusted,rule_keyword_meeting"
         assert row["ml_confidence"] == 0.78
         assert row["llm_confidence"] is None
+        assert row["llm_label"] == "CALENDAR"
+        assert row["llm_rationale"] == "Meeting invite from a colleague."
+        assert row["llm_action_hint"] == "label"
+        assert row["llm_needs_review"] == 1
+        assert row["classifier_source"] == "llm"
+        assert row["llm_called_at"] == "2026-05-29T12:00:00Z"
         assert row["scoring_breakdown"] is not None
 
         # Verify scoring_breakdown parses as valid JSON

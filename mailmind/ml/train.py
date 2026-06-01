@@ -1,24 +1,12 @@
 """Training orchestration for MailMind ML classifier.
 
-IMPORTANT DATA LEAKAGE WARNING:
-- Current training uses all available historic predictions and labels without
-  a train/validation/test split (planned for Pass 5+).
-- Avoid retraining on labels generated solely by the model itself to prevent
-  feedback loops. Training on self-generated predictions will amplify biases.
-- Production deployment should implement time-based or user-aware train/
-  validation/test splitting before retraining.
+Provides functions to train the ML model from historical data in the local
+SQLite database and from explicit corpus/labels pairs for testing.
 
-Provides functions to train the ML model from:
-1. Historical data in the local SQLite database
-2. Direct (corpus, labels) pairs for testing/fixtures
+NOTE: This module includes warnings about data leakage — treat training with
+care in production.
+"""
 
-The training flow:
-1. Fetch labeled email data from the database
-2. Extract features (text corpus + labels)
-3. Validate data sufficiency (explicit error messages on failure)
-4. Train the MLClassifier
-5. Save the model to disk
-6. Record model metadata in system_state table"""
 from __future__ import annotations
 
 import logging

@@ -84,6 +84,9 @@ class Prediction:
     classifier_source: str = "rules"  # "rules" | "ml" | "llm" | "fallback"
     llm_called_at: Optional[str] = None  # ISO-8601 timestamp when LLM was called
 
+    # Thread context (serialized JSON)
+    thread_context_json: Optional[str] = None
+
     # Legacy field: kept for backward compatibility
     score: Optional[int] = None  # Deprecated in favor of priority_score
     
@@ -121,3 +124,20 @@ class SystemState:
     value: str
     updated_at: int = field(default_factory=now_ts)
 
+
+@dataclass
+class QueueItem:
+    email_gmail_id: str
+    action: str
+    action_fingerprint: str
+    id: Optional[int] = None
+    prediction_id: Optional[int] = None
+    params: dict = field(default_factory=dict)
+    status: str = 'pending'
+    confidence: float = 0.0
+    priority_score: int = 0
+    reason_json: dict = field(default_factory=dict)
+    created_at: int = field(default_factory=now_ts)
+    updated_at: int = field(default_factory=now_ts)
+    reviewed_at: Optional[int] = None
+    executed_at: Optional[int] = None

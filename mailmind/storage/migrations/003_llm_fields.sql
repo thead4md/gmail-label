@@ -1,9 +1,9 @@
 -- Migration 003: Add LLM classification fields to predictions table
 -- This is additive only; does not remove or modify existing columns.
 --
--- NOTE: This SQL file is referenced by database.py's migration logic.
--- Columns are added via ALTER TABLE ... ADD COLUMN IF NOT EXISTS
--- in the Python migration code to ensure idempotency across SQLite versions.
+-- NOTE: This file is documentation only. The executable migrations live in
+-- mailmind/storage/migrations.py, where the prediction columns are added with
+-- per-column existence checks. See migration 0010 for the LLM metadata fields.
 
 -- The following columns are added programmatically via Python:
 -- llm_label          TEXT      — LLM-classified label

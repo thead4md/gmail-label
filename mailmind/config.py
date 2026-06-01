@@ -11,7 +11,10 @@ from __future__ import annotations
 import os
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
 LOG = logging.getLogger(__name__)
 
@@ -39,8 +42,8 @@ class MailMindConfig:
     """
     # DeepSeek LLM (existing)
     deepseek_api_key: str = ""
-    deepseek_model: str = "deepseek-chat"
-    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = DEFAULT_DEEPSEEK_MODEL
+    deepseek_base_url: str = DEFAULT_DEEPSEEK_BASE_URL
     llm_skip_threshold: int = 70
     llm_confidence_override: float = 0.90
     llm_max_calls_per_run: int = 10
@@ -49,10 +52,17 @@ class MailMindConfig:
     # OpenAI-based external LLM classifier (third-tier fallback)
     openai_llm_enabled: bool = False
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = DEFAULT_OPENAI_MODEL
     openai_rules_threshold: float = 0.90
     openai_ml_threshold: float = 0.65
     openai_max_body_chars: int = 1500
+
+    # Data directory
+    data_dir: str = field(
+        default_factory=lambda: os.path.expanduser(
+            os.environ.get("MAILMIND_DATA_DIR", "~/.mailmind")
+        )
+    )
 
     @classmethod
     def from_env(cls) -> "MailMindConfig":
@@ -87,9 +97,9 @@ class MailMindConfig:
 
         config = cls(
             deepseek_api_key=deepseek_api_key,
-            deepseek_model=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat").strip(),
+            deepseek_model=os.environ.get("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL).strip(),
             deepseek_base_url=os.environ.get(
-                "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
+                "DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL
             ).strip(),
             llm_skip_threshold=70,
             llm_confidence_override=0.90,
@@ -97,7 +107,7 @@ class MailMindConfig:
             llm_enabled=llm_enabled,
             openai_llm_enabled=openai_llm_enabled,
             openai_api_key=openai_api_key,
-            openai_model=os.environ.get("LLM_MODEL", "gpt-4o-mini").strip(),
+            openai_model=os.environ.get("LLM_MODEL", DEFAULT_OPENAI_MODEL).strip(),
             openai_rules_threshold=float(
                 os.environ.get("LLM_RULES_THRESHOLD", "0.90")
             ),
@@ -106,6 +116,9 @@ class MailMindConfig:
             ),
             openai_max_body_chars=int(
                 os.environ.get("LLM_MAX_BODY_CHARS", "1500")
+            ),
+            data_dir=os.path.expanduser(
+                os.environ.get("MAILMIND_DATA_DIR", "~/.mailmind")
             ),
         )
 

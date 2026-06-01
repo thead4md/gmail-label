@@ -4,33 +4,29 @@ primary_region = "ams"
 [build]
 
 [env]
+  MAILMIND_USER_EMAIL = "dudas.adam@cserkesz.hu"
   MAILMIND_DB_PATH = "/data/mailmind.db"
   MAILMIND_DATA_DIR = "/data/.mailmind"
   MAILMIND_MODEL_PATH = "/data/.mailmind/model.pkl"
+  MAILMIND_POLL_SECONDS = "120"
 
 [[mounts]]
   source = "mailmind_data"
   destination = "/data"
-
-[[services]]
-  protocol = "tcp"
-  internal_port = 8501
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-    force_https = true
-
-  [services.concurrency]
-    type = "requests"
-    hard_limit = 10
-    soft_limit = 5
+  processes = ["app"]
 
 [[vm]]
-  memory = "256mb"
+  memory = "512mb"
   cpu_kind = "shared"
   cpus = 1
+
+[processes]
+  app = "/fly-start.sh"
+
+[http_service]
+  internal_port = 8501
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]

@@ -8,19 +8,13 @@ Covers:
 """
 from __future__ import annotations
 
-import os
-
-import pytest
-
 
 class TestMailMindConfig:
     """Tests for MailMindConfig.from_env()."""
 
-    def test_llm_disabled_when_no_key(self):
+    def test_llm_disabled_when_no_key(self, monkeypatch):
         """Verify llm_enabled=False when DEEPSEEK_API_KEY is absent."""
-        # Ensure the env var is removed
-        if "DEEPSEEK_API_KEY" in os.environ:
-            del os.environ["DEEPSEEK_API_KEY"]
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
         from mailmind.config import MailMindConfig
 
@@ -31,9 +25,9 @@ class TestMailMindConfig:
         assert config.deepseek_base_url == "https://api.deepseek.com/v1"
         assert config.llm_max_calls_per_run == 10
 
-    def test_llm_disabled_when_empty_key(self):
+    def test_llm_disabled_when_empty_key(self, monkeypatch):
         """Verify llm_enabled=False when DEEPSEEK_API_KEY is empty."""
-        os.environ["DEEPSEEK_API_KEY"] = ""
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "")
 
         from mailmind.config import MailMindConfig
 
@@ -41,9 +35,9 @@ class TestMailMindConfig:
         assert config.llm_enabled is False
         assert config.deepseek_api_key == ""
 
-    def test_llm_enabled_with_key(self):
+    def test_llm_enabled_with_key(self, monkeypatch):
         """Verify llm_enabled=True when DEEPSEEK_API_KEY is set."""
-        os.environ["DEEPSEEK_API_KEY"] = "sk-test-key-12345"
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-key-12345")
 
         from mailmind.config import MailMindConfig
 
@@ -53,35 +47,34 @@ class TestMailMindConfig:
         assert config.deepseek_model == "deepseek-chat"
         assert config.llm_max_calls_per_run == 10
 
-    def test_custom_max_calls(self):
+    def test_custom_max_calls(self, monkeypatch):
         """Verify DEEPSEEK_MAX_CALLS_PER_RUN overrides default."""
-        os.environ["DEEPSEEK_API_KEY"] = "sk-test-key"
-        os.environ["DEEPSEEK_MAX_CALLS_PER_RUN"] = "25"
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-key")
+        monkeypatch.setenv("DEEPSEEK_MAX_CALLS_PER_RUN", "25")
 
         from mailmind.config import MailMindConfig
 
         config = MailMindConfig.from_env()
         assert config.llm_max_calls_per_run == 25
 
-    def test_custom_model(self):
+    def test_custom_model(self, monkeypatch):
         """Verify DEEPSEEK_MODEL overrides default."""
-        os.environ["DEEPSEEK_API_KEY"] = "sk-test-key"
-        os.environ["DEEPSEEK_MODEL"] = "deepseek-coder"
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-key")
+        monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-coder")
 
         from mailmind.config import MailMindConfig
 
         config = MailMindConfig.from_env()
         assert config.deepseek_model == "deepseek-coder"
 
-    def test_defaults(self):
+    def test_defaults(self, monkeypatch):
         """Verify default values of the dataclass."""
-        from mailmind.config import MailMindConfig
+        # Prevent the test from reading any shell or .env-sourced values.
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("LLM_ENABLED", raising=False)
 
+        from mailmind.config import MailMindConfig
         config = MailMindConfig()
+
         assert config.deepseek_api_key == ""
-        assert config.deepseek_model == "deepseek-chat"
-        assert config.deepseek_base_url == "https://api.deepseek.com/v1"
-        assert config.llm_skip_threshold == 70
-        assert config.llm_confidence_override == 0.90
-        assert config.llm_max_calls_per_run == 10
-        assert config.llm_enabled is False

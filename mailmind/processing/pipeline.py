@@ -11,12 +11,15 @@ from __future__ import annotations
 import logging
 from typing import Optional, TYPE_CHECKING
 
+import json
+
 from ..storage.models import Email, Prediction
 from ..storage.database import Database
 from .rules import RulesEngine
 from .scorer import PriorityScorer, ScoreResult
 from ..actions.safety import SafetyPolicy
 from ..ml.classifier_router import ClassifierRouter, RoutingResult
+from ..intelligence.thread_analyzer import ThreadAnalyzer
 
 if TYPE_CHECKING:
     from ..ml.inference import MLResult
@@ -141,6 +144,16 @@ class Pipeline:
             llm_result=llm_result,
             routing_result=routing_result,
         )
+
+        # Analyze thread context and persist into prediction if possible
+        try:
+            thread_ctx = ThreadAnalyzer.analyze(email, self.db)
+            LOG.debug("Thread analysis result: %s", thread_ctx)
+            # attach thread context JSON to prediction
+            prediction.thread_context_json = json.dumps(thread_ctx.__dict__)
+            LOG.debug("Attached thread_context_json: %s", prediction.thread_context_json)
+        except Exception as e:
+            LOG.debug("Thread analysis failed: %s", e)
 
         try:
             self.db.save_prediction(prediction)

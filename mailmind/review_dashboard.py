@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import streamlit as st
 
@@ -33,8 +32,22 @@ from mailmind.storage.queries import (
     reject_queue_item,
     log_correction,
 )
+def _check_password():
+    password = os.environ.get("DASHBOARD_PASSWORD", "")
+    if not password:
+        return  # no password set, skip gate (dev mode)
+    if st.session_state.get("authenticated"):
+        return
+    pwd = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if pwd == password:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Wrong password")
+    st.stop()
 
-
+_check_password()
 # ---------------------------------------------------------------------------
 # Page configuration
 # ---------------------------------------------------------------------------
@@ -276,13 +289,23 @@ with tab_queue:
         )
 
         for item in pending_queue:
+            # ── Fetch email metadata from DB ──────────────────────────────
+            email_row = db.get_email_by_gmail_id(item["email_gmail_id"])
+            subject = email_row["subject"] if email_row else "(subject unavailable)"
+            sender = email_row["sender"] if email_row else item["email_gmail_id"]
+            snippet = email_row["snippet"] if email_row else ""
+            gmail_id = item["email_gmail_id"]
+
             with st.container(border=True):
-                cols = st.columns([2, 1, 1, 1, 1])
+                cols = st.columns([3, 1, 1, 1, 1])
 
                 with cols[0]:
                     st.markdown(
-                        f"**Email:** `{item['email_gmail_id']}`  \n"
-                        f"**Action:** `{item['suggested_action']}`"
+                        f"**From:** {sender}  \n"
+                        f"**Subject:** {subject}  \n"
+                        f"**Preview:** {snippet[:140] + '…' if snippet and len(snippet) > 140 else snippet or '—'}  \n"
+                        f"<small style='color:gray'>ID: `{gmail_id}`  •  Action: `{item['suggested_action']}`</small>",
+                        unsafe_allow_html=True,
                     )
 
                 with cols[1]:

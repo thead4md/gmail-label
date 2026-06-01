@@ -1,86 +1,94 @@
 # MailMind
 
-A local Gmail classification and auto-labelling tool. MailMind fetches your unread emails, classifies them using a hybrid rule-based + ML pipeline, and applies Gmail labels — all from your Mac, with no data leaving your machine.
+A privacy-first Gmail classification and automation assistant. MailMind fetches unread emails, runs them through a three-tier hybrid pipeline (rules → ML → LLM), queues suggested actions for human review, and only writes labels to Gmail after you approve them. All sensitive data stays local.
+
+**Live dashboard:** [mailmind-adam.fly.dev](https://mailmind-adam.fly.dev) (Fly.io, Streamlit)
 
 ---
 
 ## Features
 
-- **OAuth2 authentication** — token stored in macOS Keychain via `keyring`, with Fernet-encrypted fallback
-- **Hybrid classification pipeline** — rule-based fast pass → ML model (scikit-learn) → optional LLM stage
-- **Sender reputation scoring** — tracks per-sender trust over time
-- **Review dashboard** — read-only Streamlit UI to inspect predictions, actions, and sender stats
-- **Dry-run mode** — classify everything without writing any labels to Gmail
-- **Watch mode** — continuous polling daemon (runs every N seconds)
+- **Three-tier hybrid pipeline** — deterministic rules → scikit-learn ML → optional DeepSeek LLM, each stage only activating if confidence is insufficient
+- **Human-in-the-loop review queue** — all suggested actions queue for approval before touching Gmail; approve/reject from the dashboard
+- **Sender memory** — tracks per-sender trust (trusted / neutral / watchlist) and applies modest score nudges; updates automatically from your approve/reject decisions
+- **Thread intelligence** — detects reply-needed emails, waiting-on-other-party, open questions, and extracts thread summaries
+- **Explainability** — every queued action stores a full `reason_json` payload (label, confidence, score breakdown, rule matches, trust tier, thread context) shown in the Review tab
+- **Idempotent action queue** — SHA-256 fingerprint on every action prevents duplicate queue entries even on repeated pipeline runs
+- **Three-tab Streamlit dashboard** — NOW (urgent/reply-needed), REVIEW (full reasoning + approve/reject/edit), AUTOMATE (sender profiles, model health, queue stats)
+- **Dry-run default** — `MAILMIND_DRY_RUN=1` everywhere; nothing writes to Gmail without an explicit approve action
+- **No Gmail deletes** — delete action requires 1.00 confidence, unreachable by design
 
 ---
 
-## Setup
+## Quick start
 
-### 1. Prerequisites
+### Prerequisites
 
 - Python 3.11+
-- A Google Cloud project with the Gmail API enabled
-- OAuth 2.0 credentials downloaded as `credentials.json`
+- Gmail API credentials (`credentials.json`) from a Google Cloud project with the Gmail API enabled
 
-### 2. Install
+### Install
 
 ```bash
-cd ~/PyProjects          # or wherever you cloned this repo
-python -m venv .venv
-source .venv/bin/activate
+git clone <repo>
+cd mailmind
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 pip install -e .
 ```
 
-### 3. Place credentials
+### Authenticate
 
-Copy your OAuth client secret file to:
-
-```
-~/.mailmind/credentials.json
-```
-
-> **Never commit this file.** It is gitignored. If it was ever committed, [rotate it](https://console.cloud.google.com/apis/credentials) immediately.
-
-### 4. Authenticate
+Place your OAuth client secret at `~/.mailmind/credentials.json`, then:
 
 ```bash
 python -m mailmind.main auth
 ```
 
-A browser window opens for the Google OAuth consent screen. After approval the token is stored in macOS Keychain (or `~/.mailmind/tokens.json.enc` as a fallback).
+A browser window opens for the Google OAuth consent screen. The token is stored in macOS Keychain (or `~/.mailmind/tokens.json.enc` as an encrypted fallback).
 
----
-
-## Usage
-
-### One-shot run
-
-Fetch the latest unread INBOX messages, classify, and apply labels:
+### Run
 
 ```bash
+# One-shot: fetch, classify, queue
 python -m mailmind.main run
-```
 
-### Dry run (no label writes)
-
-```bash
+# Dry-run (no label writes, no queue actions)
 python -m mailmind.main run --dry-run
-```
 
-### Watch mode (continuous daemon)
-
-```bash
+# Continuous watch mode
 python -m mailmind.main run --watch --poll-seconds 120
 ```
 
 ### Review dashboard
 
 ```bash
-python -m streamlit run mailmind/review_dashboard.py --server.address=127.0.0.1
+streamlit run mailmind/dashboard/app.py
 ```
 
-Open `http://127.0.0.1:8501` in your browser.
+Open [http://localhost:8501](http://localhost:8501) in your browser.
+
+---
+
+## Dashboard tabs
+
+| Tab | Purpose |
+|---|---|
+| **NOW** | High-priority and reply-needed items — single Approve per item |
+| **REVIEW** | All pending actions — full reasoning (Why this?) + Approve / Reject / Edit Label |
+| **AUTOMATE** | Sender trust profiles, auto-action toggle, model health, queue statistics |
+
+---
+
+## Confidence tier policy
+
+| Tier | Score | Behavior |
+|---|---|---|
+| Auto-execute | ≥ 0.90 | Action executed immediately |
+| Queue for review | 0.65 – 0.90 | Added to human-review queue |
+| Skip | < 0.65 | No action taken |
+| LLM override | LLM confidence ≥ 0.90 | LLM label overrides rules label |
+| Rules skip LLM | Rules score ≥ 70 | LLM not called (cost control) |
 
 ---
 
@@ -88,11 +96,29 @@ Open `http://127.0.0.1:8501` in your browser.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | SQLite database path |
-| `MAILMIND_APP_DIR` | `~/.mailmind` | Config and token directory |
-| `MAILMIND_POLL_SECONDS` | `120` | Watch mode poll interval (seconds) |
+| `MAILMIND_DATA_DIR` | `~/.mailmind` | Directory for DB, model, and token files |
+| `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | SQLite database path (overrides DATA_DIR) |
+| `MAILMIND_POLL_SECONDS` | `120` | Watch-mode poll interval |
 | `MAILMIND_FETCH_MAX` | `50` | Max emails fetched per run |
-| `MAILMIND_DRY_RUN` | `0` | Set to `1` to disable real label writes |
+| `MAILMIND_DRY_RUN` | `0` | Set to `1` to suppress all Gmail label writes |
+| `MAILMIND_USER_EMAIL` | — | Your primary email for direct-mention scoring bonus |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API key; absent → LLM stage disabled |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek model name |
+| `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | Max LLM API calls per pipeline run |
+| `OPENAI_API_KEY` | — | OpenAI API key for third-tier LLM classifier |
+| `LLM_ENABLED` | `false` | Explicitly enable OpenAI-based classifier |
+
+---
+
+## ML training
+
+Once you have ≥ 10 labeled emails processed by the pipeline:
+
+```bash
+python -m mailmind.scripts.train_ml_model
+```
+
+The model is saved to `$MAILMIND_DATA_DIR/model.pkl`. Accuracy and training stats are displayed in the AUTOMATE tab.
 
 ---
 
@@ -101,29 +127,53 @@ Open `http://127.0.0.1:8501` in your browser.
 ```
 mailmind/
 ├── main.py                  # CLI entry point (run / auth commands)
+├── config.py                # Environment-based configuration
+│
 ├── ingestion/
-│   ├── auth.py              # OAuth2 flow, token storage
-│   ├── fetcher.py           # Gmail API wrappers
+│   ├── auth.py              # OAuth2 flow, Keychain/encrypted token storage
+│   ├── fetcher.py           # Gmail API batch fetch
 │   └── parser.py            # Raw Gmail message → Email model
+│
 ├── processing/
-│   ├── pipeline.py          # Orchestrates rules → ML → actions
-│   ├── rules.py             # Rule-based classifier
-│   └── scorer.py            # Priority scorer
+│   ├── pipeline.py          # Orchestrates rules → scorer → thread → ML/LLM → queue
+│   ├── queue_manager.py     # Idempotent enqueue with fingerprint dedup
+│   ├── rules.py             # Deterministic rule-based classifier
+│   └── scorer.py            # Priority scorer (0-100) + sender memory nudge
+│
+├── intelligence/            # Pass 8 — Copilot Update
+│   ├── sender_memory.py     # Sender trust profiles (trusted/neutral/watchlist)
+│   ├── thread_analyzer.py   # Heuristic thread / reply-needed detection
+│   ├── explainer.py         # ReasonPayload builder → reason_json in queue
+│   └── feedback.py          # Approve / reject / correct handlers
+│
+├── dashboard/               # Three-tab Streamlit review UI
+│   ├── app.py               # NOW / REVIEW / AUTOMATE tabs
+│   └── helpers.py           # Pure formatting helpers (testable without Streamlit)
+│
 ├── ml/
-│   ├── model.py             # scikit-learn model definition
-│   ├── train.py             # Training script
+│   ├── model.py             # scikit-learn model wrapper
+│   ├── train.py             # Training from DB labels
 │   ├── features.py          # Feature extraction
-│   └── inference.py         # Inference wrapper
+│   ├── inference.py         # Inference orchestration
+│   └── classifier_router.py # Three-tier routing logic
+│
+├── llm/
+│   └── deepseek.py          # DeepSeek LLM client (optional, fail-safe)
+│
 ├── actions/
-│   ├── executor.py          # Applies Gmail labels via API
-│   └── safety.py            # Action safety checks
+│   ├── executor.py          # Safe Gmail label executor
+│   └── safety.py            # Action policy checks (delete always blocked)
+│
 ├── storage/
 │   ├── database.py          # SQLite abstraction (WAL mode)
-│   ├── migrations.py        # Schema migrations
-│   ├── models.py            # Dataclasses: Email, Prediction, etc.
-│   └── queries.py           # Read-only query helpers (dashboard)
-├── review_dashboard.py      # Streamlit dashboard
-└── tests/                   # pytest suite
+│   ├── migrations.py        # Linear idempotent migrations (0001–0013)
+│   ├── models.py            # Dataclasses: Email, Prediction, QueueItem, …
+│   └── queries.py           # All DB query helpers
+│
+├── utils/
+│   └── fingerprint.py       # SHA-256 action fingerprint (dedup)
+│
+└── tests/                   # 217 pytest tests
 ```
 
 ---
@@ -131,47 +181,51 @@ mailmind/
 ## Running tests
 
 ```bash
-python -m pytest mailmind/tests/ -v
+pytest mailmind/tests/ -v
+# 217 passed
 ```
+
+Tests use in-memory SQLite — no network, no Gmail API, no LLM calls.
 
 ---
 
-## Scheduled runs (macOS launchd)
+## Fly.io deployment
 
-To run MailMind every 5 minutes automatically, create `~/Library/LaunchAgents/com.mailmind.run.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.mailmind.run</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/adamdudas/PyProjects/.venv/bin/python</string>
-    <string>-m</string><string>mailmind.main</string>
-    <string>run</string>
-  </array>
-  <key>WorkingDirectory</key><string>/Users/adamdudas/PyProjects</string>
-  <key>StartInterval</key><integer>300</integer>
-  <key>StandardOutPath</key><string>/tmp/mailmind.log</string>
-  <key>StandardErrorPath</key><string>/tmp/mailmind.err</string>
-</dict>
-</plist>
-```
-
-Then load it:
+The app runs on [Fly.io](https://fly.io) as `mailmind-adam`.
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.mailmind.run.plist
+# Deploy
+fly deploy
+
+# View logs
+fly logs
+
+# SSH into machine
+fly ssh console
+
+# Run pipeline manually on Fly
+fly ssh console -C "MAILMIND_DATA_DIR=/data/.mailmind python -m mailmind.main run"
+
+# Train ML model on Fly
+fly ssh console -C "MAILMIND_DATA_DIR=/data/.mailmind python -m mailmind.scripts.train_ml_model"
+
+# Check DB
+fly ssh console -C "sqlite3 /data/.mailmind/mailmind.db 'SELECT COUNT(*) FROM emails;'"
 ```
+
+**Critical Fly secret**: `MAILMIND_DATA_DIR` must be set to `/data/.mailmind` (not `~/.mailmind`) so the poller, dashboard, and training script all read the same persistent SQLite file.
+
+The container starts via `fly-start.sh` which:
+1. Optionally restores the DB from S3 via Litestream
+2. Launches the Streamlit dashboard on `:8501`
+3. Starts the MailMind polling daemon
 
 ---
 
 ## Security notes
 
-- No email body text is stored in the review dashboard or logs
+- No email body text is logged or shown in the dashboard
 - OAuth tokens are stored in macOS Keychain; never in the repo
-- `credentials.json` must live at `~/.mailmind/credentials.json`, outside the repo
+- `credentials.json` must live at `~/.mailmind/credentials.json`, outside the repo — **never commit it**
 - All SQLite writes use parameterised queries
+- The delete action is hard-blocked in `SafetyPolicy` regardless of confidence

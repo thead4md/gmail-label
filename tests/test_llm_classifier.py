@@ -297,13 +297,3 @@ class TestLLMClassifier:
         # Body should be truncated to 50 chars
         assert "A" * 50 in user_msg
         assert "A" * 51 not in user_msg
-Now let me verify all the files look correct. Let me run the tests to make sure they work:
-
-
-
-
-
-```tool
-TOOL_NAME: run_terminal_command
-BEGIN_ARG: command
-"cd /Volumes/T7/PyProjects/mailmind && python -m pytest tests/test_llm_classifier.py -v 2>&1 | head -60"
