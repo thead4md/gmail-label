@@ -64,6 +64,29 @@ class MailMindConfig:
         )
     )
 
+    # Mailbox accounts. The first entry is the primary account that existing
+    # single-account data is attributed to. Configured via MAILMIND_ACCOUNTS
+    # (comma-separated emails); falls back to [MAILMIND_USER_EMAIL].
+    accounts: list = field(default_factory=list)
+
+    @property
+    def primary_account(self) -> str:
+        """The primary mailbox account (first configured), or '' if none."""
+        return self.accounts[0] if self.accounts else ""
+
+    @staticmethod
+    def load_accounts() -> list:
+        """Resolve the configured mailbox accounts from the environment.
+
+        MAILMIND_ACCOUNTS is a comma-separated list of email addresses. If
+        unset, falls back to a single-element list of MAILMIND_USER_EMAIL.
+        Order matters: the first account is the primary one.
+        """
+        raw = os.environ.get("MAILMIND_ACCOUNTS", "").strip()
+        if not raw:
+            raw = os.environ.get("MAILMIND_USER_EMAIL", "").strip()
+        return [a.strip() for a in raw.split(",") if a.strip()]
+
     @classmethod
     def from_env(cls) -> "MailMindConfig":
         """Load configuration from environment variables.
@@ -120,6 +143,7 @@ class MailMindConfig:
             data_dir=os.path.expanduser(
                 os.environ.get("MAILMIND_DATA_DIR", "~/.mailmind")
             ),
+            accounts=cls.load_accounts(),
         )
 
         LOG.debug(

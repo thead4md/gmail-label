@@ -38,7 +38,7 @@ except ImportError:
     pass  # python-dotenv not installed; use environment variables directly
 
 
-from mailmind.ingestion.auth import authenticate, build_gmail_service
+from mailmind.ingestion.auth import authenticate, build_gmail_service, load_stored_credentials
 from mailmind.ingestion.fetcher import GmailFetcher
 from mailmind.ingestion.parser import parse_message
 from mailmind.processing.pipeline import Pipeline
@@ -119,6 +119,7 @@ def _process_message_id(
     pipeline: Pipeline,
     queue_manager: QueueManager,
     reclassify: bool = False,
+    account: Optional[str] = None,
 ) -> None:
     """Fetch one message, persist it, run the classification pipeline.
 
@@ -144,6 +145,7 @@ def _process_message_id(
 
     try:
         email: Email = parse_message(raw)
+        email.account = account
     except Exception as exc:
         LOG.warning("Failed to parse message %s: %s", message_id, exc)
         return
@@ -202,17 +204,40 @@ def _process_message_id(
         LOG.error("Pipeline failed for %s: %s", email.gmail_id, exc, exc_info=True)
 
 
-def _run_once(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False) -> None:
-    """One-shot: authenticate → fetch unread INBOX → process each message.
+def _run_once(
+    db: Database,
+    dry_run: bool,
+    fetch_max: int,
+    no_llm: bool = False,
+    account: Optional[str] = None,
+    auth_account: Optional[str] = None,
+    allow_interactive: bool = True,
+) -> None:
+    """One-shot for a single mailbox: authenticate → fetch unread → process.
 
     Args:
-        db: Database instance.
-        dry_run: If True, actions are logged but not executed.
-        fetch_max: Maximum number of messages to fetch per run.
-        no_llm: If True, skip LLM classification even if API key is set.
+        account: Data label this mailbox's rows are tagged with (None = legacy
+            single-account, leaves rows untagged for back-compat).
+        auth_account: Token identity to load (None = legacy token storage; the
+            primary account reuses the legacy token so existing deployments keep
+            working unchanged).
+        allow_interactive: If True, fall back to the interactive OAuth flow when
+            no stored token exists. Set False for secondary mailboxes so a
+            not-yet-connected account is skipped instead of blocking.
     """
-    LOG.info("Authenticating with Gmail…")
-    creds = authenticate()
+    label = account or "primary"
+    LOG.info("Authenticating mailbox %s…", label)
+    creds = load_stored_credentials(auth_account)
+    if creds is None:
+        if allow_interactive:
+            creds = authenticate(account=auth_account)
+        else:
+            LOG.warning(
+                "No stored credentials for mailbox %s — skipping. Connect it by "
+                "setting the GMAIL_TOKEN_<SLUG> secret or placing its token file.",
+                label,
+            )
+            return
     service = build_gmail_service(creds)
     fetcher = GmailFetcher(service)
 
@@ -230,14 +255,44 @@ def _run_once(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False)
     # Fetch only UNREAD INBOX messages. Gmail treats UNREAD as a label, so
     # passing both label ids returns their intersection (unread in inbox).
     # Read mail drops out of the set, so the loop stops re-scanning it.
-    LOG.info("Fetching up to %d unread INBOX message IDs…", fetch_max)
+    LOG.info("[%s] Fetching up to %d unread INBOX message IDs…", label, fetch_max)
     message_ids = fetcher.list_message_ids(label_ids=["INBOX", "UNREAD"], max_results=fetch_max)
-    LOG.info("Found %d messages.", len(message_ids))
+    LOG.info("[%s] Found %d messages.", label, len(message_ids))
 
     for mid in message_ids:
-        _process_message_id(mid, fetcher, pipeline, queue_manager)
+        _process_message_id(mid, fetcher, pipeline, queue_manager, account=account)
 
-    LOG.info("Run complete.")
+    LOG.info("[%s] Run complete.", label)
+
+
+def _run_all_accounts(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False) -> None:
+    """Run one cycle across every configured mailbox.
+
+    With no MAILMIND_ACCOUNTS configured, behaves exactly like the legacy
+    single-account run. Otherwise iterates each account: the first (primary)
+    reuses the legacy token and may auth interactively; secondary mailboxes
+    load their own stored token and are skipped if not yet connected.
+    A failure on one account never aborts the others.
+    """
+    accounts = MailMindConfig.load_accounts()
+    if not accounts:
+        _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+        return
+
+    for i, acct in enumerate(accounts):
+        is_primary = i == 0
+        try:
+            _run_once(
+                db,
+                dry_run=dry_run,
+                fetch_max=fetch_max,
+                no_llm=no_llm,
+                account=acct,
+                auth_account=None if is_primary else acct,
+                allow_interactive=is_primary,
+            )
+        except Exception as exc:
+            LOG.error("Run failed for mailbox %s: %s", acct, exc, exc_info=True)
 
 
 def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 86400) -> None:
@@ -305,7 +360,7 @@ def run(
         LOG.info("Watch mode active — polling every %ds. Ctrl+C to stop.", poll_secs)
         while True:
             try:
-                _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+                _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
                 _maybe_prune(db, retention_days)
             except KeyboardInterrupt:
                 raise
@@ -314,7 +369,7 @@ def run(
             LOG.info("Sleeping %ds…", poll_secs)
             time.sleep(poll_secs)
     else:
-        _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+        _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
 
 
 @cli.command()
@@ -336,13 +391,54 @@ def prune(retention_days: Optional[int], no_vacuum: bool) -> None:
     click.echo(f"Pruned (retention={days}d): {counts}")
 
 
+def _auth_account_for(account: Optional[str]) -> Optional[str]:
+    """Map a mailbox to its token-storage identity.
+
+    The primary mailbox (first in MAILMIND_ACCOUNTS, or an unconfigured
+    single account) uses the legacy token storage (None) so existing
+    deployments keep working and the watch loop's primary path finds it.
+    Secondary mailboxes store under their own per-account token.
+    """
+    accounts = MailMindConfig.load_accounts()
+    primary = accounts[0] if accounts else None
+    if account is None or account == primary:
+        return None
+    return account
+
+
 @cli.command()
-def auth() -> None:
-    """Run the interactive OAuth2 flow and persist the token."""
-    LOG.info("Starting OAuth2 flow…")
-    creds = authenticate()
-    LOG.info("Authentication successful. Token stored securely.")
+@click.option("--account", default=None,
+              help="Mailbox email to connect (default: the primary account).")
+def auth(account: Optional[str]) -> None:
+    """Run the interactive OAuth2 flow for a mailbox and persist the token.
+
+    Connect the primary mailbox with no argument; connect a second mailbox
+    with --account you@example.com (must be listed in MAILMIND_ACCOUNTS).
+    """
+    auth_account = _auth_account_for(account)
+    label = account or (MailMindConfig.load_accounts() or ["primary"])[0]
+    LOG.info("Starting OAuth2 flow for %s…", label)
+    creds = authenticate(account=auth_account)
+    LOG.info("Authentication successful for %s. Token stored securely.", label)
     LOG.info("Scopes granted: %s", creds.scopes)
+
+
+@cli.command()
+def accounts() -> None:
+    """List configured mailboxes and whether each has a stored token."""
+    from mailmind.ingestion.auth import _load_stored_token
+
+    configured = MailMindConfig.load_accounts()
+    if not configured:
+        click.echo("No accounts configured (set MAILMIND_ACCOUNTS or MAILMIND_USER_EMAIL).")
+        return
+    click.echo("Configured mailboxes:")
+    for i, acct in enumerate(configured):
+        auth_account = None if i == 0 else acct
+        connected = _load_stored_token(auth_account) is not None
+        tag = "primary" if i == 0 else "secondary"
+        status = "connected" if connected else "NOT connected"
+        click.echo(f"  - {acct}  [{tag}]  {status}")
 
 
 if __name__ == "__main__":

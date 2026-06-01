@@ -30,6 +30,8 @@ class Email:
     date_ts: Optional[int] = None
     labels: Optional[List[str]] = field(default_factory=list)
     parsed: bool = False
+    # Which mailbox this email belongs to (multi-account). None for legacy rows.
+    account: Optional[str] = None
 
     def to_db_tuple(self) -> tuple:
         # Convert lists to JSON-like strings (comma-separated). Keep this simple for now.
@@ -46,6 +48,7 @@ class Email:
             self.date_ts,
             labels_s,
             int(bool(self.parsed)),
+            self.account,
         )
 
 
@@ -95,6 +98,9 @@ class Prediction:
     # Row id, populated by save_prediction() after persistence.
     id: Optional[int] = None
 
+    # Which mailbox this prediction belongs to (multi-account). None = legacy.
+    account: Optional[str] = None
+
 
 @dataclass
 class ActionApplied:
@@ -142,5 +148,7 @@ class QueueItem:
     reason_json: dict = field(default_factory=dict)
     created_at: int = field(default_factory=now_ts)
     updated_at: int = field(default_factory=now_ts)
+    # Which mailbox this queue item belongs to (multi-account). None = legacy.
+    account: Optional[str] = None
     reviewed_at: Optional[int] = None
     executed_at: Optional[int] = None

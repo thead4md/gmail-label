@@ -8,7 +8,7 @@ No body_text is ever exposed.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from mailmind.storage.database import Database
 
@@ -178,8 +178,8 @@ def upsert_queue_item(db: Database, item: QueueItem) -> QueueItem | None:
             """
             INSERT OR IGNORE INTO action_queue
                 (email_gmail_id, prediction_id, action, params_json, action_fingerprint,
-                 status, confidence, priority_score, reason_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, confidence, priority_score, reason_json, created_at, updated_at, account)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.email_gmail_id,
@@ -193,6 +193,7 @@ def upsert_queue_item(db: Database, item: QueueItem) -> QueueItem | None:
                 json.dumps(item.reason_json or {}),
                 item.created_at or now,
                 now,
+                item.account,
             ),
         )
         # If insertion affected any rows (new item)
@@ -229,11 +230,19 @@ def supersede_old_queue_items(db: Database, email_gmail_id: str, keep_fingerprin
         return cur.rowcount
 
 
-def get_pending_queue(db: Database, limit: int = 50) -> List[Dict[str, Any]]:
-    """Return pending items from the action_queue (raw rows)."""
+def get_pending_queue(
+    db: Database, limit: int = 50, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return pending items from the action_queue (raw rows).
+
+    When *account* is given, only that mailbox's items are returned.
+    """
+    account_clause = " AND account = ?" if account else ""
+    params: tuple = (account, limit) if account else (limit,)
     rows = db.execute_sql(
-        "SELECT * FROM action_queue WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?",
-        (limit,),
+        f"SELECT * FROM action_queue WHERE status = 'pending'{account_clause}"
+        " ORDER BY created_at DESC LIMIT ?",
+        params,
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -267,14 +276,19 @@ def _row_to_prediction_with_email_dict(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def get_recent_predictions_with_emails(db: Database, limit: int = 100) -> List[Dict[str, Any]]:
+def get_recent_predictions_with_emails(
+    db: Database, limit: int = 100, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Return predictions joined with email metadata, excluding unclassified rows.
 
     Shows subject, sender, date, a body preview, and prediction info.
-    Only returns rows where primary_label is not null.
+    Only returns rows where primary_label is not null. When *account* is given,
+    only that mailbox's predictions are returned; otherwise all accounts.
     """
+    account_clause = " AND p.account = ?" if account else ""
+    params: tuple = (account, limit) if account else (limit,)
     rows = db.execute_sql(
-        """
+        f"""
         SELECT
             e.subject,
             e.sender,
@@ -288,11 +302,11 @@ def get_recent_predictions_with_emails(db: Database, limit: int = 100) -> List[D
             p.email_gmail_id
         FROM predictions p
         JOIN emails e ON e.gmail_id = p.email_gmail_id
-        WHERE p.primary_label IS NOT NULL
+        WHERE p.primary_label IS NOT NULL{account_clause}
         ORDER BY p.created_at DESC
         LIMIT ?
         """,
-        (limit,),
+        params,
     ).fetchall()
     return [_row_to_prediction_with_email_dict(r) for r in rows]
 
@@ -406,15 +420,20 @@ def update_sender_profile(
             )
 
 
-def get_pending_queue_enriched(db: Database, limit: int = 100) -> List[Dict[str, Any]]:
+def get_pending_queue_enriched(
+    db: Database, limit: int = 100, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     Return pending queue items enriched with email and sender info.
-    
+
     Joins action_queue with emails and sender_profiles to provide full context
-    for dashboard display.
+    for dashboard display. When *account* is given, only that mailbox's items
+    are returned; otherwise all accounts.
     """
+    account_clause = " AND aq.account = ?" if account else ""
+    params: tuple = (account, limit) if account else (limit,)
     rows = db.execute_sql(
-        """
+        f"""
         SELECT
             aq.id,
             aq.email_gmail_id,
@@ -447,11 +466,11 @@ def get_pending_queue_enriched(db: Database, limit: int = 100) -> List[Dict[str,
         LEFT JOIN emails e ON e.gmail_id = aq.email_gmail_id
         LEFT JOIN sender_profiles sp ON sp.sender_email = e.sender
         LEFT JOIN predictions p ON p.id = aq.prediction_id
-        WHERE aq.status = 'pending'
+        WHERE aq.status = 'pending'{account_clause}
         ORDER BY aq.priority_score DESC, aq.created_at ASC
         LIMIT ?
         """,
-        (limit,),
+        params,
     ).fetchall()
     
     result = []
@@ -541,16 +560,22 @@ def toggle_sender_auto_action(db: Database, sender_email: str, enabled: bool) ->
         )
 
 
-def get_queue_stats(db: Database) -> Dict[str, int]:
-    """Return queue statistics by status."""
+def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, int]:
+    """Return queue statistics by status.
+
+    When *account* is given, only that mailbox's queue items are counted.
+    """
+    account_clause = " WHERE account = ?" if account else ""
+    params: tuple = (account,) if account else ()
     rows = db.execute_sql(
-        """
+        f"""
         SELECT status, COUNT(*) as count
-        FROM action_queue
+        FROM action_queue{account_clause}
         GROUP BY status
-        """
+        """,
+        params,
     ).fetchall()
-    
+
     stats = {
         'pending': 0,
         'approved': 0,
@@ -559,15 +584,17 @@ def get_queue_stats(db: Database) -> Dict[str, int]:
         'executed': 0,
         'failed': 0,
     }
-    
+
     for r in rows:
         if r['status'] in stats:
             stats[r['status']] = r['count']
-    
+
     # Count items with reply_needed still pending
     reply_needed_count = 0
+    reply_clause = " AND account = ?" if account else ""
     pending_rows = db.execute_sql(
-        "SELECT reason_json FROM action_queue WHERE status = 'pending'"
+        f"SELECT reason_json FROM action_queue WHERE status = 'pending'{reply_clause}",
+        params,
     ).fetchall()
     for r in pending_rows:
         try:

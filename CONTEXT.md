@@ -5977,10 +5977,10 @@ graph TD
 | `mailmind/actions/safety.py` | Safety policy checks for MailMind action execution. | SafetyDecision, SafetyPolicy | ✅ Complete |
 | `mailmind/config.py` | Configuration management for MailMind Pass 7+. | MailMindConfig | ✅ Complete |
 | `mailmind/dashboard/__init__.py` |  | — | ✅ Stable |
-| `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), render_now_tab(), render_review_tab(), render_automate_tab(), main() | ✅ Complete |
+| `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), render_now_tab(), render_review_tab(), render_automate_tab(), main() | ✅ Complete |
 | `mailmind/dashboard/helpers.py` |  | filter_now_items(), get_time_ago_str(), format_unix_ts(), get_confidence_badge(), parse_reason_json() | ✅ Complete |
 | `mailmind/ingestion/__init__.py` | Ingestion package: Gmail auth, fetching, and parsing. | — | ✅ Stable |
-| `mailmind/ingestion/auth.py` | Gmail OAuth2 authentication helpers for MailMind. | authenticate(), build_gmail_service() | ✅ Complete |
+| `mailmind/ingestion/auth.py` | Gmail OAuth2 authentication helpers for MailMind. | load_stored_credentials(), authenticate(), build_gmail_service() | ✅ Complete |
 | `mailmind/ingestion/fetcher.py` | Gmail fetcher wrapper for MailMind. | GmailFetcher | ✅ Complete |
 | `mailmind/ingestion/parser.py` | Parser converting Gmail API message payloads into MailMind Email models. | parse_message(), GmailMessageParser | ✅ Complete |
 | `mailmind/intelligence/__init__.py` |  | — | ✅ Stable |
@@ -5990,7 +5990,7 @@ graph TD
 | `mailmind/intelligence/thread_analyzer.py` |  | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
 | `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
-| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), prune(), auth() | ✅ Complete |
+| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), prune(), auth(), accounts() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
@@ -6068,6 +6068,8 @@ class DeepSeekClient:
 ```python
 @dataclass
 class MailMindConfig:
+    def primary_account(self)
+    def load_accounts()
     def from_env(cls)
 ```
 <!-- AUTO:END:key_interfaces -->
@@ -6099,6 +6101,7 @@ class MailMindConfig:
 | `LLM_MAX_BODY_CHARS` | `1500` | No | — |
 | `LLM_ML_THRESHOLD` | `0.65` | No | — |
 | `LLM_RULES_THRESHOLD` | `0.90` | No | — |
+| `MAILMIND_ACCOUNTS` | `""` (empty) | No | — |
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | No | — |
 | `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | No | SQLite database path |
 | `MAILMIND_DRY_RUN` | `""` (empty) | No | Set to "1" to skip real Gmail label writes |
@@ -7596,7 +7599,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 227 tests passing.
+Pass 7 complete. 244 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->
