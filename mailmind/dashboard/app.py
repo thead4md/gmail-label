@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
-from mailmind.config import MailMindConfig
 from mailmind.dashboard.helpers import (
     filter_now_items,
     format_unix_ts,
@@ -29,6 +28,7 @@ from mailmind.storage.queries import (
     get_ml_model_metadata,
     get_pending_queue_enriched,
     get_queue_stats,
+    get_recent_predictions_with_emails,
     get_sender_profiles,
     toggle_sender_auto_action,
 )
@@ -51,8 +51,8 @@ st.set_page_config(
 
 @st.cache_resource
 def get_db() -> Database:
-    config = MailMindConfig.from_env()
-    db_path = Path(config.data_dir) / "mailmind.db"
+    import os
+    db_path = Path(os.environ.get("MAILMIND_DB_PATH", "~/.mailmind/mailmind.db")).expanduser()
     return Database(db_path)
 
 
@@ -124,16 +124,30 @@ def render_now_tab() -> None:
 
 def render_review_tab() -> None:
     st.header("📋 REVIEW")
-    st.markdown("_All pending queue items with detailed reasoning_")
 
     db = get_db()
+
+    # --- Recent predictions (all processed emails) ---
+    st.subheader("Recent Predictions")
+    preds = get_recent_predictions_with_emails(db, limit=200)
+    if preds:
+        import pandas as pd
+        df = pd.DataFrame(preds)
+        df['date'] = df['date'].apply(lambda ts: format_unix_ts(ts) if ts else '')
+        df = df.drop(columns=['preview', 'email_gmail_id'], errors='ignore')
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No predictions yet — emails are still being processed.")
+
+    st.markdown("---")
+
+    # --- Pending queue (items needing human approval) ---
     items = get_pending_queue_enriched(db)
+    st.subheader(f"Pending Approval ({len(items)})")
 
     if not items:
-        st.info("✅ No pending items!")
+        st.info("✅ No items pending approval.")
         return
-
-    st.metric("Pending Items", len(items))
 
     for idx, item in enumerate(items):
         item_id = item.get('id')
