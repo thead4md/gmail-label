@@ -82,6 +82,34 @@ def get_confidence_badge(conf: Optional[float]) -> str:
     return "🔴"
 
 
+def get_heartbeat_status(
+    last_heartbeat_ts: Optional[int],
+    *,
+    expected_interval_seconds: int = 120,
+    stale_after_intervals: int = 3,
+) -> Dict[str, Any]:
+    """Read the watch loop's heartbeat and classify its freshness.
+
+    Returns a dict with:
+      status: 'never' | 'fresh' | 'stale'
+      seconds_ago: int | None
+      human: str — short label for the UI
+    Stale = no heartbeat for more than ``stale_after_intervals * expected_interval_seconds``
+    (default: 3 missed cycles at the default 120s poll = ~6 minutes silent).
+    """
+    if last_heartbeat_ts is None:
+        return {"status": "never", "seconds_ago": None,
+                "human": "no heartbeat yet"}
+    now = int(datetime.now(timezone.utc).timestamp())
+    age = max(0, now - int(last_heartbeat_ts))
+    threshold = expected_interval_seconds * stale_after_intervals
+    if age > threshold:
+        return {"status": "stale", "seconds_ago": age,
+                "human": f"silent for {get_time_ago_str(last_heartbeat_ts)}"}
+    return {"status": "fresh", "seconds_ago": age,
+            "human": f"active {get_time_ago_str(last_heartbeat_ts)}"}
+
+
 def parse_reason_json(raw: Any) -> Dict[str, Any]:
     """Safely parse reason_json from a queue item.
 

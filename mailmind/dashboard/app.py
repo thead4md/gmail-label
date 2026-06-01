@@ -19,6 +19,7 @@ from mailmind.dashboard.helpers import (
     filter_now_items,
     format_unix_ts,
     get_confidence_badge,
+    get_heartbeat_status,
     get_time_ago_str,
     parse_reason_json,
 )
@@ -396,6 +397,18 @@ def main() -> None:
     elif len(accounts) == 1:
         account = accounts[0]
         st.sidebar.caption(f"Mailbox: {account}")
+
+    # --- Watch loop heartbeat: surface silent-hang risk in the UI ---
+    db_for_heartbeat = get_db()
+    raw_hb = db_for_heartbeat.get_state("last_heartbeat_ts")
+    hb = get_heartbeat_status(int(raw_hb) if raw_hb else None)
+    st.sidebar.markdown("---")
+    if hb["status"] == "stale":
+        st.sidebar.error(f"⚠️ Watcher {hb['human']}")
+    elif hb["status"] == "never":
+        st.sidebar.warning("⏳ Watcher: no heartbeat yet")
+    else:
+        st.sidebar.success(f"✅ Watcher {hb['human']}")
 
     tab_now, tab_review, tab_automate = st.tabs(["📍 NOW", "📋 REVIEW", "⚙️ AUTOMATE"])
 

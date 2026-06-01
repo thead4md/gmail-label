@@ -435,6 +435,25 @@ def _maybe_retrain(
         LOG.error("Auto-retrain failed: %s", exc, exc_info=True)
 
 
+# Heartbeat: the watch loop stamps system_state every cycle so the dashboard
+# (and any external monitor) can detect a silent hang. We deliberately bump
+# this AFTER ingest+retrain+prune so a stuck stage shows as a stale heartbeat
+# instead of falsely-fresh.
+HEARTBEAT_KEY = "last_heartbeat_ts"
+
+
+def _record_heartbeat(db: Database) -> None:
+    """Stamp the current time as the last successful watch-loop cycle.
+
+    Failure here must never take down the watch loop — a heartbeat write
+    error would defeat the whole point.
+    """
+    try:
+        db.set_state(HEARTBEAT_KEY, str(int(time.time())))
+    except Exception as exc:
+        LOG.warning("Heartbeat write failed: %s", exc)
+
+
 def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 86400) -> None:
     """Run a retention sweep at most once per ``interval_seconds``.
 
@@ -503,6 +522,7 @@ def run(
                 _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
                 _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
+                _record_heartbeat(db)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
