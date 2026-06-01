@@ -150,15 +150,23 @@ class TestGetPredictionsForEmail:
         result = get_predictions_for_email(db, "nonexistent")
         assert result == []
 
-    def test_multiple_for_same_email(self, db: Database) -> None:
+    def test_one_row_per_email_latest_wins(self, db: Database) -> None:
+        # Predictions are now one row per email (migration 0014 + upsert).
+        # Re-classifying the same email updates the existing row in place.
         _insert_email(db)
-        _insert_prediction(db, created_at=100)
-        _insert_prediction(db, created_at=200)
+        _insert_prediction(db, created_at=100, primary_label="INBOX")
+        db.execute_sql(
+            """INSERT INTO predictions
+               (email_gmail_id, model, primary_label, score, priority_score, confidence, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(email_gmail_id) DO UPDATE SET
+                 primary_label=excluded.primary_label, created_at=excluded.created_at""",
+            ("test001", "rules_only", "WORK", 50, 50, 0.8, 200),
+        )
         result = get_predictions_for_email(db, "test001")
-        assert len(result) == 2
-        # Most recent first
+        assert len(result) == 1
         assert result[0]["created_at"] == 200
-        assert result[1]["created_at"] == 100
+        assert result[0]["primary_label"] == "WORK"
 
 
 class TestGetRecentActions:

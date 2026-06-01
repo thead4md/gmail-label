@@ -185,11 +185,17 @@ class TestPredictionPersistence:
         reconstructed = stored.split(",") if stored else []
         assert reconstructed == original
 
-    def test_multiple_predictions_same_email(self, db):
-        """Multiple predictions for the same email are all retrievable."""
+    def test_resaving_same_email_upserts_one_row(self, db):
+        """Re-classifying the same email upserts in place: one row, latest wins.
+
+        Migration 0014 enforces UNIQUE(email_gmail_id); save_prediction uses
+        ON CONFLICT DO UPDATE, so the predictions table stays at one row per
+        email instead of accumulating a new row on every watch cycle.
+        """
+        first_id = None
         for i in range(3):
             pred = Prediction(
-                email_gmail_id=f"multi_test_email",
+                email_gmail_id="multi_test_email",
                 model="rules",
                 labels=["WORK"],
                 priority_score=50 + i * 10,
@@ -199,10 +205,12 @@ class TestPredictionPersistence:
                 rule_matches=[],
                 scoring_breakdown="{}",
             )
-            db.save_prediction(pred)
+            row_id = db.save_prediction(pred)
+            if first_id is None:
+                first_id = row_id
 
         rows = db.get_predictions_for_email("multi_test_email")
-        assert len(rows) == 3
-        # Most recent first (ORDER BY created_at DESC)
-        scores = {row["priority_score"] for row in rows}
-        assert scores == {50, 60, 70}
+        assert len(rows) == 1
+        # Latest write wins; the row id is stable across upserts (FK-safe).
+        assert rows[0]["priority_score"] == 70
+        assert rows[0]["id"] == first_id

@@ -95,13 +95,28 @@ class Database:
         labels_s = ",".join(pred.labels) if pred.labels else None
         rule_matches_s = ",".join(pred.rule_matches) if pred.rule_matches else None
 
+        # Upsert: one prediction row per email (latest classification wins).
+        # A re-classification of the same email updates the existing row in place
+        # rather than appending, so the table stays at one row per email.
+        # Requires the UNIQUE index on email_gmail_id (migration 0014).
         sql = (
             "INSERT INTO predictions"
             " (email_gmail_id, model, labels, score, priority_score, confidence,"
             "  primary_label, pipeline_used, action_suggested, rule_matches, scoring_breakdown, thread_context_json,"
             "  ml_confidence, llm_confidence, llm_label, llm_rationale, llm_action_hint,"
             "  llm_needs_review, classifier_source, llm_called_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(email_gmail_id) DO UPDATE SET"
+            "  model=excluded.model, labels=excluded.labels, score=excluded.score,"
+            "  priority_score=excluded.priority_score, confidence=excluded.confidence,"
+            "  primary_label=excluded.primary_label, pipeline_used=excluded.pipeline_used,"
+            "  action_suggested=excluded.action_suggested, rule_matches=excluded.rule_matches,"
+            "  scoring_breakdown=excluded.scoring_breakdown, thread_context_json=excluded.thread_context_json,"
+            "  ml_confidence=excluded.ml_confidence, llm_confidence=excluded.llm_confidence,"
+            "  llm_label=excluded.llm_label, llm_rationale=excluded.llm_rationale,"
+            "  llm_action_hint=excluded.llm_action_hint, llm_needs_review=excluded.llm_needs_review,"
+            "  classifier_source=excluded.classifier_source, llm_called_at=excluded.llm_called_at,"
+            "  created_at=excluded.created_at;"
         )
         with self.transaction() as cur:
             cur.execute(
@@ -130,7 +145,14 @@ class Database:
                     pred.created_at or int(__import__("time").time()),
                 ),
             )
-            return int(cur.lastrowid)
+            # lastrowid is unreliable on the ON CONFLICT UPDATE path; resolve
+            # the row id explicitly so callers (and the queue FK) get the right one.
+            cur.execute(
+                "SELECT id FROM predictions WHERE email_gmail_id = ?",
+                (pred.email_gmail_id,),
+            )
+            row = cur.fetchone()
+            return int(row["id"]) if row else int(cur.lastrowid)
 
     def get_predictions_for_email(self, gmail_id: str) -> List[sqlite3.Row]:
         assert self._conn is not None

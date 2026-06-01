@@ -183,6 +183,33 @@ MIGRATIONS: List[Tuple[str, str]] = [
         );
         """,
     ),
+    (
+        "0014_dedupe_predictions_one_per_email",
+        """
+        -- Collapse the predictions table to one row per email (latest wins).
+        -- The watch loop historically re-classified the same emails every cycle,
+        -- inserting a new row each time (~33 rows/email). Keep MAX(id) per email,
+        -- repoint any action_queue references to the surviving row, then enforce
+        -- uniqueness so save_prediction can upsert going forward.
+        DELETE FROM predictions
+        WHERE id NOT IN (
+            SELECT MAX(id) FROM predictions GROUP BY email_gmail_id
+        );
+
+        UPDATE action_queue
+        SET prediction_id = (
+            SELECT MAX(p.id) FROM predictions p
+            WHERE p.email_gmail_id = action_queue.email_gmail_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM predictions p
+            WHERE p.email_gmail_id = action_queue.email_gmail_id
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_predictions_email_unique
+            ON predictions(email_gmail_id);
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
