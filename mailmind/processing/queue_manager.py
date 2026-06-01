@@ -13,6 +13,7 @@ from mailmind.utils.fingerprint import make_action_fingerprint
 from mailmind.storage.models import QueueItem
 from mailmind.storage.queries import (
     get_queue_item_by_fingerprint,
+    is_sender_auto_action_eligible,
     upsert_queue_item,
     supersede_old_queue_items,
 )
@@ -65,11 +66,18 @@ class QueueManager:
             LOG.debug("No suggested action for %s; skipping queue.", email.gmail_id)
             return "skipped"
 
-        if confidence >= self.AUTO_EXECUTE_THRESHOLD:
+        # EARNED AUTOPILOT (P2B): auto-execute requires BOTH the 0.90 confidence
+        # floor AND an explicit per-sender authorisation. Confidence alone is no
+        # longer sufficient — see Decisions Log in CONTEXT.md. Senders without
+        # `sender_profiles.auto_action_eligible` fall through to the review
+        # queue regardless of how confident the model is.
+        sender_eligible = is_sender_auto_action_eligible(db, email.sender)
+        if confidence >= self.AUTO_EXECUTE_THRESHOLD and sender_eligible:
             LOG.info(
-                "Auto-executing '%s' for %s (confidence=%.2f >= %.2f)",
+                "Auto-executing '%s' for %s (sender %s eligible, confidence=%.2f >= %.2f)",
                 suggested_action,
                 email.gmail_id,
+                email.sender,
                 confidence,
                 self.AUTO_EXECUTE_THRESHOLD,
             )

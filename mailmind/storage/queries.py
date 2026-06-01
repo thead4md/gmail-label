@@ -560,6 +560,23 @@ def toggle_sender_auto_action(db: Database, sender_email: str, enabled: bool) ->
         )
 
 
+def is_sender_auto_action_eligible(db: Database, sender_email: Optional[str]) -> bool:
+    """Return True iff the sender has been explicitly granted auto-execute.
+
+    The default for any sender (no profile or auto_action_eligible=0) is
+    False — earned autopilot: trust is opt-in per sender, not the default.
+    """
+    if not sender_email:
+        return False
+    row = db.execute_sql(
+        "SELECT auto_action_eligible FROM sender_profiles WHERE sender_email = ?",
+        (sender_email,),
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row["auto_action_eligible"])
+
+
 def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, int]:
     """Return queue statistics by status.
 

@@ -51,6 +51,19 @@ class TestQueueManager(unittest.TestCase):
         mock_row = MockRow({"id": 42})
         self.mock_db.get_predictions_for_email.return_value = [mock_row]
 
+        # P2B (earned autopilot): the auto-execute branch now requires both
+        # the 0.90 confidence floor AND sender opt-in. Tests that assert
+        # auto-execute opt in here by default; tests that assert queueing
+        # explicitly override _set_sender_eligible(False).
+        self._set_sender_eligible(True)
+
+    def _set_sender_eligible(self, eligible: bool) -> None:
+        """Configure mock_db so is_sender_auto_action_eligible returns ``eligible``."""
+        row = {"auto_action_eligible": 1 if eligible else 0}
+        # Make execute_sql(...).fetchone() return our row; the underlying call
+        # is db.execute_sql("SELECT auto_action_eligible ... ", (sender,)).fetchone()
+        self.mock_db.execute_sql.return_value.fetchone.return_value = row
+
     def _make_score(self, total_score: int) -> ScoreResult:
         """Helper to create a ScoreResult with the given total_score."""
         return ScoreResult(
