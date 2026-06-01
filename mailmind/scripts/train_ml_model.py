@@ -17,6 +17,7 @@ training data.
 """
 from __future__ import annotations
 
+import os
 import sys
 import logging
 from pathlib import Path
@@ -35,7 +36,10 @@ logging.basicConfig(
 LOG = logging.getLogger(__name__)
 
 
-def main(db_path: str = "~/.mailmind/mailmind.db", min_samples: int = 10):
+_DEFAULT_DB = os.environ.get("MAILMIND_DB_PATH", "~/.mailmind/mailmind.db")
+
+
+def main(db_path: str = _DEFAULT_DB, min_samples: int = 10):
     """Train the ML model."""
     print("=" * 80)
     print("MailMind Pass 4 - ML Model Training")
@@ -110,7 +114,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train ML model for MailMind")
     parser.add_argument(
         "--db-path",
-        default="~/.mailmind/mailmind.db",
+        default=_DEFAULT_DB,
         help="Path to MailMind SQLite database",
     )
     parser.add_argument(
