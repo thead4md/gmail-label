@@ -62,6 +62,29 @@ def get_accounts() -> List[str]:
     return MailMindConfig.load_accounts()
 
 
+@st.cache_resource
+def get_action_executor():
+    """Lazy: build the executor on first Approve click.
+
+    Honours MAILMIND_DRY_RUN=1 so the same dashboard can be used to *review*
+    in dry-run without ever calling Gmail. Returns None when no token is
+    available (e.g. headless preview) — the approve path then falls back to
+    the legacy status-only behavior.
+    """
+    import os
+    from mailmind.actions.executor import ActionExecutor
+    from mailmind.actions.safety import SafetyPolicy
+    from mailmind.ingestion.auth import build_gmail_service, load_stored_credentials
+
+    creds = load_stored_credentials()
+    if creds is None:
+        return None
+    service = build_gmail_service(creds)
+    dry_run = os.environ.get("MAILMIND_DRY_RUN", "0") == "1"
+    safety = SafetyPolicy(dry_run=dry_run)
+    return ActionExecutor(service=service, db=get_db(), safety_policy=safety)
+
+
 # ---------------------------------------------------------------------------
 # Tab 1: NOW
 # ---------------------------------------------------------------------------
@@ -112,7 +135,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
 
             # Single Approve button (NOW tab is action-focused, not review-focused)
             if st.button("✅ Approve", key=f"now_approve_{idx}_{item_id}"):
-                acted = handle_approve(db, item_id)
+                acted = handle_approve(db, item_id, executor=get_action_executor())
                 if acted:
                     st.toast(f"✅ Approved: {subject[:50]}", icon="✅")
                     st.rerun()
@@ -224,7 +247,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
 
             with col_approve:
                 if st.button("✅ Approve", key=f"review_approve_{idx}_{item_id}"):
-                    acted = handle_approve(db, item_id)
+                    acted = handle_approve(db, item_id, executor=get_action_executor())
                     if acted:
                         st.toast("✅ Approved", icon="✅")
                         st.rerun()
