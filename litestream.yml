@@ -1,12 +1,16 @@
-# Litestream config for Render / Fly.io container
-# DB path is /tmp/mailmind.db (set via MAILMIND_DB_PATH env var in render.yaml)
+# Litestream config for the Fly.io container.
+# DB path is resolved from $MAILMIND_DB_PATH (set to /data/mailmind.db on Fly).
 #
-# Required env vars:
-#   MAILMIND_DB_PATH             e.g. /tmp/mailmind.db
+# Required env vars (Fly secrets):
+#   MAILMIND_DB_PATH             e.g. /data/mailmind.db
 #   LITESTREAM_ACCESS_KEY_ID
 #   LITESTREAM_SECRET_ACCESS_KEY
 #   LITESTREAM_S3_BUCKET
-#   LITESTREAM_S3_ENDPOINT       (required for Backblaze B2 / Tigris)
+#   LITESTREAM_S3_ENDPOINT       required for B2 / Tigris / MinIO;
+#                                for AWS S3 use s3.<region>.amazonaws.com
+#
+# If any of these are absent, fly-start.sh falls back to local-only mode
+# (Litestream is never started, no replication runs).
 
 dbs:
   - path: $MAILMIND_DB_PATH
@@ -17,5 +21,8 @@ dbs:
         endpoint: $LITESTREAM_S3_ENDPOINT
         access-key-id: $LITESTREAM_ACCESS_KEY_ID
         secret-access-key: $LITESTREAM_SECRET_ACCESS_KEY
+        # WAL writes streamed continuously; snapshots taken every interval.
         sync-interval: 10s
-        retention: 24h
+        # Keep 7 days of point-in-time history. Lets us recover from a
+        # corruption noticed days later, at negligible storage cost.
+        retention: 168h
