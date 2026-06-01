@@ -89,8 +89,11 @@ class Prediction:
 
     # Legacy field: kept for backward compatibility
     score: Optional[int] = None  # Deprecated in favor of priority_score
-    
+
     created_at: int = field(default_factory=now_ts)
+
+    # Row id, populated by save_prediction() after persistence.
+    id: Optional[int] = None
 
 
 @dataclass

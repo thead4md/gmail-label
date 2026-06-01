@@ -156,7 +156,7 @@ class Pipeline:
             LOG.debug("Thread analysis failed: %s", e)
 
         try:
-            self.db.save_prediction(prediction)
+            prediction.id = self.db.save_prediction(prediction)
             LOG.info(f"Prediction persisted for {email.gmail_id}: score={score.total_score}, label={score.primary_label}")
         except Exception as e:
             LOG.error(f"Failed to persist prediction: {e}", exc_info=True)

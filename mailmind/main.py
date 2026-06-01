@@ -164,8 +164,8 @@ def _process_message_id(
             prediction.priority_score or 0.0,
         )
 
-        # Ensure prediction.id is set (pipeline's save_prediction returns the id
-        # but doesn't write it back onto the Prediction object)
+        # pipeline.process() now sets prediction.id from save_prediction().
+        # This fallback only fires if persistence failed mid-run.
         if not getattr(prediction, "id", None):
             rows = pipeline.db.get_predictions_for_email(email.gmail_id)
             if rows:

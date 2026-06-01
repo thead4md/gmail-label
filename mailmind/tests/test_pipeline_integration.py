@@ -124,6 +124,25 @@ class TestHybridPipeline:
         assert stored_joined == "sender_trusted,keyword_meeting"
         assert stored_joined.split(",") == prediction.rule_matches
 
+    def test_process_sets_prediction_id(self):
+        """process() populates prediction.id from save_prediction (no round-trip)."""
+        from mailmind.processing.pipeline import Pipeline
+        from mailmind.storage.database import Database
+        from mailmind.processing.rules import RulesEngine
+        from mailmind.processing.scorer import PriorityScorer
+
+        db = Database(":memory:")
+        pipeline = Pipeline(db, RulesEngine(), PriorityScorer())
+
+        email = make_email(gmail_id="id_set_test")
+        db.insert_email(email)
+        prediction = pipeline.process(email)
+
+        assert prediction.id is not None
+        rows = db.get_predictions_for_email("id_set_test")
+        assert len(rows) == 1
+        assert prediction.id == rows[0]["id"]
+
 
 class TestFallbackBehavior:
     """Tests for pipeline fallback when ML is unavailable."""
