@@ -29,7 +29,8 @@ else
 fi
 
 if [ -n "$LITESTREAM_BUCKET" ] && [ -n "$LITESTREAM_ENDPOINT" ] && [ -n "$LITESTREAM_ACCESS_KEY_ID" ] && [ -n "$LITESTREAM_SECRET_ACCESS_KEY" ]; then
-  echo "[fly-start] Restoring DB from S3..."
+  echo "[fly-start] Litestream: all S3 env vars present (bucket=$LITESTREAM_BUCKET endpoint=$LITESTREAM_ENDPOINT)."
+  echo "[fly-start] Restoring DB from S3 if a replica exists (won't overwrite existing local DB)..."
   litestream restore -config /etc/litestream.yml -if-replica-exists "$DB_PATH" || true
 
   echo "[fly-start] Starting Litestream replica + MailMind app..."
@@ -38,5 +39,11 @@ if [ -n "$LITESTREAM_BUCKET" ] && [ -n "$LITESTREAM_ENDPOINT" ] && [ -n "$LITEST
     -exec "python -m mailmind.main run --watch"
 fi
 
-echo "[fly-start] Litestream env vars are missing; starting MailMind app without S3 replication..."
+# Be specific about WHICH var is missing so debugging is one log line.
+missing=""
+[ -z "$LITESTREAM_BUCKET" ]            && missing="$missing LITESTREAM_S3_BUCKET"
+[ -z "$LITESTREAM_ENDPOINT" ]          && missing="$missing LITESTREAM_S3_ENDPOINT"
+[ -z "$LITESTREAM_ACCESS_KEY_ID" ]     && missing="$missing LITESTREAM_ACCESS_KEY_ID"
+[ -z "$LITESTREAM_SECRET_ACCESS_KEY" ] && missing="$missing LITESTREAM_SECRET_ACCESS_KEY"
+echo "[fly-start] Litestream disabled — missing env var(s):${missing}. DB is local-only."
 exec python -m mailmind.main run --watch
