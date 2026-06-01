@@ -99,6 +99,52 @@ class TestMultiAccountDispatch:
         assert seen == ["a@x.com", "b@y.com"]  # b still ran despite a failing
 
 
+class TestAuthCli:
+    def test_auth_account_mapping(self, monkeypatch):
+        """Primary maps to legacy token storage (None); secondary to its email."""
+        import mailmind.main as main_mod
+
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "primary@x.com,second@y.com")
+        assert main_mod._auth_account_for(None) is None
+        assert main_mod._auth_account_for("primary@x.com") is None
+        assert main_mod._auth_account_for("second@y.com") == "second@y.com"
+
+    def test_auth_command_connects_secondary(self, monkeypatch):
+        """`auth --account second@y.com` authenticates with that account's token."""
+        import mailmind.main as main_mod
+        from click.testing import CliRunner
+
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "primary@x.com,second@y.com")
+        captured = {}
+
+        def fake_authenticate(scopes=None, account=None):
+            captured["account"] = account
+
+            class _Creds:
+                scopes = ["s"]
+
+            return _Creds()
+
+        monkeypatch.setattr(main_mod, "authenticate", fake_authenticate)
+        result = CliRunner().invoke(main_mod.cli, ["auth", "--account", "second@y.com"])
+        assert result.exit_code == 0, result.output
+        assert captured["account"] == "second@y.com"
+
+    def test_accounts_command_reports_status(self, monkeypatch):
+        import mailmind.main as main_mod
+        from click.testing import CliRunner
+
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "primary@x.com,second@y.com")
+        monkeypatch.setattr(
+            "mailmind.ingestion.auth._load_stored_token", lambda account=None: None
+        )
+        result = CliRunner().invoke(main_mod.cli, ["accounts"])
+        assert result.exit_code == 0, result.output
+        assert "primary@x.com" in result.output
+        assert "second@y.com" in result.output
+        assert "NOT connected" in result.output
+
+
 @pytest.fixture
 def db():
     database = Database(":memory:")

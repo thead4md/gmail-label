@@ -391,13 +391,54 @@ def prune(retention_days: Optional[int], no_vacuum: bool) -> None:
     click.echo(f"Pruned (retention={days}d): {counts}")
 
 
+def _auth_account_for(account: Optional[str]) -> Optional[str]:
+    """Map a mailbox to its token-storage identity.
+
+    The primary mailbox (first in MAILMIND_ACCOUNTS, or an unconfigured
+    single account) uses the legacy token storage (None) so existing
+    deployments keep working and the watch loop's primary path finds it.
+    Secondary mailboxes store under their own per-account token.
+    """
+    accounts = MailMindConfig.load_accounts()
+    primary = accounts[0] if accounts else None
+    if account is None or account == primary:
+        return None
+    return account
+
+
 @cli.command()
-def auth() -> None:
-    """Run the interactive OAuth2 flow and persist the token."""
-    LOG.info("Starting OAuth2 flow…")
-    creds = authenticate()
-    LOG.info("Authentication successful. Token stored securely.")
+@click.option("--account", default=None,
+              help="Mailbox email to connect (default: the primary account).")
+def auth(account: Optional[str]) -> None:
+    """Run the interactive OAuth2 flow for a mailbox and persist the token.
+
+    Connect the primary mailbox with no argument; connect a second mailbox
+    with --account you@example.com (must be listed in MAILMIND_ACCOUNTS).
+    """
+    auth_account = _auth_account_for(account)
+    label = account or (MailMindConfig.load_accounts() or ["primary"])[0]
+    LOG.info("Starting OAuth2 flow for %s…", label)
+    creds = authenticate(account=auth_account)
+    LOG.info("Authentication successful for %s. Token stored securely.", label)
     LOG.info("Scopes granted: %s", creds.scopes)
+
+
+@cli.command()
+def accounts() -> None:
+    """List configured mailboxes and whether each has a stored token."""
+    from mailmind.ingestion.auth import _load_stored_token
+
+    configured = MailMindConfig.load_accounts()
+    if not configured:
+        click.echo("No accounts configured (set MAILMIND_ACCOUNTS or MAILMIND_USER_EMAIL).")
+        return
+    click.echo("Configured mailboxes:")
+    for i, acct in enumerate(configured):
+        auth_account = None if i == 0 else acct
+        connected = _load_stored_token(auth_account) is not None
+        tag = "primary" if i == 0 else "secondary"
+        status = "connected" if connected else "NOT connected"
+        click.echo(f"  - {acct}  [{tag}]  {status}")
 
 
 if __name__ == "__main__":
