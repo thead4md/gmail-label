@@ -57,8 +57,12 @@ class TestPerAccountTokenStorage:
     def test_env_var_token_fallback(self, monkeypatch):
         from mailmind.ingestion import auth
         monkeypatch.delenv("MAILMIND_DATA_DIR", raising=False)
+        # Force keyring + encrypted-file lookups to miss, otherwise a real local
+        # token (e.g. you just authenticated this account on your dev machine)
+        # would short-circuit the env-var fallback we're trying to verify.
+        monkeypatch.setattr(auth, "_load_token_from_keyring", lambda account=None: None)
+        monkeypatch.setattr(auth, "_load_token_local_encrypted", lambda account=None: None)
         monkeypatch.setenv("GMAIL_TOKEN_DUDAS_ADAM_MCSSZ_HU", '{"token": "x"}')
-        # No keyring/file token for this account -> falls back to the env var.
         assert auth._load_stored_token("dudas.adam@mcssz.hu") == '{"token": "x"}'
 
 

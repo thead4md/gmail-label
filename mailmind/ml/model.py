@@ -30,7 +30,20 @@ from sklearn.utils.validation import check_is_fitted
 LOG = logging.getLogger(__name__)
 
 # Default model save path
-DEFAULT_MODEL_DIR = Path.home() / ".mailmind" / "models"
+def _default_model_dir() -> Path:
+    """Resolve the model directory.
+
+    Honours MAILMIND_DATA_DIR so on Fly (where it's set to /data/.mailmind)
+    the model lives on the persistent volume and survives machine restarts.
+    Falls back to ~/.mailmind/models for local dev.
+    """
+    import os
+    custom = os.environ.get("MAILMIND_DATA_DIR")
+    base = Path(custom).expanduser() if custom else Path.home() / ".mailmind"
+    return base / "models"
+
+
+DEFAULT_MODEL_DIR = _default_model_dir()
 DEFAULT_MODEL_NAME = "pass4_baseline.joblib"
 
 
