@@ -6068,6 +6068,8 @@ class DeepSeekClient:
 ```python
 @dataclass
 class MailMindConfig:
+    def primary_account(self)
+    def load_accounts()
     def from_env(cls)
 ```
 <!-- AUTO:END:key_interfaces -->
@@ -6099,6 +6101,7 @@ class MailMindConfig:
 | `LLM_MAX_BODY_CHARS` | `1500` | No | — |
 | `LLM_ML_THRESHOLD` | `0.65` | No | — |
 | `LLM_RULES_THRESHOLD` | `0.90` | No | — |
+| `MAILMIND_ACCOUNTS` | `""` (empty) | No | — |
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | No | — |
 | `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | No | SQLite database path |
 | `MAILMIND_DRY_RUN` | `""` (empty) | No | Set to "1" to skip real Gmail label writes |

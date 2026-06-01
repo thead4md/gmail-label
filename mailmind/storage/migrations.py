@@ -5,6 +5,7 @@ helper that records applied migrations in a dedicated table.
 """
 from __future__ import annotations
 
+import os
 from typing import List, Tuple
 import sqlite3
 from datetime import datetime, UTC
@@ -210,6 +211,18 @@ MIGRATIONS: List[Tuple[str, str]] = [
             ON predictions(email_gmail_id);
         """,
     ),
+    (
+        "0015_add_account_dimension",
+        """
+        -- Handled in apply_migrations() with per-column checks + backfill.
+        -- Adds an `account` column to the per-email tables so the dashboard
+        -- and watch loop can separate two mailboxes. Existing rows are
+        -- backfilled to the primary account (MAILMIND_ACCOUNTS[0] /
+        -- MAILMIND_USER_EMAIL). Gmail message ids are effectively globally
+        -- unique, so existing UNIQUE constraints are left as-is; `account`
+        -- is a filtering/attribution column.
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -274,6 +287,35 @@ def _ensure_columns(
         existing.add(column_name)
 
 
+ACCOUNT_TABLES = ("emails", "predictions", "action_queue")
+
+
+def _primary_account() -> str:
+    """Resolve the primary account email for backfilling existing rows."""
+    raw = os.environ.get("MAILMIND_ACCOUNTS", "").strip() or os.environ.get(
+        "MAILMIND_USER_EMAIL", ""
+    ).strip()
+    accounts = [a.strip() for a in raw.split(",") if a.strip()]
+    return accounts[0] if accounts else "primary"
+
+
+def _apply_account_dimension(conn: sqlite3.Connection) -> None:
+    """Add the `account` column to per-email tables and backfill existing rows.
+
+    Gmail message ids are effectively globally unique, so existing UNIQUE
+    constraints are kept; `account` is a filtering/attribution column.
+    """
+    primary = _primary_account()
+    for table in ACCOUNT_TABLES:
+        _ensure_columns(conn, table, [("account", "TEXT")])
+        conn.execute(
+            f"UPDATE {table} SET account = ? WHERE account IS NULL", (primary,)
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_account ON {table}(account)"
+        )
+
+
 def apply_migrations(conn: sqlite3.Connection) -> None:
     """Apply any unapplied migrations in order.
 
@@ -294,6 +336,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             _ensure_columns(conn, "action_queue", ACTION_QUEUE_COLUMNS)
         elif name == "0012_add_thread_context_to_predictions":
             _ensure_columns(conn, "predictions", THREAD_CONTEXT_COLUMN)
+        elif name == "0015_add_account_dimension":
+            _apply_account_dimension(conn)
         else:
             cur.executescript(sql)
         cur.execute(
