@@ -1,6 +1,6 @@
 # MailMind
 
-A privacy-first Gmail classification and automation assistant. MailMind fetches unread emails, runs them through a three-tier hybrid pipeline (rules → ML → LLM), queues suggested actions for human review, and only writes labels to Gmail after you approve them. All sensitive data stays local.
+A privacy-first Gmail classification and automation assistant. MailMind fetches unread emails across one or more mailboxes, runs them through a three-tier hybrid pipeline (rules → ML → LLM), queues suggested actions for human review, and only writes labels to Gmail after you explicitly grant a sender autopilot or click Approve. All sensitive data stays local.
 
 **Live dashboard:** [mailmind-adam.fly.dev](https://mailmind-adam.fly.dev) (Fly.io, Streamlit)
 
@@ -8,15 +8,18 @@ A privacy-first Gmail classification and automation assistant. MailMind fetches 
 
 ## Features
 
-- **Three-tier hybrid pipeline** — deterministic rules → scikit-learn ML → optional DeepSeek LLM, each stage only activating if confidence is insufficient
-- **Human-in-the-loop review queue** — all suggested actions queue for approval before touching Gmail; approve/reject from the dashboard
-- **Sender memory** — tracks per-sender trust (trusted / neutral / watchlist) and applies modest score nudges; updates automatically from your approve/reject decisions
-- **Thread intelligence** — detects reply-needed emails, waiting-on-other-party, open questions, and extracts thread summaries
-- **Explainability** — every queued action stores a full `reason_json` payload (label, confidence, score breakdown, rule matches, trust tier, thread context) shown in the Review tab
-- **Idempotent action queue** — SHA-256 fingerprint on every action prevents duplicate queue entries even on repeated pipeline runs
-- **Three-tab Streamlit dashboard** — NOW (urgent/reply-needed), REVIEW (full reasoning + approve/reject/edit), AUTOMATE (sender profiles, model health, queue stats)
-- **Dry-run default** — `MAILMIND_DRY_RUN=1` everywhere; nothing writes to Gmail without an explicit approve action
-- **No Gmail deletes** — delete action requires 1.00 confidence, unreachable by design
+- **Three-tier hybrid pipeline** — deterministic rules → local scikit-learn ML → DeepSeek LLM. Each tier only activates when the previous one isn't confident; when the ML tier handles an email, the paid LLM call is skipped.
+- **Closed learning loop** — your corrections in the Review tab override the model's past predictions as training labels; the watch loop auto-retrains weekly (or after N corrections) and hot-reloads the new model with no restart.
+- **Earned autopilot** — auto-execute requires BOTH high confidence AND an explicit per-sender opt-in (`auto_action_eligible`). Newly-seen senders always queue for review.
+- **Multi-mailbox support** — one dashboard, one watch loop, multiple Gmail accounts. Sidebar mailbox switcher; emails/predictions/queue scoped per account; sender trust shared.
+- **Human-in-the-loop review queue** — Approve in the dashboard actually mutates Gmail (executes the suggested label/star/archive); SHA-256 fingerprints prevent duplicate queue entries.
+- **Watch-loop heartbeat** — the dashboard sidebar shows when the watcher last ran; goes red after ~6 min of silence so a hung loop is visible instead of mysterious.
+- **Activity digest** — dashboard panel + `mailmind digest` CLI: classified / executed / pending / corrections / top labels over any window.
+- **Self-maintaining** — daily retention sweep prunes old cached emails + VACUUMs the SQLite file; predictions table is upserted (one row per email, latest wins) so storage stays bounded.
+- **Sender memory** — tracks per-sender trust (trusted / neutral / watchlist) and approval/rejection counts; updates automatically from your decisions; shared across mailboxes.
+- **Thread intelligence** — detects reply-needed emails, waiting-on-other-party, open questions, and extracts thread summaries.
+- **Explainability** — every queued action stores a full `reason_json` payload (label, confidence, score breakdown, rule matches, trust tier, thread context) shown in the Review tab.
+- **Safe by construction** — dry-run mode default everywhere; `delete` action requires 1.00 confidence (unreachable); URGENT/FINANCE/PERSONAL emails cannot be auto-archived; ActionExecutor + SafetyPolicy fully tested.
 
 ---
 
@@ -37,7 +40,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### Authenticate
+### Authenticate (single mailbox)
 
 Place your OAuth client secret at `~/.mailmind/credentials.json`, then:
 
@@ -47,17 +50,37 @@ python -m mailmind.main auth
 
 A browser window opens for the Google OAuth consent screen. The token is stored in macOS Keychain (or `~/.mailmind/tokens.json.enc` as an encrypted fallback).
 
+### Authenticate (two mailboxes)
+
+Set `MAILMIND_ACCOUNTS` to the comma-separated list (first entry = primary, reuses the legacy token), then auth each:
+
+```bash
+export MAILMIND_ACCOUNTS="alice@primary.com,alice@secondary.org"
+
+python -m mailmind.main auth                              # primary
+python -m mailmind.main auth --account alice@secondary.org  # secondary
+python -m mailmind.main accounts                          # list + connection status
+```
+
+The OAuth consent screen for the second account may need that address added as a Test user in Google Cloud Console (APIs & Services → OAuth consent screen → Test users).
+
 ### Run
 
 ```bash
-# One-shot: fetch, classify, queue
+# One-shot: fetch, classify, queue for all configured accounts
 python -m mailmind.main run
 
-# Dry-run (no label writes, no queue actions)
+# Dry-run (Gmail mutations suppressed; classifications + queue still happen)
 python -m mailmind.main run --dry-run
 
-# Continuous watch mode
+# Continuous watch mode (auto-retrains, hot-reloads model, heartbeat, retention sweep)
 python -m mailmind.main run --watch --poll-seconds 120
+
+# Activity digest
+python -m mailmind.main digest --days 7
+
+# Prune local cache + VACUUM (also runs daily inside --watch)
+python -m mailmind.main prune --retention-days 90
 ```
 
 ### Review dashboard
@@ -75,20 +98,28 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | Tab | Purpose |
 |---|---|
 | **NOW** | High-priority and reply-needed items — single Approve per item |
-| **REVIEW** | All pending actions — full reasoning (Why this?) + Approve / Reject / Edit Label |
-| **AUTOMATE** | Sender trust profiles, auto-action toggle, model health, queue statistics |
+| **REVIEW** | Recent predictions + pending actions with full reasoning (Why this?) and Approve / Reject / Edit Label |
+| **AUTOMATE** | Activity digest, sender trust profiles, **per-sender autopilot toggles**, model health, queue statistics |
+
+The sidebar shows:
+- **Mailbox switcher** (when >1 account is configured)
+- **Watcher status** (`✅ active <X> ago` / `⚠️ silent for <X>` / `⏳ no heartbeat yet`)
 
 ---
 
-## Confidence tier policy
+## Confidence + autopilot policy
 
-| Tier | Score | Behavior |
-|---|---|---|
-| Auto-execute | ≥ 0.90 | Action executed immediately |
-| Queue for review | 0.65 – 0.90 | Added to human-review queue |
-| Skip | < 0.65 | No action taken |
-| LLM override | LLM confidence ≥ 0.90 | LLM label overrides rules label |
-| Rules skip LLM | Rules score ≥ 70 | LLM not called (cost control) |
+| Tier | Confidence | Sender state | Behavior |
+|---|---|---|---|
+| Auto-execute | ≥ 0.90 | `auto_action_eligible = 1` | Fires immediately against Gmail |
+| Queue for review | ≥ 0.90 | not eligible | Goes to the Review queue |
+| Queue for review | 0.65 – 0.90 | any | Goes to the Review queue |
+| Skip | < 0.65 | any | No action recorded |
+| LLM override | LLM conf ≥ 0.90 | — | LLM label overrides rules label |
+| Rules skip LLM | rules score ≥ 70 | — | Paid LLM not called (cost control) |
+| ML skip LLM | ML handled email | — | Paid LLM not called (cost control) |
+
+**Earned autopilot:** the 0.90-confidence floor *plus* per-sender opt-in is intentional — automation is something you grant per sender via the AUTOMATE tab, not the default. See `CONTEXT.md` → Decisions Log for the rationale.
 
 ---
 
@@ -97,28 +128,40 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | Variable | Default | Description |
 |---|---|---|
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | Directory for DB, model, and token files |
-| `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | SQLite database path (overrides DATA_DIR) |
+| `MAILMIND_DB_PATH` | `$MAILMIND_DATA_DIR/mailmind.db` | SQLite database path |
+| `MAILMIND_ACCOUNTS` | `[MAILMIND_USER_EMAIL]` | Comma-separated mailbox emails; first is primary |
+| `MAILMIND_USER_EMAIL` | — | Your email for direct-mention scoring bonus |
 | `MAILMIND_POLL_SECONDS` | `120` | Watch-mode poll interval |
-| `MAILMIND_FETCH_MAX` | `50` | Max emails fetched per run |
-| `MAILMIND_DRY_RUN` | `0` | Set to `1` to suppress all Gmail label writes |
-| `MAILMIND_USER_EMAIL` | — | Your primary email for direct-mention scoring bonus |
+| `MAILMIND_FETCH_MAX` | `50` | Max emails fetched per account per cycle |
+| `MAILMIND_DRY_RUN` | `0` | Set to `1` to suppress all Gmail mutations |
+| `MAILMIND_RETENTION_DAYS` | `90` | Local-cache retention window for the daily prune |
 | `DEEPSEEK_API_KEY` | — | DeepSeek API key; absent → LLM stage disabled |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek model name |
-| `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | Max LLM API calls per pipeline run |
-| `OPENAI_API_KEY` | — | OpenAI API key for third-tier LLM classifier |
-| `LLM_ENABLED` | `false` | Explicitly enable OpenAI-based classifier |
+| `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | Max LLM calls per cycle (cost cap) |
+| `DASHBOARD_PASSWORD` | — | If set, dashboard requires this password |
+| `GMAIL_TOKEN` | — | Headless OAuth token for primary mailbox (Fly secret) |
+| `GMAIL_TOKEN_<SLUG>` | — | Headless token for secondary mailbox, e.g. `GMAIL_TOKEN_ALICE_SECONDARY_ORG` |
 
 ---
 
 ## ML training
 
-Once you have ≥ 10 labeled emails processed by the pipeline:
+Training is automatic. The watch loop calls `_maybe_retrain()` each cycle; it fires when:
+
+- It's been **≥ 7 days** since the last retrain (cadence), OR
+- You've logged **≥ 5 new corrections** since the last retrain (signal)
+
+State is tracked in `system_state`. The next watch cycle hot-reloads `pass4_baseline.joblib` automatically (detected via mtime — no process restart needed).
+
+The corrections you log in the Review tab override the model's past predictions as training labels, so retraining moves the model toward your judgment rather than reinforcing its past guesses.
+
+**Manual retrain** (e.g. after a one-off correction sweep):
 
 ```bash
 python -m mailmind.scripts.train_ml_model
 ```
 
-The model is saved to `$MAILMIND_DATA_DIR/model.pkl`. Accuracy and training stats are displayed in the AUTOMATE tab.
+Model lands at `$MAILMIND_DATA_DIR/models/pass4_baseline.joblib`. Stats appear in AUTOMATE → Model Health.
 
 ---
 
@@ -126,54 +169,54 @@ The model is saved to `$MAILMIND_DATA_DIR/model.pkl`. Accuracy and training stat
 
 ```
 mailmind/
-├── main.py                  # CLI entry point (run / auth commands)
+├── main.py                  # CLI entry point: run / auth / accounts / digest / prune
 ├── config.py                # Environment-based configuration
 │
 ├── ingestion/
-│   ├── auth.py              # OAuth2 flow, Keychain/encrypted token storage
+│   ├── auth.py              # Per-account OAuth2; Keychain/encrypted/env-var token storage
 │   ├── fetcher.py           # Gmail API batch fetch
 │   └── parser.py            # Raw Gmail message → Email model
 │
 ├── processing/
-│   ├── pipeline.py          # Orchestrates rules → scorer → thread → ML/LLM → queue
-│   ├── queue_manager.py     # Idempotent enqueue with fingerprint dedup
+│   ├── pipeline.py          # Orchestrates rules → ML router → DeepSeek → queue
+│   ├── queue_manager.py     # Earned-autopilot gate + idempotent enqueue
 │   ├── rules.py             # Deterministic rule-based classifier
 │   └── scorer.py            # Priority scorer (0-100) + sender memory nudge
 │
-├── intelligence/            # Pass 8 — Copilot Update
+├── intelligence/
 │   ├── sender_memory.py     # Sender trust profiles (trusted/neutral/watchlist)
 │   ├── thread_analyzer.py   # Heuristic thread / reply-needed detection
 │   ├── explainer.py         # ReasonPayload builder → reason_json in queue
-│   └── feedback.py          # Approve / reject / correct handlers
+│   └── feedback.py          # Approve (executes!) / reject / correct handlers
 │
 ├── dashboard/               # Three-tab Streamlit review UI
-│   ├── app.py               # NOW / REVIEW / AUTOMATE tabs
+│   ├── app.py               # NOW / REVIEW / AUTOMATE + mailbox switcher + heartbeat
 │   └── helpers.py           # Pure formatting helpers (testable without Streamlit)
 │
 ├── ml/
 │   ├── model.py             # scikit-learn model wrapper
-│   ├── train.py             # Training from DB labels
+│   ├── train.py             # Training from DB labels (corrections override)
 │   ├── features.py          # Feature extraction
 │   ├── inference.py         # Inference orchestration
-│   └── classifier_router.py # Three-tier routing logic
+│   └── classifier_router.py # Three-tier routing logic (rules → ML → LLM)
 │
 ├── llm/
 │   └── deepseek.py          # DeepSeek LLM client (optional, fail-safe)
 │
 ├── actions/
-│   ├── executor.py          # Safe Gmail label executor
-│   └── safety.py            # Action policy checks (delete always blocked)
+│   ├── executor.py          # Safe Gmail label executor (fully tested)
+│   └── safety.py            # Action policy checks (fully tested)
 │
 ├── storage/
-│   ├── database.py          # SQLite abstraction (WAL mode)
-│   ├── migrations.py        # Linear idempotent migrations (0001–0013)
-│   ├── models.py            # Dataclasses: Email, Prediction, QueueItem, …
-│   └── queries.py           # All DB query helpers
+│   ├── database.py          # SQLite abstraction (WAL mode, upserts, prune, vacuum)
+│   ├── migrations.py        # Linear idempotent migrations (0001–0015)
+│   ├── models.py            # Dataclasses: Email, Prediction, QueueItem (account-aware)
+│   └── queries.py           # All DB query helpers (account-scoped read paths)
 │
 ├── utils/
 │   └── fingerprint.py       # SHA-256 action fingerprint (dedup)
 │
-└── tests/                   # 217 pytest tests
+└── tests/                   # 339 pytest tests
 ```
 
 ---
@@ -181,51 +224,61 @@ mailmind/
 ## Running tests
 
 ```bash
-pytest mailmind/tests/ -v
-# 217 passed
+pytest mailmind/tests/ -q
+# 339 passed
 ```
 
-Tests use in-memory SQLite — no network, no Gmail API, no LLM calls.
+Tests use in-memory SQLite — no network, no Gmail API, no LLM calls. The ActionExecutor and SafetyPolicy paths (which actually mutate Gmail in production) have dedicated test files covering dry-run, protected categories, delete-blocked, rate limit, and every supported action.
 
 ---
 
 ## Fly.io deployment
 
-The app runs on [Fly.io](https://fly.io) as `mailmind-adam`.
+The app runs on [Fly.io](https://fly.io) as `mailmind-adam`. Single machine, persistent volume at `/data`, Streamlit dashboard exposed on port 443.
+
+### Required Fly secrets
 
 ```bash
-# Deploy
-fly deploy
-
-# View logs
-fly logs
-
-# SSH into machine
-fly ssh console
-
-# Run pipeline manually on Fly
-fly ssh console -C "MAILMIND_DATA_DIR=/data/.mailmind python -m mailmind.main run"
-
-# Train ML model on Fly
-fly ssh console -C "MAILMIND_DATA_DIR=/data/.mailmind python -m mailmind.scripts.train_ml_model"
-
-# Check DB
-fly ssh console -C "sqlite3 /data/.mailmind/mailmind.db 'SELECT COUNT(*) FROM emails;'"
+fly secrets set \
+  MAILMIND_USER_EMAIL=you@example.com \
+  MAILMIND_DATA_DIR=/data/.mailmind \
+  DEEPSEEK_API_KEY=sk-... \
+  DASHBOARD_PASSWORD=$(openssl rand -hex 16) \
+  GMAIL_TOKEN="$(cat ~/.mailmind/token.json)" \
+  --app mailmind-adam
 ```
 
-**Critical Fly secret**: `MAILMIND_DATA_DIR` must be set to `/data/.mailmind` (not `~/.mailmind`) so the poller, dashboard, and training script all read the same persistent SQLite file.
+For a second mailbox add `MAILMIND_ACCOUNTS="primary@x.com,secondary@y.org"` plus a `GMAIL_TOKEN_SECONDARY_Y_ORG` secret (slug = uppercase email with non-alphanumerics → `_`).
+
+### Deploy
+
+```bash
+fly deploy --app mailmind-adam
+```
 
 The container starts via `fly-start.sh` which:
-1. Optionally restores the DB from S3 via Litestream
+1. Optionally restores the DB from S3 via Litestream (when `LITESTREAM_*` secrets are set)
 2. Launches the Streamlit dashboard on `:8501`
-3. Starts the MailMind polling daemon
+3. Starts the MailMind polling daemon (`run --watch`)
+
+### Operational commands
+
+```bash
+fly logs --app mailmind-adam                                              # live logs
+fly ssh console --app mailmind-adam -C "python -m mailmind.main accounts" # connection status
+fly ssh console --app mailmind-adam -C "python -m mailmind.main digest"   # activity summary
+fly ssh console --app mailmind-adam -C "sqlite3 /data/mailmind.db 'SELECT COUNT(*) FROM emails;'"
+```
 
 ---
 
 ## Security notes
 
-- No email body text is logged or shown in the dashboard
-- OAuth tokens are stored in macOS Keychain; never in the repo
-- `credentials.json` must live at `~/.mailmind/credentials.json`, outside the repo — **never commit it**
+- No email body text is logged to stdout or shown in the dashboard tables
+- OAuth tokens are stored in macOS Keychain locally; on Fly via per-account `GMAIL_TOKEN[_<SLUG>]` secrets (encrypted at rest)
+- `credentials.json` lives at `~/.mailmind/credentials.json`, **never** in the repo
 - All SQLite writes use parameterised queries
-- The delete action is hard-blocked in `SafetyPolicy` regardless of confidence
+- The `delete` action is hard-blocked in `SafetyPolicy` regardless of confidence
+- Auto-execute requires explicit per-sender opt-in — high confidence alone is not sufficient
+- Protected categories (`URGENT`, `FINANCE`, `PERSONAL`) cannot be auto-archived
+- Dashboard is password-protected when `DASHBOARD_PASSWORD` is set
