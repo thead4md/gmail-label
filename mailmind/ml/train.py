@@ -52,18 +52,34 @@ def _collect_training_data_from_db(
     labels: List[str] = []
     vectors: List[FeatureVector] = []
 
-    # Strategy 1: Use predictions table (primary_label is the supervised target)
+    # Strategy 1: Use predictions table as the supervised target, OVERRIDDEN by
+    # the most recent user correction when one exists. Closes the learning loop:
+    # the human's "actually this is X" beats the model's past guess.
     rows = db.execute_sql(
-        "SELECT p.email_gmail_id, p.primary_label, e.subject, e.snippet, e.sender, "
-        "e.body_text, e.date_ts, e.recipients, e.labels "
-        "FROM predictions p "
-        "JOIN emails e ON e.gmail_id = p.email_gmail_id "
-        "WHERE p.primary_label IS NOT NULL "
-        "AND p.primary_label != '' "
-        "ORDER BY p.created_at DESC"
+        """
+        SELECT p.email_gmail_id,
+               p.primary_label,
+               (
+                   SELECT uc.corrected_label
+                   FROM user_corrections uc
+                   WHERE uc.email_gmail_id = p.email_gmail_id
+                     AND uc.corrected_label IS NOT NULL
+                     AND uc.corrected_label != ''
+                   ORDER BY uc.created_at DESC
+                   LIMIT 1
+               ) AS corrected_label,
+               e.subject, e.snippet, e.sender,
+               e.body_text, e.date_ts, e.recipients, e.labels
+        FROM predictions p
+        JOIN emails e ON e.gmail_id = p.email_gmail_id
+        WHERE p.primary_label IS NOT NULL
+          AND p.primary_label != ''
+        ORDER BY p.created_at DESC
+        """
     ).fetchall()
 
     seen_gmail_ids = set()
+    correction_overrides = 0
 
     for row in rows:
         gmail_id = row["email_gmail_id"]
@@ -71,7 +87,11 @@ def _collect_training_data_from_db(
             continue
         seen_gmail_ids.add(gmail_id)
 
-        label = row["primary_label"]
+        # Human correction wins over the machine's past prediction.
+        corrected = row["corrected_label"]
+        label = corrected or row["primary_label"]
+        if corrected and corrected != row["primary_label"]:
+            correction_overrides += 1
         if label not in VALID_LABELS:
             continue
 
@@ -100,8 +120,9 @@ def _collect_training_data_from_db(
 
     if len(corpus) >= min_samples:
         LOG.info(
-            f"Collected {len(corpus)} training samples from predictions table "
-            f"(labels: {sorted(set(labels))})"
+            "Collected %d training samples from predictions table (labels: %s); "
+            "%d overridden by user corrections.",
+            len(corpus), sorted(set(labels)), correction_overrides,
         )
         return corpus, labels, vectors
 
