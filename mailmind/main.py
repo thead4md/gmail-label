@@ -123,36 +123,81 @@ def _build_components(
     return pipeline, queue_manager
 
 
-def _build_classifier_router(rules_engine: RulesEngine) -> Optional[ClassifierRouter]:
-    """Load the trained ML model (once per run) and build the router.
+# Hot-reload cache for the ML model. The watch loop rebuilds the router
+# every cycle; without this we'd re-read joblib from disk on every cycle even
+# when nothing changed. Keyed by (path, mtime) so a retrain (which rewrites
+# the file with a fresh mtime) is picked up automatically — no process
+# restart needed.
+_MODEL_CACHE: dict = {"path": None, "mtime": None, "classifier": None}
 
-    Returns None on any load failure so the pipeline still runs (rules-only,
-    plus the existing DeepSeek tier). LLM is set to disabled on the router
-    itself — the DeepSeek client is wired separately on the Pipeline and is
-    the authoritative LLM tier; we don't want the router's OpenAI path
-    firing in parallel.
+
+def _load_ml_classifier_cached() -> Optional[MLClassifier]:
+    """Load the ML classifier, reloading only when the model file's mtime changes.
+
+    Returns the cached MLClassifier when the file is unchanged since last
+    load, a freshly-loaded one when the file changed, or None when no model
+    file exists or loading failed.
     """
     try:
         clf = MLClassifier()
+        model_path = clf.get_model_path()
+    except Exception as exc:
+        LOG.warning("ML classifier init failed (%s) — running without ML tier.", exc)
+        return None
+
+    if not model_path.exists():
+        if _MODEL_CACHE["classifier"] is not None:
+            LOG.info("ML model file disappeared — disabling ML tier.")
+        _MODEL_CACHE.update({"path": None, "mtime": None, "classifier": None})
+        return None
+
+    try:
+        mtime = model_path.stat().st_mtime
+    except OSError:
+        return _MODEL_CACHE.get("classifier")
+
+    cached = _MODEL_CACHE.get("classifier")
+    if (
+        cached is not None
+        and _MODEL_CACHE.get("path") == str(model_path)
+        and _MODEL_CACHE.get("mtime") == mtime
+    ):
+        return cached
+
+    try:
         loaded = clf.load()
     except Exception as exc:
         LOG.warning("ML model load failed (%s) — running without ML tier.", exc)
         return None
-    router = ClassifierRouter(
+    if not loaded:
+        _MODEL_CACHE.update({"path": str(model_path), "mtime": mtime, "classifier": None})
+        return None
+
+    _MODEL_CACHE.update({"path": str(model_path), "mtime": mtime, "classifier": clf})
+    LOG.info(
+        "ML model %s (classes=%s, samples=%s).",
+        "loaded" if cached is None else "reloaded",
+        clf._metadata.class_names if clf._metadata else "?",
+        clf._metadata.num_samples if clf._metadata else "?",
+    )
+    return clf
+
+
+def _build_classifier_router(rules_engine: RulesEngine) -> Optional[ClassifierRouter]:
+    """Build the router with the (mtime-cached) ML classifier.
+
+    Returns a router even when the model isn't loaded so the rules tier
+    still runs; the pipeline degrades gracefully (rules + DeepSeek only).
+    LLM is disabled on the router itself — DeepSeek is wired separately on
+    the Pipeline; we don't want two LLM paths firing in parallel.
+    """
+    classifier = _load_ml_classifier_cached()
+    return ClassifierRouter(
         rules_engine=rules_engine,
-        ml_model=clf if loaded else None,
+        ml_model=classifier,
         llm_classifier=None,
         llm_enabled=False,
     )
-    if loaded:
-        LOG.info(
-            "ML tier loaded (classes=%s, samples=%s).",
-            clf._metadata.class_names if clf._metadata else "?",
-            clf._metadata.num_samples if clf._metadata else "?",
-        )
-    else:
-        LOG.info("ML tier disabled (no model.joblib on disk).")
-    return router
 
 
 def _process_message_id(
