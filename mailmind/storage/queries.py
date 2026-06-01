@@ -289,6 +289,12 @@ def get_recent_predictions_with_emails(db: Database, limit: int = 100) -> List[D
         FROM predictions p
         JOIN emails e ON e.gmail_id = p.email_gmail_id
         WHERE p.primary_label IS NOT NULL
+          AND p.id = (
+              SELECT MAX(p2.id)
+              FROM predictions p2
+              WHERE p2.email_gmail_id = p.email_gmail_id
+                AND p2.primary_label IS NOT NULL
+          )
         ORDER BY p.created_at DESC
         LIMIT ?
         """,
