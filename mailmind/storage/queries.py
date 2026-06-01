@@ -719,20 +719,38 @@ def build_digest(
     }
 
 
-def get_ml_model_metadata(db: Database) -> Dict[str, Any]:
-    """Fetch ML model metadata (last trained, accuracy, samples)."""
+def get_ml_model_metadata(db: Database) -> Optional[Dict[str, Any]]:
+    """Fetch ML model metadata for the dashboard's Model Health panel.
+
+    Training writes metadata to ``system_state`` with keys like
+    ``ml_model:pass4_baseline.joblib`` (see ml.train._save_model_metadata_to_db).
+    This reader returns a dict shaped for the dashboard:
+      created_at:        unix ts of the last training run (from system_state.updated_at)
+      training_samples:  num_samples from the saved ModelMetadata
+      accuracy:          accuracy from the saved ModelMetadata (may be None)
+      class_names:       class list
+      version:           model version
+    Returns None when no model metadata exists.
+    """
     try:
-        # Try to query ml_model_metadata table if it exists
-        result = db.execute_sql(
-            """
-            SELECT * FROM ml_model_metadata
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
+        row = db.execute_sql(
+            "SELECT value, updated_at FROM system_state "
+            "WHERE key LIKE 'ml_model:%' "
+            "ORDER BY updated_at DESC LIMIT 1"
         ).fetchone()
-        if result:
-            return dict(result)
     except Exception:
-        pass
-    return None
+        return None
+    if not row:
+        return None
+    try:
+        meta = json.loads(row["value"] or "{}")
+    except Exception:
+        meta = {}
+    return {
+        "created_at": row["updated_at"],
+        "training_samples": meta.get("num_samples"),
+        "accuracy": meta.get("accuracy"),
+        "class_names": meta.get("class_names", []),
+        "version": meta.get("version"),
+    }
 
