@@ -40,7 +40,10 @@ SCOPES = [
 def _app_dir() -> Path:
     custom = os.environ.get("MAILMIND_DATA_DIR")
     if custom:
-        path = Path(custom)
+        # Path() does NOT expand "~" — without expanduser, "~/.mailmind" turns
+        # into a literal directory called "~" in the cwd. Bit me in the wild
+        # when the env var was set with a quoted tilde in a shell rc.
+        path = Path(custom).expanduser()
     else:
         path = Path.home() / ".mailmind"
     path.mkdir(parents=True, exist_ok=True)

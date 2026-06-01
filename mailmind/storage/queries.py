@@ -560,6 +560,23 @@ def toggle_sender_auto_action(db: Database, sender_email: str, enabled: bool) ->
         )
 
 
+def is_sender_auto_action_eligible(db: Database, sender_email: Optional[str]) -> bool:
+    """Return True iff the sender has been explicitly granted auto-execute.
+
+    The default for any sender (no profile or auto_action_eligible=0) is
+    False — earned autopilot: trust is opt-in per sender, not the default.
+    """
+    if not sender_email:
+        return False
+    row = db.execute_sql(
+        "SELECT auto_action_eligible FROM sender_profiles WHERE sender_email = ?",
+        (sender_email,),
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row["auto_action_eligible"])
+
+
 def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, int]:
     """Return queue statistics by status.
 
@@ -607,6 +624,99 @@ def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, in
     stats['reply_needed_pending'] = reply_needed_count
     
     return stats
+
+
+def build_digest(
+    db: Database,
+    *,
+    since_ts: int,
+    account: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Summarize what MailMind did between ``since_ts`` and now.
+
+    Returns a dict with concrete counters the dashboard and CLI can render
+    without any further query gymnastics. When ``account`` is given, all
+    counts scope to that mailbox; otherwise they're across every account.
+
+    Keys returned (all integers unless noted):
+      since_ts (int): the window start passed in.
+      classified (int): predictions written in window.
+      executed (int): queue rows that fired against Gmail.
+      execute_failed (int): queue rows that tried and failed.
+      queued (int): queue rows currently awaiting review.
+      pending_reply_needed (int): pending items the LLM flagged reply-needed.
+      corrections (int): user_corrections rows logged in window.
+      top_labels (list[dict]): top 5 [{label, count}] over the window.
+    """
+    account_pred = " AND account = ?" if account else ""
+    account_q = " AND account = ?" if account else ""
+    pred_params = (since_ts, account) if account else (since_ts,)
+    q_params_since = (since_ts, account) if account else (since_ts,)
+
+    classified = db.execute_sql(
+        f"SELECT COUNT(*) c FROM predictions WHERE created_at >= ?{account_pred}",
+        pred_params,
+    ).fetchone()["c"]
+
+    executed = db.execute_sql(
+        f"SELECT COUNT(*) c FROM action_queue WHERE status = 'executed' "
+        f"AND COALESCE(executed_at, updated_at) >= ?{account_q}",
+        q_params_since,
+    ).fetchone()["c"]
+
+    execute_failed = db.execute_sql(
+        f"SELECT COUNT(*) c FROM action_queue WHERE status = 'execute_failed' "
+        f"AND updated_at >= ?{account_q}",
+        q_params_since,
+    ).fetchone()["c"]
+
+    # Queue snapshots (current state, not window-scoped — it's "right now").
+    q_params_account = (account,) if account else ()
+    account_clause_only = " AND account = ?" if account else ""
+    queued = db.execute_sql(
+        f"SELECT COUNT(*) c FROM action_queue WHERE status = 'pending'{account_clause_only}",
+        q_params_account,
+    ).fetchone()["c"]
+
+    reply_needed = 0
+    pending_rows = db.execute_sql(
+        f"SELECT reason_json FROM action_queue WHERE status = 'pending'{account_clause_only}",
+        q_params_account,
+    ).fetchall()
+    for r in pending_rows:
+        try:
+            reason = json.loads(r["reason_json"] or "{}")
+            if reason.get("reply_needed"):
+                reply_needed += 1
+        except Exception:
+            pass
+
+    # user_corrections has no account column (sender data is shared).
+    corrections = db.execute_sql(
+        "SELECT COUNT(*) c FROM user_corrections WHERE created_at >= ?",
+        (since_ts,),
+    ).fetchone()["c"]
+
+    top_label_rows = db.execute_sql(
+        f"SELECT primary_label AS label, COUNT(*) AS count "
+        f"FROM predictions "
+        f"WHERE created_at >= ? AND primary_label IS NOT NULL "
+        f"AND primary_label != ''{account_pred} "
+        f"GROUP BY primary_label ORDER BY count DESC LIMIT 5",
+        pred_params,
+    ).fetchall()
+    top_labels = [{"label": r["label"], "count": r["count"]} for r in top_label_rows]
+
+    return {
+        "since_ts": since_ts,
+        "classified": classified,
+        "executed": executed,
+        "execute_failed": execute_failed,
+        "queued": queued,
+        "pending_reply_needed": reply_needed,
+        "corrections": corrections,
+        "top_labels": top_labels,
+    }
 
 
 def get_ml_model_metadata(db: Database) -> Dict[str, Any]:

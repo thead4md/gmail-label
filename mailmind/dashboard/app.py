@@ -19,6 +19,7 @@ from mailmind.dashboard.helpers import (
     filter_now_items,
     format_unix_ts,
     get_confidence_badge,
+    get_heartbeat_status,
     get_time_ago_str,
     parse_reason_json,
 )
@@ -26,6 +27,7 @@ from mailmind.intelligence.feedback import handle_approve, handle_correction, ha
 from mailmind.processing.queue_manager import QueueManager
 from mailmind.storage.database import Database
 from mailmind.storage.queries import (
+    build_digest,
     get_ml_model_metadata,
     get_pending_queue_enriched,
     get_queue_stats,
@@ -60,6 +62,29 @@ def get_db() -> Database:
 def get_accounts() -> List[str]:
     """Configured mailbox accounts (first is primary). Empty if unconfigured."""
     return MailMindConfig.load_accounts()
+
+
+@st.cache_resource
+def get_action_executor():
+    """Lazy: build the executor on first Approve click.
+
+    Honours MAILMIND_DRY_RUN=1 so the same dashboard can be used to *review*
+    in dry-run without ever calling Gmail. Returns None when no token is
+    available (e.g. headless preview) — the approve path then falls back to
+    the legacy status-only behavior.
+    """
+    import os
+    from mailmind.actions.executor import ActionExecutor
+    from mailmind.actions.safety import SafetyPolicy
+    from mailmind.ingestion.auth import build_gmail_service, load_stored_credentials
+
+    creds = load_stored_credentials()
+    if creds is None:
+        return None
+    service = build_gmail_service(creds)
+    dry_run = os.environ.get("MAILMIND_DRY_RUN", "0") == "1"
+    safety = SafetyPolicy(dry_run=dry_run)
+    return ActionExecutor(service=service, db=get_db(), safety_policy=safety)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +137,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
 
             # Single Approve button (NOW tab is action-focused, not review-focused)
             if st.button("✅ Approve", key=f"now_approve_{idx}_{item_id}"):
-                acted = handle_approve(db, item_id)
+                acted = handle_approve(db, item_id, executor=get_action_executor())
                 if acted:
                     st.toast(f"✅ Approved: {subject[:50]}", icon="✅")
                     st.rerun()
@@ -224,7 +249,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
 
             with col_approve:
                 if st.button("✅ Approve", key=f"review_approve_{idx}_{item_id}"):
-                    acted = handle_approve(db, item_id)
+                    acted = handle_approve(db, item_id, executor=get_action_executor())
                     if acted:
                         st.toast("✅ Approved", icon="✅")
                         st.rerun()
@@ -274,6 +299,33 @@ def render_automate_tab(account: Optional[str] = None) -> None:
     st.header("⚙️ AUTOMATE")
 
     db = get_db()
+
+    # --- Section 0: Activity digest (what MailMind has been doing) ---
+    st.subheader("📊 Activity Digest")
+    digest_days = st.slider("Window (days)", min_value=1, max_value=30, value=1,
+                             key="digest_days")
+    import time as _time
+    since_ts = int(_time.time()) - digest_days * 86400
+    digest = build_digest(db, since_ts=since_ts, account=account)
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        st.metric("Classified", digest["classified"])
+    with d2:
+        st.metric("Executed", digest["executed"])
+    with d3:
+        st.metric("Need review", digest["queued"],
+                  help="Currently pending — not window-scoped")
+    with d4:
+        st.metric("Corrections", digest["corrections"])
+    if digest["execute_failed"]:
+        st.warning(f"⚠️ {digest['execute_failed']} executions failed in the last {digest_days}d — check the watcher logs.")
+    if digest["pending_reply_needed"]:
+        st.info(f"💬 {digest['pending_reply_needed']} pending item(s) flagged Reply Needed.")
+    if digest["top_labels"]:
+        st.caption("Top labels: " +
+                   "  •  ".join(f"{r['label']} ({r['count']})"
+                                for r in digest["top_labels"]))
+    st.markdown("---")
 
     # --- Section 1: Sender Profiles (shared across accounts) ---
     st.subheader("📧 Sender Profiles")
@@ -373,6 +425,18 @@ def main() -> None:
     elif len(accounts) == 1:
         account = accounts[0]
         st.sidebar.caption(f"Mailbox: {account}")
+
+    # --- Watch loop heartbeat: surface silent-hang risk in the UI ---
+    db_for_heartbeat = get_db()
+    raw_hb = db_for_heartbeat.get_state("last_heartbeat_ts")
+    hb = get_heartbeat_status(int(raw_hb) if raw_hb else None)
+    st.sidebar.markdown("---")
+    if hb["status"] == "stale":
+        st.sidebar.error(f"⚠️ Watcher {hb['human']}")
+    elif hb["status"] == "never":
+        st.sidebar.warning("⏳ Watcher: no heartbeat yet")
+    else:
+        st.sidebar.success(f"✅ Watcher {hb['human']}")
 
     tab_now, tab_review, tab_automate = st.tabs(["📍 NOW", "📋 REVIEW", "⚙️ AUTOMATE"])
 

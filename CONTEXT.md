@@ -5,6 +5,11 @@
 ## Project Purpose
 MailMind is a Gmail classification and labelling tool that combines deterministic rules with optional DeepSeek LLM classification into a hybrid pipeline. It fetches unread Gmail messages via OAuth2, parses them into structured models, runs a multi-stage classification pipeline (rules engine + priority scorer + optional LLM), and suggests Gmail label actions. A human-in-the-loop review dashboard (Streamlit) allows users to approve or reject queued actions before they touch the Gmail account. The system defaults to dry-run mode everywhere, never deletes messages, and keeps all sensitive data local.
 
+## Decisions Log
+*Explicit deviations from the frozen invariants documented in this project's memory file. Each entry records the change, the user-approved rationale, and the safeguards.*
+
+- **2026-06-01 — Earned autopilot per sender (P2B).** The blanket "auto-execute at confidence ≥ 0.90 regardless of sender" rule (`QueueManager.AUTO_EXECUTE_THRESHOLD = 0.90`) is **superseded** by an opt-in, per-sender authorisation: an action auto-executes only when the sender's `sender_profiles.auto_action_eligible = 1` AND the existing 0.90 confidence floor is met. Every other email queues for human review. Approved by the user via AskUserQuestion (option "Earned autopilot"). The 0.90 confidence floor itself is unchanged — this only narrows when it fires. SafetyPolicy invariants (no delete, protected categories, dry-run default) remain in force.
+
 ## Architecture
 ```mermaid
 graph TD
@@ -5977,8 +5982,8 @@ graph TD
 | `mailmind/actions/safety.py` | Safety policy checks for MailMind action execution. | SafetyDecision, SafetyPolicy | ✅ Complete |
 | `mailmind/config.py` | Configuration management for MailMind Pass 7+. | MailMindConfig | ✅ Complete |
 | `mailmind/dashboard/__init__.py` |  | — | ✅ Stable |
-| `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), render_now_tab(), render_review_tab(), render_automate_tab(), main() | ✅ Complete |
-| `mailmind/dashboard/helpers.py` |  | filter_now_items(), get_time_ago_str(), format_unix_ts(), get_confidence_badge(), parse_reason_json() | ✅ Complete |
+| `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), get_action_executor(), render_now_tab(), render_review_tab(), render_automate_tab(), main() | ✅ Complete |
+| `mailmind/dashboard/helpers.py` |  | filter_now_items(), get_time_ago_str(), format_unix_ts(), get_confidence_badge(), get_heartbeat_status(), parse_reason_json() | ✅ Complete |
 | `mailmind/ingestion/__init__.py` | Ingestion package: Gmail auth, fetching, and parsing. | — | ✅ Stable |
 | `mailmind/ingestion/auth.py` | Gmail OAuth2 authentication helpers for MailMind. | load_stored_credentials(), authenticate(), build_gmail_service() | ✅ Complete |
 | `mailmind/ingestion/fetcher.py` | Gmail fetcher wrapper for MailMind. | GmailFetcher | ✅ Complete |
@@ -5990,7 +5995,7 @@ graph TD
 | `mailmind/intelligence/thread_analyzer.py` |  | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
 | `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
-| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), prune(), auth(), accounts() | ✅ Complete |
+| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), digest(), prune(), auth(), accounts() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
@@ -6010,7 +6015,7 @@ graph TD
 | `mailmind/storage/database.py` | Database abstraction for MailMind using SQLite. | Database, open_database_from_config_path() | ✅ Complete |
 | `mailmind/storage/migrations.py` | Migration definitions and application helpers for MailMind SQLite schema. | apply_migrations() | ✅ Complete |
 | `mailmind/storage/models.py` | Data models for MailMind storage layer. | now_ts(), Email, Prediction, ActionApplied, Feedback, SenderReputation, SystemState, QueueItem | ✅ Complete |
-| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), get_queue_stats(), get_ml_model_metadata() | ✅ Complete |
+| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata() | ✅ Complete |
 | `mailmind/utils/__init__.py` |  | — | ✅ Stable |
 | `mailmind/utils/fingerprint.py` |  | make_action_fingerprint() | ✅ Complete |
 <!-- AUTO:END:module_map -->
@@ -6104,7 +6109,7 @@ class MailMindConfig:
 | `MAILMIND_ACCOUNTS` | `""` (empty) | No | — |
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | No | — |
 | `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | No | SQLite database path |
-| `MAILMIND_DRY_RUN` | `""` (empty) | No | Set to "1" to skip real Gmail label writes |
+| `MAILMIND_DRY_RUN` | `0` | No | Set to "1" to skip real Gmail label writes |
 | `MAILMIND_FETCH_MAX` | `50` | No | Max emails per fetch run |
 | `MAILMIND_POLL_SECONDS` | `120` | No | Poll interval in seconds (--watch mode) |
 | `MAILMIND_RETENTION_DAYS` | `90` | No | — |
@@ -7599,7 +7604,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 244 tests passing.
+Pass 7 complete. 336 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

@@ -53,6 +53,9 @@ import json
 
 from mailmind.config import MailMindConfig
 from mailmind.llm.deepseek import DeepSeekClient
+from mailmind.ml.classifier_router import ClassifierRouter
+from mailmind.ml.model import MLClassifier
+from mailmind.ml.train import train_model_from_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +102,13 @@ def _build_components(
         )
     else:
         executor = None
+
+    # Revive the ML tier: load the trained classifier ONCE per run (not per
+    # email) and wire a ClassifierRouter so rules->ML->LLM tiering actually
+    # happens. When ML is confident enough, the paid DeepSeek call is skipped.
+    # If no model file is on disk, router still works (rules + LLM only).
+    classifier_router = _build_classifier_router(rules_engine)
+
     pipeline = Pipeline(
         db=db,
         rules_engine=rules_engine,
@@ -108,9 +118,87 @@ def _build_components(
         llm_client=llm_client,
         llm_skip_threshold=config.llm_skip_threshold,
         llm_max_calls_per_run=config.llm_max_calls_per_run,
+        classifier_router=classifier_router,
     )
     queue_manager = QueueManager(executor=executor)
     return pipeline, queue_manager
+
+
+# Hot-reload cache for the ML model. The watch loop rebuilds the router
+# every cycle; without this we'd re-read joblib from disk on every cycle even
+# when nothing changed. Keyed by (path, mtime) so a retrain (which rewrites
+# the file with a fresh mtime) is picked up automatically — no process
+# restart needed.
+_MODEL_CACHE: dict = {"path": None, "mtime": None, "classifier": None}
+
+
+def _load_ml_classifier_cached() -> Optional[MLClassifier]:
+    """Load the ML classifier, reloading only when the model file's mtime changes.
+
+    Returns the cached MLClassifier when the file is unchanged since last
+    load, a freshly-loaded one when the file changed, or None when no model
+    file exists or loading failed.
+    """
+    try:
+        clf = MLClassifier()
+        model_path = clf.get_model_path()
+    except Exception as exc:
+        LOG.warning("ML classifier init failed (%s) — running without ML tier.", exc)
+        return None
+
+    if not model_path.exists():
+        if _MODEL_CACHE["classifier"] is not None:
+            LOG.info("ML model file disappeared — disabling ML tier.")
+        _MODEL_CACHE.update({"path": None, "mtime": None, "classifier": None})
+        return None
+
+    try:
+        mtime = model_path.stat().st_mtime
+    except OSError:
+        return _MODEL_CACHE.get("classifier")
+
+    cached = _MODEL_CACHE.get("classifier")
+    if (
+        cached is not None
+        and _MODEL_CACHE.get("path") == str(model_path)
+        and _MODEL_CACHE.get("mtime") == mtime
+    ):
+        return cached
+
+    try:
+        loaded = clf.load()
+    except Exception as exc:
+        LOG.warning("ML model load failed (%s) — running without ML tier.", exc)
+        return None
+    if not loaded:
+        _MODEL_CACHE.update({"path": str(model_path), "mtime": mtime, "classifier": None})
+        return None
+
+    _MODEL_CACHE.update({"path": str(model_path), "mtime": mtime, "classifier": clf})
+    LOG.info(
+        "ML model %s (classes=%s, samples=%s).",
+        "loaded" if cached is None else "reloaded",
+        clf._metadata.class_names if clf._metadata else "?",
+        clf._metadata.num_samples if clf._metadata else "?",
+    )
+    return clf
+
+
+def _build_classifier_router(rules_engine: RulesEngine) -> Optional[ClassifierRouter]:
+    """Build the router with the (mtime-cached) ML classifier.
+
+    Returns a router even when the model isn't loaded so the rules tier
+    still runs; the pipeline degrades gracefully (rules + DeepSeek only).
+    LLM is disabled on the router itself — DeepSeek is wired separately on
+    the Pipeline; we don't want two LLM paths firing in parallel.
+    """
+    classifier = _load_ml_classifier_cached()
+    return ClassifierRouter(
+        rules_engine=rules_engine,
+        ml_model=classifier,
+        llm_classifier=None,
+        llm_enabled=False,
+    )
 
 
 def _process_message_id(
@@ -295,6 +383,77 @@ def _run_all_accounts(db: Database, dry_run: bool, fetch_max: int, no_llm: bool 
             LOG.error("Run failed for mailbox %s: %s", acct, exc, exc_info=True)
 
 
+def _maybe_retrain(
+    db: Database,
+    interval_seconds: int = 7 * 86400,
+    corrections_threshold: int = 5,
+) -> None:
+    """Retrain the ML model when either trigger fires:
+
+      1. CADENCE: it's been >= interval_seconds since the last retrain.
+      2. CORRECTIONS: the user has logged >= corrections_threshold new
+         corrections since the last retrain.
+
+    Tracked in system_state. The next watch cycle picks up the new model
+    automatically via the mtime hot-reload path. Failures here MUST never
+    take down the watch loop.
+    """
+    try:
+        last_train_ts = int(db.get_state("last_train_ts") or 0)
+        last_train_corrections = int(db.get_state("last_train_corrections_count") or 0)
+
+        now = int(time.time())
+        total_corrections = db.execute_sql(
+            "SELECT COUNT(*) AS c FROM user_corrections"
+        ).fetchone()["c"]
+        new_corrections = max(0, total_corrections - last_train_corrections)
+        age = now - last_train_ts
+
+        cadence_due = last_train_ts == 0 or age >= interval_seconds
+        corrections_due = new_corrections >= corrections_threshold
+
+        if not (cadence_due or corrections_due):
+            return
+
+        trigger = "cadence" if cadence_due else "corrections"
+        LOG.info(
+            "Auto-retrain triggered (%s: age=%ds, new_corrections=%d).",
+            trigger, age, new_corrections,
+        )
+        classifier = train_model_from_db(db)
+        if classifier is None:
+            LOG.info("Auto-retrain skipped (insufficient training data).")
+            return
+
+        db.set_state("last_train_ts", str(now))
+        db.set_state("last_train_corrections_count", str(total_corrections))
+        LOG.info(
+            "Auto-retrain complete (samples=%d).",
+            classifier.metadata.num_samples if classifier.metadata else -1,
+        )
+    except Exception as exc:
+        LOG.error("Auto-retrain failed: %s", exc, exc_info=True)
+
+
+# Heartbeat: the watch loop stamps system_state every cycle so the dashboard
+# (and any external monitor) can detect a silent hang. We deliberately bump
+# this AFTER ingest+retrain+prune so a stuck stage shows as a stale heartbeat
+# instead of falsely-fresh.
+HEARTBEAT_KEY = "last_heartbeat_ts"
+
+
+def _record_heartbeat(db: Database) -> None:
+    """Stamp the current time as the last successful watch-loop cycle.
+
+    Failure here must never take down the watch loop — a heartbeat write
+    error would defeat the whole point.
+    """
+    try:
+        db.set_state(HEARTBEAT_KEY, str(int(time.time())))
+    except Exception as exc:
+        LOG.warning("Heartbeat write failed: %s", exc)
+
+
 def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 86400) -> None:
     """Run a retention sweep at most once per ``interval_seconds``.
 
@@ -361,7 +520,9 @@ def run(
         while True:
             try:
                 _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+                _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
+                _record_heartbeat(db)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
@@ -370,6 +531,29 @@ def run(
             time.sleep(poll_secs)
     else:
         _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+
+
+@cli.command()
+@click.option("--days", default=1, type=int, help="Look-back window (default: 1).")
+@click.option("--account", default=None, help="Scope to a single mailbox.")
+def digest(days: int, account: Optional[str]) -> None:
+    """Print a summary of what MailMind has done over the last N days."""
+    from mailmind.storage.queries import build_digest as _build_digest
+    db = _get_db()
+    since_ts = int(time.time()) - days * 86400
+    d = _build_digest(db, since_ts=since_ts, account=account)
+    scope = f" ({account})" if account else ""
+    click.echo(f"MailMind digest — last {days}d{scope}")
+    click.echo(f"  Classified:           {d['classified']}")
+    click.echo(f"  Executed:             {d['executed']}")
+    click.echo(f"  Execute failed:       {d['execute_failed']}")
+    click.echo(f"  Pending review:       {d['queued']} "
+               f"(reply needed: {d['pending_reply_needed']})")
+    click.echo(f"  Corrections logged:   {d['corrections']}")
+    if d["top_labels"]:
+        click.echo("  Top labels:")
+        for row in d["top_labels"]:
+            click.echo(f"    - {row['label']}: {row['count']}")
 
 
 @cli.command()
