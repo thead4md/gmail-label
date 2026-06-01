@@ -10,6 +10,10 @@ import pytest
 
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email, Prediction
+from mailmind.storage.queries import (
+    get_recent_predictions_with_emails,
+    get_pending_queue,
+)
 
 
 @pytest.fixture
@@ -73,3 +77,37 @@ class TestAccountWrites:
         ).fetchone()["c"]
         assert a_count == 1
         assert b_count == 1
+
+
+class TestAccountFilteredReads:
+    def _seed_two_accounts(self, db: Database):
+        db.insert_email(_email("g1", "a@x.com"))
+        db.insert_email(_email("g2", "b@y.com"))
+        db.save_prediction(_pred("g1", "a@x.com", "WORK"))
+        db.save_prediction(_pred("g2", "b@y.com", "NEWSLETTER"))
+
+    def test_recent_predictions_filtered_by_account(self, db: Database):
+        self._seed_two_accounts(db)
+
+        a_rows = get_recent_predictions_with_emails(db, account="a@x.com")
+        b_rows = get_recent_predictions_with_emails(db, account="b@y.com")
+        all_rows = get_recent_predictions_with_emails(db)  # no filter
+
+        assert {r["email_gmail_id"] for r in a_rows} == {"g1"}
+        assert {r["email_gmail_id"] for r in b_rows} == {"g2"}
+        assert {r["email_gmail_id"] for r in all_rows} == {"g1", "g2"}
+
+    def test_pending_queue_filtered_by_account(self, db: Database):
+        db.execute_sql(
+            "INSERT INTO action_queue (email_gmail_id, action, status, account) VALUES (?, ?, 'pending', ?)",
+            ("g1", "label", "a@x.com"),
+        )
+        db.execute_sql(
+            "INSERT INTO action_queue (email_gmail_id, action, status, account) VALUES (?, ?, 'pending', ?)",
+            ("g2", "label", "b@y.com"),
+        )
+        db._conn.commit()
+
+        assert len(get_pending_queue(db, account="a@x.com")) == 1
+        assert len(get_pending_queue(db, account="b@y.com")) == 1
+        assert len(get_pending_queue(db)) == 2  # no filter = all
