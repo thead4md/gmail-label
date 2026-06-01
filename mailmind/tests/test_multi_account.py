@@ -39,6 +39,66 @@ class TestAccountConfig:
         assert MailMindConfig.load_accounts() == []
 
 
+class TestPerAccountTokenStorage:
+    def test_primary_uses_legacy_token_names(self):
+        from mailmind.ingestion import auth
+        assert auth._token_key_name(None) == "mailmind_gmail_token"
+        assert auth._token_file(None).name == "tokens.json.enc"
+        assert auth._token_env_var(None) == "GMAIL_TOKEN"
+
+    def test_named_account_gets_suffixed_names(self):
+        from mailmind.ingestion import auth
+        acct = "dudas.adam@mcssz.hu"
+        assert auth._token_key_name(acct) != auth._token_key_name(None)
+        assert "mcssz" in auth._token_file(acct).name
+        # Env var is a clean Fly-secret path for the second mailbox.
+        assert auth._token_env_var(acct) == "GMAIL_TOKEN_DUDAS_ADAM_MCSSZ_HU"
+
+    def test_env_var_token_fallback(self, monkeypatch):
+        from mailmind.ingestion import auth
+        monkeypatch.delenv("MAILMIND_DATA_DIR", raising=False)
+        monkeypatch.setenv("GMAIL_TOKEN_DUDAS_ADAM_MCSSZ_HU", '{"token": "x"}')
+        # No keyring/file token for this account -> falls back to the env var.
+        assert auth._load_stored_token("dudas.adam@mcssz.hu") == '{"token": "x"}'
+
+
+class TestMultiAccountDispatch:
+    def test_skips_unconnected_secondary_account(self, monkeypatch):
+        """Secondary mailbox with no token is skipped, primary still runs."""
+        import mailmind.main as main_mod
+
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "primary@x.com,second@y.com")
+        calls = []
+
+        def fake_run_once(db, dry_run, fetch_max, no_llm=False, account=None,
+                          auth_account=None, allow_interactive=True):
+            calls.append({"account": account, "auth_account": auth_account,
+                          "allow_interactive": allow_interactive})
+
+        monkeypatch.setattr(main_mod, "_run_once", fake_run_once)
+        main_mod._run_all_accounts(db=object(), dry_run=True, fetch_max=10)
+
+        assert [c["account"] for c in calls] == ["primary@x.com", "second@y.com"]
+        # Primary reuses legacy token + may auth interactively; secondary does not.
+        assert calls[0]["auth_account"] is None and calls[0]["allow_interactive"] is True
+        assert calls[1]["auth_account"] == "second@y.com" and calls[1]["allow_interactive"] is False
+
+    def test_one_account_failure_does_not_abort_others(self, monkeypatch):
+        import mailmind.main as main_mod
+
+        monkeypatch.setenv("MAILMIND_ACCOUNTS", "a@x.com,b@y.com")
+        seen = []
+
+        def fake_run_once(db, dry_run, fetch_max, no_llm=False, account=None, **kw):
+            seen.append(account)
+            if account == "a@x.com":
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(main_mod, "_run_once", fake_run_once)
+        main_mod._run_all_accounts(db=object(), dry_run=True, fetch_max=10)
+        assert seen == ["a@x.com", "b@y.com"]  # b still ran despite a failing
+
+
 @pytest.fixture
 def db():
     database = Database(":memory:")
