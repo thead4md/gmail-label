@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import fields
 from typing import Optional
 
 import click
@@ -162,7 +163,8 @@ def _process_message_id(
         if prediction.scoring_breakdown:
             try:
                 score_data = json.loads(prediction.scoring_breakdown)
-                score_result = ScoreResult(**score_data)
+                valid_fields = {f.name for f in fields(ScoreResult)}
+                score_result = ScoreResult(**{k: v for k, v in score_data.items() if k in valid_fields})
                 status = queue_manager.enqueue_from_prediction(
                     pipeline.db, email, score_result, prediction,
                 )
