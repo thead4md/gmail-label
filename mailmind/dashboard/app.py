@@ -27,6 +27,7 @@ from mailmind.intelligence.feedback import handle_approve, handle_correction, ha
 from mailmind.processing.queue_manager import QueueManager
 from mailmind.storage.database import Database
 from mailmind.storage.queries import (
+    build_digest,
     get_ml_model_metadata,
     get_pending_queue_enriched,
     get_queue_stats,
@@ -298,6 +299,33 @@ def render_automate_tab(account: Optional[str] = None) -> None:
     st.header("⚙️ AUTOMATE")
 
     db = get_db()
+
+    # --- Section 0: Activity digest (what MailMind has been doing) ---
+    st.subheader("📊 Activity Digest")
+    digest_days = st.slider("Window (days)", min_value=1, max_value=30, value=1,
+                             key="digest_days")
+    import time as _time
+    since_ts = int(_time.time()) - digest_days * 86400
+    digest = build_digest(db, since_ts=since_ts, account=account)
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        st.metric("Classified", digest["classified"])
+    with d2:
+        st.metric("Executed", digest["executed"])
+    with d3:
+        st.metric("Need review", digest["queued"],
+                  help="Currently pending — not window-scoped")
+    with d4:
+        st.metric("Corrections", digest["corrections"])
+    if digest["execute_failed"]:
+        st.warning(f"⚠️ {digest['execute_failed']} executions failed in the last {digest_days}d — check the watcher logs.")
+    if digest["pending_reply_needed"]:
+        st.info(f"💬 {digest['pending_reply_needed']} pending item(s) flagged Reply Needed.")
+    if digest["top_labels"]:
+        st.caption("Top labels: " +
+                   "  •  ".join(f"{r['label']} ({r['count']})"
+                                for r in digest["top_labels"]))
+    st.markdown("---")
 
     # --- Section 1: Sender Profiles (shared across accounts) ---
     st.subheader("📧 Sender Profiles")

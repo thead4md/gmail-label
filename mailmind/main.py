@@ -534,6 +534,29 @@ def run(
 
 
 @cli.command()
+@click.option("--days", default=1, type=int, help="Look-back window (default: 1).")
+@click.option("--account", default=None, help="Scope to a single mailbox.")
+def digest(days: int, account: Optional[str]) -> None:
+    """Print a summary of what MailMind has done over the last N days."""
+    from mailmind.storage.queries import build_digest as _build_digest
+    db = _get_db()
+    since_ts = int(time.time()) - days * 86400
+    d = _build_digest(db, since_ts=since_ts, account=account)
+    scope = f" ({account})" if account else ""
+    click.echo(f"MailMind digest — last {days}d{scope}")
+    click.echo(f"  Classified:           {d['classified']}")
+    click.echo(f"  Executed:             {d['executed']}")
+    click.echo(f"  Execute failed:       {d['execute_failed']}")
+    click.echo(f"  Pending review:       {d['queued']} "
+               f"(reply needed: {d['pending_reply_needed']})")
+    click.echo(f"  Corrections logged:   {d['corrections']}")
+    if d["top_labels"]:
+        click.echo("  Top labels:")
+        for row in d["top_labels"]:
+            click.echo(f"    - {row['label']}: {row['count']}")
+
+
+@cli.command()
 @click.option("--retention-days", default=None, type=int,
               help="Delete local cache older than N days (default: MAILMIND_RETENTION_DAYS or 90).")
 @click.option("--no-vacuum", is_flag=True, default=False,
