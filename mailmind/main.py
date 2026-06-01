@@ -53,6 +53,8 @@ import json
 
 from mailmind.config import MailMindConfig
 from mailmind.llm.deepseek import DeepSeekClient
+from mailmind.ml.classifier_router import ClassifierRouter
+from mailmind.ml.model import MLClassifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +101,13 @@ def _build_components(
         )
     else:
         executor = None
+
+    # Revive the ML tier: load the trained classifier ONCE per run (not per
+    # email) and wire a ClassifierRouter so rules->ML->LLM tiering actually
+    # happens. When ML is confident enough, the paid DeepSeek call is skipped.
+    # If no model file is on disk, router still works (rules + LLM only).
+    classifier_router = _build_classifier_router(rules_engine)
+
     pipeline = Pipeline(
         db=db,
         rules_engine=rules_engine,
@@ -108,9 +117,42 @@ def _build_components(
         llm_client=llm_client,
         llm_skip_threshold=config.llm_skip_threshold,
         llm_max_calls_per_run=config.llm_max_calls_per_run,
+        classifier_router=classifier_router,
     )
     queue_manager = QueueManager(executor=executor)
     return pipeline, queue_manager
+
+
+def _build_classifier_router(rules_engine: RulesEngine) -> Optional[ClassifierRouter]:
+    """Load the trained ML model (once per run) and build the router.
+
+    Returns None on any load failure so the pipeline still runs (rules-only,
+    plus the existing DeepSeek tier). LLM is set to disabled on the router
+    itself — the DeepSeek client is wired separately on the Pipeline and is
+    the authoritative LLM tier; we don't want the router's OpenAI path
+    firing in parallel.
+    """
+    try:
+        clf = MLClassifier()
+        loaded = clf.load()
+    except Exception as exc:
+        LOG.warning("ML model load failed (%s) — running without ML tier.", exc)
+        return None
+    router = ClassifierRouter(
+        rules_engine=rules_engine,
+        ml_model=clf if loaded else None,
+        llm_classifier=None,
+        llm_enabled=False,
+    )
+    if loaded:
+        LOG.info(
+            "ML tier loaded (classes=%s, samples=%s).",
+            clf._metadata.class_names if clf._metadata else "?",
+            clf._metadata.num_samples if clf._metadata else "?",
+        )
+    else:
+        LOG.info("ML tier disabled (no model.joblib on disk).")
+    return router
 
 
 def _process_message_id(

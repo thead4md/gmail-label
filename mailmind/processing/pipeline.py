@@ -115,12 +115,20 @@ class Pipeline:
                     routing_result.confidence,
                 )
 
-        # 3b. Run LLM classification (Pass 7+ DeepSeek) if applicable
+        # 3b. Run LLM classification (Pass 7+ DeepSeek) if applicable.
+        # Skip the paid LLM when:
+        #   - rules score is high enough, OR
+        #   - the router already handled this email via rules or ML (cheap tiers
+        #     succeeded; calling LLM would be wasted spend).
+        ml_or_rules_handled = (
+            routing_result is not None and routing_result.source in ("rules", "ml")
+        )
         llm_result = None
         if (
             self.llm_client is not None
             and self._llm_calls_this_run < self.llm_max_calls_per_run
             and score.total_score < self.llm_skip_threshold
+            and not ml_or_rules_handled
         ):
             llm_result = self.llm_client.classify_email(email)
             self._llm_calls_this_run += 1
@@ -131,6 +139,11 @@ class Pipeline:
                 llm_result.llm_confidence,
                 self._llm_calls_this_run,
                 self.llm_max_calls_per_run,
+            )
+        elif ml_or_rules_handled:
+            LOG.debug(
+                "Skipping LLM for %s: router handled via %s (conf=%.2f)",
+                email.gmail_id, routing_result.source, routing_result.confidence,
             )
         elif score.total_score >= self.llm_skip_threshold:
             LOG.debug(
