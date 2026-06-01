@@ -256,6 +256,7 @@ class Pipeline:
 
         prediction = Prediction(
             email_gmail_id=email.gmail_id,
+            account=getattr(email, "account", None),
             model=pipeline_used,
             labels=final_labels,
             priority_score=priority_score,

@@ -164,6 +164,7 @@ class QueueManager:
 
         item = QueueItem(
             email_gmail_id=email.gmail_id,
+            account=getattr(email, 'account', None),
             prediction_id=getattr(prediction, 'id', None),
             action=suggested_action,
             params=score_result.details if hasattr(score_result, 'details') else {},

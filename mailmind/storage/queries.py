@@ -178,8 +178,8 @@ def upsert_queue_item(db: Database, item: QueueItem) -> QueueItem | None:
             """
             INSERT OR IGNORE INTO action_queue
                 (email_gmail_id, prediction_id, action, params_json, action_fingerprint,
-                 status, confidence, priority_score, reason_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, confidence, priority_score, reason_json, created_at, updated_at, account)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.email_gmail_id,
@@ -193,6 +193,7 @@ def upsert_queue_item(db: Database, item: QueueItem) -> QueueItem | None:
                 json.dumps(item.reason_json or {}),
                 item.created_at or now,
                 now,
+                item.account,
             ),
         )
         # If insertion affected any rows (new item)
