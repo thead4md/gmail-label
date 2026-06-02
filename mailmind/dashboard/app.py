@@ -618,6 +618,39 @@ def _render_sidebar() -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Tab 3: INSIGHTS
+# ---------------------------------------------------------------------------
+
+
+def render_insights_tab(account: Optional[str] = None) -> None:
+    import time as _time
+    db = get_db()
+
+    days = st.slider("Window (days)", 1, 90, 30, key="insights_days")
+    since = int(_time.time()) - days * 86400
+
+    _section("📊", "Label distribution")
+    c = charts.label_distribution_chart(analytics_label_distribution(db, since, account))
+    st.altair_chart(c, use_container_width=True) if c else st.info("No data yet.")
+
+    _section("📨", "Channel volume")
+    c = charts.channel_distribution_chart(analytics_channel_distribution(db, since, account))
+    st.altair_chart(c, use_container_width=True) if c else st.info("No data yet.")
+
+    _section("🗓️", "Channel × weekday")
+    c = charts.channel_weekday_heatmap(analytics_channel_weekday(db, since, account))
+    st.altair_chart(c, use_container_width=True) if c else st.info("No data yet.")
+
+    _section("👤", "Top senders")
+    c = charts.top_senders_chart(analytics_top_senders(db, since, account=account))
+    st.altair_chart(c, use_container_width=True) if c else st.info("No data yet.")
+
+    _section("⏱️", "Time to decision")
+    c = charts.decision_time_chart(analytics_decision_times(db, since, account))
+    st.altair_chart(c, use_container_width=True) if c else st.info("No reviewed items yet.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
