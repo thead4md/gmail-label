@@ -18,6 +18,11 @@ from ..storage.models import Email
 
 LOG = logging.getLogger(__name__)
 
+_UNSUBSCRIBE_RE = re.compile(
+    r'unsubscribe|list-unsubscribe|manage\s+subscriptions?|stop\s+receiving|click\s+here.*unsubscribe',
+    re.I
+)
+
 
 @dataclass
 class RuleMatch:
@@ -175,15 +180,7 @@ class RulesEngine:
     def _match_newsletter_unsubscribe(email: Email) -> bool:
         """Match newsletter/unsubscribe signals in body text."""
         body = (email.body_text or '').lower()
-        # Look for unsubscribe link patterns
-        unsubscribe_patterns = [
-            r'unsubscribe',
-            r'list-unsubscribe',
-            r'manage\s+subscriptions?',
-            r'stop\s+receiving',
-            r'click\s+here.*unsubscribe',
-        ]
-        return any(re.search(pattern, body) for pattern in unsubscribe_patterns)
+        return bool(_UNSUBSCRIBE_RE.search(body))
 
     def _match_directly_addressed(self, email: Email) -> bool:
         """Match emails where user_email is a recipient (directly addressed).

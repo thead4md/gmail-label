@@ -38,7 +38,7 @@ def _log_correction(db: Database, gmail_id: str = "g1"):
 class TestMaybeRetrainTriggers:
     def test_fires_when_never_trained(self, db: Database):
         """No prior last_train_ts -> cadence trigger fires."""
-        with patch.object(main_mod, "train_model_from_db") as mock_train:
+        with patch("mailmind.ml.train.train_model_from_db") as mock_train:
             mock_train.return_value = MagicMock(metadata=MagicMock(num_samples=10))
             main_mod._maybe_retrain(db)
         mock_train.assert_called_once()
@@ -50,7 +50,7 @@ class TestMaybeRetrainTriggers:
         db.set_state("last_train_ts", str(now - 60))  # 60s ago
         db.set_state("last_train_corrections_count", "0")
 
-        with patch.object(main_mod, "train_model_from_db") as mock_train:
+        with patch("mailmind.ml.train.train_model_from_db") as mock_train:
             main_mod._maybe_retrain(
                 db, interval_seconds=7 * 86400, corrections_threshold=5
             )
@@ -62,7 +62,7 @@ class TestMaybeRetrainTriggers:
         db.set_state("last_train_ts", str(ten_days_ago))
         db.set_state("last_train_corrections_count", "0")
 
-        with patch.object(main_mod, "train_model_from_db") as mock_train:
+        with patch("mailmind.ml.train.train_model_from_db") as mock_train:
             mock_train.return_value = MagicMock(metadata=MagicMock(num_samples=10))
             main_mod._maybe_retrain(db, interval_seconds=7 * 86400)
         mock_train.assert_called_once()
@@ -75,7 +75,7 @@ class TestMaybeRetrainTriggers:
         for i in range(5):
             _log_correction(db, gmail_id=f"g{i}")
 
-        with patch.object(main_mod, "train_model_from_db") as mock_train:
+        with patch("mailmind.ml.train.train_model_from_db") as mock_train:
             mock_train.return_value = MagicMock(metadata=MagicMock(num_samples=10))
             main_mod._maybe_retrain(
                 db, interval_seconds=7 * 86400, corrections_threshold=5
@@ -87,7 +87,7 @@ class TestMaybeRetrainTriggers:
         for i in range(7):
             _log_correction(db, gmail_id=f"g{i}")
 
-        with patch.object(main_mod, "train_model_from_db") as mock_train:
+        with patch("mailmind.ml.train.train_model_from_db") as mock_train:
             mock_train.return_value = MagicMock(metadata=MagicMock(num_samples=10))
             main_mod._maybe_retrain(db)
 
@@ -97,14 +97,14 @@ class TestMaybeRetrainTriggers:
 
     def test_skips_when_no_training_data(self, db: Database):
         """train_model_from_db returns None (no data) -> baseline not bumped."""
-        with patch.object(main_mod, "train_model_from_db", return_value=None):
+        with patch("mailmind.ml.train.train_model_from_db", return_value=None):
             main_mod._maybe_retrain(db)
         # State stays unset so the next cycle will try again.
         assert db.get_state("last_train_ts") is None
 
     def test_swallows_exceptions(self, db: Database):
         """Any training error is caught so the watch loop continues."""
-        with patch.object(main_mod, "train_model_from_db",
+        with patch("mailmind.ml.train.train_model_from_db",
                           side_effect=RuntimeError("boom")):
             # Must not raise.
             main_mod._maybe_retrain(db)

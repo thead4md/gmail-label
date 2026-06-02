@@ -53,9 +53,6 @@ import json
 
 from mailmind.config import MailMindConfig
 from mailmind.llm.deepseek import DeepSeekClient
-from mailmind.ml.classifier_router import ClassifierRouter
-from mailmind.ml.model import MLClassifier
-from mailmind.ml.train import train_model_from_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -132,13 +129,14 @@ def _build_components(
 _MODEL_CACHE: dict = {"path": None, "mtime": None, "classifier": None}
 
 
-def _load_ml_classifier_cached() -> Optional[MLClassifier]:
+def _load_ml_classifier_cached() -> Optional["MLClassifier"]:
     """Load the ML classifier, reloading only when the model file's mtime changes.
 
     Returns the cached MLClassifier when the file is unchanged since last
     load, a freshly-loaded one when the file changed, or None when no model
     file exists or loading failed.
     """
+    from mailmind.ml.model import MLClassifier
     try:
         clf = MLClassifier()
         model_path = clf.get_model_path()
@@ -184,7 +182,7 @@ def _load_ml_classifier_cached() -> Optional[MLClassifier]:
     return clf
 
 
-def _build_classifier_router(rules_engine: RulesEngine) -> Optional[ClassifierRouter]:
+def _build_classifier_router(rules_engine: RulesEngine) -> Optional["ClassifierRouter"]:
     """Build the router with the (mtime-cached) ML classifier.
 
     Returns a router even when the model isn't loaded so the rules tier
@@ -192,6 +190,7 @@ def _build_classifier_router(rules_engine: RulesEngine) -> Optional[ClassifierRo
     LLM is disabled on the router itself — DeepSeek is wired separately on
     the Pipeline; we don't want two LLM paths firing in parallel.
     """
+    from mailmind.ml.classifier_router import ClassifierRouter
     classifier = _load_ml_classifier_cached()
     return ClassifierRouter(
         rules_engine=rules_engine,
@@ -209,6 +208,7 @@ def _process_message_id(
     reclassify: bool = False,
     account: Optional[str] = None,
     classify_only: bool = False,
+    prefetched_raw: Optional[dict] = None,
 ) -> None:
     """Fetch one message, persist it, run the classification pipeline.
 
@@ -230,11 +230,14 @@ def _process_message_id(
         LOG.debug("Skipping %s — already classified.", message_id)
         return
 
-    try:
-        raw = fetcher.get_message(message_id)
-    except Exception as exc:
-        LOG.warning("Failed to fetch message %s: %s", message_id, exc)
-        return
+    if prefetched_raw is not None:
+        raw = prefetched_raw
+    else:
+        try:
+            raw = fetcher.get_message(message_id)
+        except Exception as exc:
+            LOG.warning("Failed to fetch message %s: %s", message_id, exc)
+            return
 
     try:
         email: Email = parse_message(raw)
@@ -357,8 +360,17 @@ def _run_once(
     message_ids = fetcher.list_message_ids(label_ids=["INBOX", "UNREAD"], max_results=fetch_max)
     LOG.info("[%s] Found %d messages.", label, len(message_ids))
 
-    for mid in message_ids:
-        _process_message_id(mid, fetcher, pipeline, queue_manager, account=account)
+    # Skip already-classified ids before the network round-trip, then batch-fetch
+    # the rest (one HTTP request per 100 instead of one per message).
+    todo = [m for m in message_ids if not pipeline.db.has_prediction(m)]
+    LOG.info("[%s] %d new of %d to fetch.", label, len(todo), len(message_ids))
+    raw_by_id = fetcher.batch_get_messages(todo)
+    for mid in todo:
+        raw = raw_by_id.get(mid)
+        if raw is None:
+            continue
+        _process_message_id(mid, fetcher, pipeline, queue_manager,
+                            account=account, prefetched_raw=raw)
 
     LOG.info("[%s] Run complete.", label)
 
@@ -430,6 +442,7 @@ def _maybe_retrain(
             "Auto-retrain triggered (%s: age=%ds, new_corrections=%d).",
             trigger, age, new_corrections,
         )
+        from mailmind.ml.train import train_model_from_db
         classifier = train_model_from_db(db)
         if classifier is None:
             LOG.info("Auto-retrain skipped (insufficient training data).")
@@ -632,15 +645,25 @@ def _backfill_one_account(
     )
     LOG.info("[%s] Backfill: %d messages in window.", label, len(message_ids))
 
+    if reclassify:
+        todo = list(message_ids)
+    else:
+        todo = [m for m in message_ids if not pipeline.db.has_prediction(m)]
+    LOG.info("[%s] Backfill: %d new of %d to fetch.", label, len(todo), len(message_ids))
+    raw_by_id = fetcher.batch_get_messages(todo)
     processed = 0
-    for i, mid in enumerate(message_ids, 1):
+    for i, mid in enumerate(todo, 1):
+        raw = raw_by_id.get(mid)
+        if raw is None:
+            continue
         _process_message_id(
             mid, fetcher, pipeline, queue_manager,
             reclassify=reclassify, account=account, classify_only=True,
+            prefetched_raw=raw,
         )
         processed += 1
         if i % 100 == 0:
-            LOG.info("[%s] Backfill progress: %d/%d", label, i, len(message_ids))
+            LOG.info("[%s] Backfill progress: %d/%d", label, i, len(todo))
 
     LOG.info("[%s] Backfill complete: %d processed.", label, processed)
     return processed

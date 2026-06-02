@@ -85,6 +85,35 @@ class GmailFetcher:
         time.sleep(self.rate_limit_seconds)
         return resp
 
+    def batch_get_messages(self, message_ids, format: str = "full"):
+        """Fetch many messages in one HTTP batch (up to 100 per call).
+        Returns a dict {message_id: raw_message_dict}. Messages that error are
+        omitted. One rate-limit sleep per batch instead of one per message.
+        """
+        results: Dict[str, Any] = {}
+        if not message_ids:
+            return results
+        def _make_callback():
+            def _cb(request_id, response, exception):
+                if exception is None and response is not None:
+                    results[request_id] = response
+            return _cb
+        for start in range(0, len(message_ids), 100):
+            chunk = message_ids[start:start + 100]
+            def call(chunk=chunk):
+                batch = self.service.new_batch_http_request(callback=_make_callback())
+                for mid in chunk:
+                    batch.add(
+                        self.service.users().messages().get(
+                            userId=self.user_id, id=mid, format=format),
+                        request_id=mid,
+                    )
+                batch.execute()
+                return None
+            _retry(call)
+            time.sleep(self.rate_limit_seconds)
+        return results
+
     def get_history(self, start_history_id: int, history_types: Optional[List[str]] = None) -> Dict[str, Any]:
         """Retrieve history records since `start_history_id`.
 
