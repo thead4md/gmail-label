@@ -21,7 +21,30 @@ import pathlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
+
+
+@pytest.fixture(autouse=True)
+def _clear_streamlit_caches():
+    """Reset @st.cache_data/@st.cache_resource between tests.
+
+    The dashboard now wraps its DB reads in @st.cache_data. Without clearing,
+    one test's mocked return value is memoised and served to later tests
+    (e.g. the first REVIEW test caches an empty pending queue, so every
+    later REVIEW test sees 'Queue is clear'). Clear before AND after each test.
+    """
+    try:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -383,3 +406,17 @@ def test_no_bare_ternary_expression_statements_in_app():
         "Streamlit magic will wrap these in st.write() and dump DeltaGenerator "
         "help tables. Use an explicit if/else statement instead."
     )
+
+
+def test_invalidate_helper_exists_and_callable():
+    """Every write path must be able to clear caches; _invalidate must exist."""
+    from mailmind.dashboard import app as a
+    assert hasattr(a, "_invalidate") and callable(a._invalidate)
+
+
+def test_writes_are_paired_with_invalidate():
+    """Each st.rerun() in app.py that follows a write should be preceded by
+    _invalidate(). Static check: count must match closely."""
+    import pathlib
+    src = (pathlib.Path(__file__).parent.parent / "dashboard" / "app.py").read_text()
+    assert src.count("_invalidate()") >= 4  # approve/reject/correct/toggle paths

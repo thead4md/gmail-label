@@ -6011,7 +6011,6 @@ graph TD
 | `mailmind/processing/queue_manager.py` | Manages the action queue for human-in-the-loop review. | QueueManager | ✅ Complete |
 | `mailmind/processing/rules.py` | Deterministic rules engine for MailMind classification. | RuleMatch, Rule, RulesEngine | ✅ Complete |
 | `mailmind/processing/scorer.py` | Priority scoring for MailMind emails. | ScoreResult, PriorityScorer | ✅ Complete |
-| `mailmind/review_dashboard.py` | Streamlit review dashboard for MailMind. | get_db(), get_action_executor() | ✅ Complete |
 | `mailmind/scripts/pretrain.py` | Pre-training script for MailMind. | main() | ✅ Complete |
 | `mailmind/scripts/train_ml_model.py` | Train the Pass 4 ML model from historical database data. | main() | ✅ Complete |
 | `mailmind/storage/__init__.py` | Storage package for MailMind. | — | ✅ Stable |
@@ -6096,7 +6095,6 @@ class MailMindConfig:
 | `ARROW_PRE_0_15_IPC_FORMAT` | `0` | No | — |
 | `ARROW_PRE_1_0_METADATA_VERSION` | `0` | No | — |
 | `COLORTERM` | `""` (empty) | No | — |
-| `DASHBOARD_PASSWORD` | `""` (empty) | No | — |
 | `DEEPSEEK_API_KEY` | `""` (empty) | No | DeepSeek API key; absent → LLM disabled |
 | `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | No | Max LLM API calls per pipeline run |
 | `DEFER_PYDANTIC_BUILD` | `true` | No | — |
@@ -7607,7 +7605,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 472 tests passing.
+Pass 7 complete. 479 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

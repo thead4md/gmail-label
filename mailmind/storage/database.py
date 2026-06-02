@@ -35,6 +35,10 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         # Use WAL for better concurrency
         self._conn.execute("PRAGMA journal_mode=WAL;")
+        # Wait up to 30s for a competing writer instead of erroring immediately.
+        # Without this, the watch loop + backfill/prune racing for a write lock
+        # get SQLITE_BUSY and stall. 30000 = 30 seconds.
+        self._conn.execute("PRAGMA busy_timeout=30000;")
 
     @contextmanager
     def transaction(self):

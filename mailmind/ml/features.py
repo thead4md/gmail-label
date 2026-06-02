@@ -29,6 +29,21 @@ from ..storage.models import Email
 
 LOG = logging.getLogger(__name__)
 
+_UNSUBSCRIBE_FEATURE_RE = re.compile(
+    r'unsubscribe|list-unsubscribe|manage\s+subscriptions?|manage\s+your\s+subscriptions?|stop\s+receiving|click\s+here.*unsubscribe|list-id|mailing\s+list',
+    re.I
+)
+
+_CALENDAR_RE = re.compile(
+    r'invitation|invite|meeting|event|calendar|ics',
+    re.I
+)
+
+_FINANCE_RE = re.compile(
+    r'payment|invoice|receipt|transaction|bill|charge',
+    re.I
+)
+
 # Common label categories (must match PriorityScorer.LABEL_BASE_SCORES keys)
 VALID_LABELS = [
     "URGENT",
@@ -86,36 +101,21 @@ def _detect_unsubscribe(text: str) -> bool:
     """Detect unsubscribe/list-management signals in text."""
     if not text:
         return False
-    text_lower = text.lower()
-    patterns = [
-        r"unsubscribe",
-        r"list-unsubscribe",
-        r"manage\s+subscriptions?",
-        r"manage\s+your\s+subscriptions?",
-        r"stop\s+receiving",
-        r"click\s+here.*unsubscribe",
-        r"list-id",
-        r"mailing\s+list",
-    ]
-    return any(re.search(p, text_lower) for p in patterns)
+    return bool(_UNSUBSCRIBE_FEATURE_RE.search(text.lower()))
 
 
 def _detect_calendar(text: str) -> bool:
     """Detect calendar/invite signals in text."""
     if not text:
         return False
-    text_lower = text.lower()
-    keywords = ["invitation", "invite", "meeting", "event", "calendar", "ics"]
-    return any(kw in text_lower for kw in keywords)
+    return bool(_CALENDAR_RE.search(text.lower()))
 
 
 def _detect_finance(text: str) -> bool:
     """Detect finance/payment signals in text."""
     if not text:
         return False
-    text_lower = text.lower()
-    keywords = ["payment", "invoice", "receipt", "transaction", "bill", "charge"]
-    return any(kw in text_lower for kw in keywords)
+    return bool(_FINANCE_RE.search(text.lower()))
 
 
 def extract_features(email: Email, true_label: Optional[str] = None) -> FeatureVector:
