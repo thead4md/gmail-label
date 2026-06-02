@@ -72,3 +72,55 @@ def test_reclassify_flag_forces_processing():
 
     fetcher.get_message.assert_called_once_with("force_me")
     pipeline.process.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Backfill: classify_only must NOT enqueue (no queue flood / no Gmail writes)
+# ---------------------------------------------------------------------------
+
+def test_classify_only_skips_queue_manager():
+    """classify_only=True stores the prediction but never calls the QueueManager."""
+    fetcher, pipeline, queue_manager = _make_components(has_prediction=False)
+    # Give it a scoring_breakdown so the queue WOULD be hit if not for classify_only
+    pipeline.process.return_value = MagicMock(
+        primary_label="WORK", priority_score=80,
+        scoring_breakdown=('{"total_score": 80, "base_score": 60, '
+                           '"rule_contribution": 10, "direct_mention_bonus": 0, '
+                           '"recency_bonus": 5, "sender_trust": 5}'),
+        id=1,
+    )
+
+    original_parse = main_mod.parse_message
+    main_mod.parse_message = MagicMock(
+        return_value=MagicMock(gmail_id="bf1", primary_label="WORK")
+    )
+    try:
+        _process_message_id("bf1", fetcher, pipeline, queue_manager, classify_only=True)
+    finally:
+        main_mod.parse_message = original_parse
+
+    pipeline.process.assert_called_once()          # still classified
+    queue_manager.enqueue_from_prediction.assert_not_called()  # but never enqueued
+
+
+def test_normal_path_does_enqueue():
+    """Without classify_only, a prediction with a scoring_breakdown IS enqueued."""
+    fetcher, pipeline, queue_manager = _make_components(has_prediction=False)
+    pipeline.process.return_value = MagicMock(
+        primary_label="WORK", priority_score=80,
+        scoring_breakdown=('{"total_score": 80, "base_score": 60, '
+                           '"rule_contribution": 10, "direct_mention_bonus": 0, '
+                           '"recency_bonus": 5, "sender_trust": 5}'),
+        id=1,
+    )
+
+    original_parse = main_mod.parse_message
+    main_mod.parse_message = MagicMock(
+        return_value=MagicMock(gmail_id="n1", primary_label="WORK")
+    )
+    try:
+        _process_message_id("n1", fetcher, pipeline, queue_manager)
+    finally:
+        main_mod.parse_message = original_parse
+
+    queue_manager.enqueue_from_prediction.assert_called_once()

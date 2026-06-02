@@ -32,10 +32,21 @@ class GmailFetcher:
         self.user_id = user_id
         self.rate_limit_seconds = rate_limit_seconds
 
-    def list_message_ids(self, label_ids: Optional[List[str]] = None, max_results: int = 100) -> List[str]:
+    def list_message_ids(
+        self,
+        label_ids: Optional[List[str]] = None,
+        max_results: int = 100,
+        query: Optional[str] = None,
+    ) -> List[str]:
         """Return a list of message ids from the user's mailbox.
 
         This method pages through results until `max_results` or exhausted.
+
+        Args:
+            query: Optional Gmail search query (the API ``q`` parameter), e.g.
+                ``"newer_than:3m"`` or ``"after:2026/03/02"``. Combined with
+                ``label_ids`` (AND semantics). Used by the backfill command to
+                pull a historical date range rather than just unread mail.
         """
         ids: List[str] = []
         page_token: Optional[str] = None
@@ -45,7 +56,8 @@ class GmailFetcher:
                 return (
                     self.service.users()
                     .messages()
-                    .list(userId=self.user_id, labelIds=label_ids or [], pageToken=page_token, maxResults=min(500, max_results))
+                    .list(userId=self.user_id, labelIds=label_ids or [], q=query,
+                          pageToken=page_token, maxResults=min(500, max_results))
                     .execute()
                 )
 
