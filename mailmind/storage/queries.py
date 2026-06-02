@@ -423,15 +423,17 @@ def update_sender_profile(
 
 
 def get_pending_queue_enriched(
-    db: Database, limit: int = 100, account: Optional[str] = None
+    db: Database, limit: Optional[int] = 100, account: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Return pending queue items enriched with email and sender info.
 
     Joins action_queue with emails and sender_profiles to provide full context
     for dashboard display. When *account* is given, only that mailbox's items
-    are returned; otherwise all accounts.
+    are returned; otherwise all accounts. ``limit=None`` means no limit
+    (SQLite binds NULL as a datatype mismatch, so coalesce to -1 = unbounded).
     """
+    limit = -1 if limit is None else limit
     account_clause = " AND aq.account = ?" if account else ""
     params: tuple = (account, limit) if account else (limit,)
     rows = db.execute_sql(
