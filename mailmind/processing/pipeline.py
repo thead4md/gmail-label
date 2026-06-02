@@ -106,7 +106,9 @@ class Pipeline:
         # 3a. Run classifier router (OpenAI LLM third-tier fallback) if available
         routing_result: Optional[RoutingResult] = None
         if self.classifier_router is not None:
-            routing_result = self.classifier_router.route(email)
+            # Reuse the rules already evaluated above (line ~90) instead of
+            # letting route() run them a second time.
+            routing_result = self.classifier_router.route(email, rule_matches=rule_matches)
             if routing_result is not None:
                 LOG.info(
                     "email %s classified by %s \u2192 %s (%.2f)",

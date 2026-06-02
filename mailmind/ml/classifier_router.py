@@ -59,10 +59,17 @@ class ClassifierRouter:
         self.ml_threshold = ml_threshold
         self.llm_enabled = llm_enabled
 
-    def route(self, email: Email) -> RoutingResult:
-        """Route an email through the classifier tiers."""
+    def route(self, email: Email, rule_matches: Optional[list] = None) -> RoutingResult:
+        """Route an email through the classifier tiers.
+
+        rule_matches: pre-computed RulesEngine.evaluate(email) result. When the
+        caller (Pipeline.process) already ran the rules, pass them in to avoid a
+        redundant second evaluation. None → evaluate here (back-compat for any
+        direct callers / tests).
+        """
         # --- TIER 1: Rules Engine ---
-        rule_matches = self.rules_engine.evaluate(email)
+        if rule_matches is None:
+            rule_matches = self.rules_engine.evaluate(email)
         matched_rules = [m for m in rule_matches if m.matched]
         rules_label, rules_confidence = self._extract_rules_result(matched_rules, email)
 
