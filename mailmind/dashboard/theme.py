@@ -419,6 +419,7 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
 """
 
 
+@st.cache_resource
 def inject_css() -> None:
     """Inject the full MailMind CSS theme into the current Streamlit page."""
     st.markdown(f"<style>{_CSS}</style>", unsafe_allow_html=True)

@@ -88,6 +88,64 @@ def get_db() -> Database:
     return Database(db_path)
 
 
+# ---------------------------------------------------------------------------
+# Cached read queries. TTLs chosen per volatility. Cleared by _invalidate()
+# after any write (approve/reject/correct/toggle) so the UI never goes stale.
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def _c_pending(limit, account):
+    return get_pending_queue_enriched(get_db(), limit=limit, account=account)
+
+@st.cache_data(ttl=300)
+def _c_recent_predictions(account):
+    return get_recent_predictions_with_emails(get_db(), limit=200, account=account)
+
+@st.cache_data(ttl=60)
+def _c_queue_stats(account):
+    return get_queue_stats(get_db(), account=account)
+
+@st.cache_data(ttl=60)
+def _c_digest(since_ts, account):
+    return build_digest(get_db(), since_ts=since_ts, account=account)
+
+@st.cache_data(ttl=600)
+def _c_sender_profiles():
+    return get_sender_profiles(get_db())
+
+@st.cache_data(ttl=60)
+def _c_new_senders(account):
+    return get_new_senders(get_db(), account=account)
+
+@st.cache_data(ttl=3600)
+def _c_model_metadata():
+    return get_ml_model_metadata(get_db())
+
+@st.cache_data(ttl=300)
+def _c_label_dist(since, account):
+    return analytics_label_distribution(get_db(), since, account)
+
+@st.cache_data(ttl=300)
+def _c_channel_dist(since, account):
+    return analytics_channel_distribution(get_db(), since, account)
+
+@st.cache_data(ttl=300)
+def _c_channel_weekday(since, account):
+    return analytics_channel_weekday(get_db(), since, account)
+
+@st.cache_data(ttl=300)
+def _c_top_senders(since, account):
+    return analytics_top_senders(get_db(), since, account=account)
+
+@st.cache_data(ttl=300)
+def _c_decision_times(since, account):
+    return analytics_decision_times(get_db(), since, account)
+
+def _invalidate() -> None:
+    """Clear all cached reads after a write so the UI reflects it immediately."""
+    st.cache_data.clear()
+
+
 def get_accounts() -> List[str]:
     return MailMindConfig.load_accounts()
 
@@ -126,7 +184,7 @@ def _section(icon: str, title: str) -> None:
 
 def render_now_tab(account: Optional[str] = None) -> None:
     db       = get_db()
-    all_items = get_pending_queue_enriched(db, limit=200, account=account)
+    all_items = _c_pending(200, account)
     now_items = filter_now_items(all_items, queue_threshold=QueueManager.QUEUE_THRESHOLD)
 
     if not now_items:
@@ -187,6 +245,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
                 acted = handle_approve(db, item_id, executor=get_action_executor())
                 if acted:
                     st.toast(f"✅ {subject[:50]}", icon="✅")
+                    _invalidate()
                     st.rerun()
                 else:
                     st.warning("Already processed or no longer exists.")
@@ -272,7 +331,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
     db = get_db()
 
     # ── New senders ──────────────────────────────────────────────────
-    new_senders = get_new_senders(db, account=account)
+    new_senders = _c_new_senders(account)
     if new_senders:
         _section("🆕", f"New senders — {len(new_senders)}")
         for i, s in enumerate(new_senders):
@@ -288,17 +347,17 @@ def render_review_tab(account: Optional[str] = None) -> None:
                 )
             with c_know:
                 if st.button("✅ Know", key=f"know_{i}_{sender}"):
-                    handle_know_sender(db, sender); st.toast("Trusted", icon="✅"); st.rerun()
+                    handle_know_sender(db, sender); st.toast("Trusted", icon="✅"); _invalidate(); st.rerun()
             with c_mute:
                 if st.button("🔇 Mute", key=f"mute_{i}_{sender}"):
-                    handle_mute_sender(db, sender); st.toast("Muted", icon="🔇"); st.rerun()
+                    handle_mute_sender(db, sender); st.toast("Muted", icon="🔇"); _invalidate(); st.rerun()
             with c_block:
                 if st.button("🚫 Block", key=f"block_{i}_{sender}"):
-                    handle_block_sender(db, sender); st.toast("Blocked", icon="🚫"); st.rerun()
+                    handle_block_sender(db, sender); st.toast("Blocked", icon="🚫"); _invalidate(); st.rerun()
 
     # ── Recent predictions ───────────────────────────────────────────
     _section("📊", "Recent predictions")
-    preds = get_recent_predictions_with_emails(db, limit=200, account=account)
+    preds = _c_recent_predictions(account)
     if preds:
         df = pd.DataFrame(preds)
         df["date"] = df["date"].apply(lambda ts: format_unix_ts(ts) if ts else "")
@@ -308,7 +367,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
         st.info("No predictions yet — run the pipeline to classify emails.")
 
     # ── Pending approval ─────────────────────────────────────────────
-    items = get_pending_queue_enriched(db, account=account)
+    items = _c_pending(None, account)
     _section("⏳", f"Pending approval — {len(items)} items")
 
     if not items:
@@ -373,6 +432,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                     acted = handle_approve(db, item_id, executor=get_action_executor())
                     if acted:
                         st.toast("✅ Approved", icon="✅")
+                        _invalidate()
                         st.rerun()
                     else:
                         st.warning("Already processed or no longer exists.")
@@ -384,6 +444,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                     acted = handle_reject(db, item_id)
                     if acted:
                         st.toast("❌ Rejected", icon="❌")
+                        _invalidate()
                         st.rerun()
                     else:
                         st.warning("Already processed or no longer exists.")
@@ -407,6 +468,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                         if acted:
                             st.toast(f"✏️ → {new_label}", icon="✏️")
                             st.session_state.pop(f"edit_review_{item_id}", None)
+                            _invalidate()
                             st.rerun()
                         else:
                             st.warning("Item no longer exists.")
@@ -461,7 +523,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
         digest_days = st.slider("Window (days)", 1, 30, 7, key="digest_days")
 
     since_ts = int(_time.time()) - digest_days * 86400
-    digest   = build_digest(db, since_ts=since_ts, account=account)
+    digest   = _c_digest(since_ts, account)
 
     d1, d2, d3, d4, d5 = st.columns(5)
     with d1: st.metric("Classified",  digest["classified"])
@@ -484,7 +546,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
 
     # ── Sender profiles ─────────────────────────────────────────────
     _section("👤", "Sender profiles")
-    profiles = get_sender_profiles(db)
+    profiles = _c_sender_profiles()
 
     if profiles:
         # Summary dataframe
@@ -525,6 +587,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                 new_val = st.toggle("", value=current, key=f"auto_{email_key}")
                 if new_val != current:
                     toggle_sender_auto_action(db, email_key, new_val)
+                    _invalidate()
                     st.toast(
                         f"Autopilot {'on' if new_val else 'off'} — {email_key}",
                         icon="⚡" if new_val else "⏸️",
@@ -534,7 +597,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
 
     # ── Model health ────────────────────────────────────────────────
     _section("🤖", "Model health")
-    model_meta = get_ml_model_metadata(db)
+    model_meta = _c_model_metadata()
 
     if model_meta:
         c1, c2, c3 = st.columns(3)
@@ -554,7 +617,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
 
     # ── Queue statistics ────────────────────────────────────────────
     _section("📬", "Queue statistics")
-    stats = get_queue_stats(db, account=account)
+    stats = _c_queue_stats(account)
 
     s1, s2, s3, s4, s5, s6 = st.columns(6)
     with s1: st.metric("Pending",    stats.get("pending",    0))
@@ -641,27 +704,27 @@ def render_insights_tab(account: Optional[str] = None) -> None:
 
     _section("📊", "Label distribution")
     _chart_or_info(
-        charts.label_distribution_chart(analytics_label_distribution(db, since, account)),
+        charts.label_distribution_chart(_c_label_dist(since, account)),
         "No data yet.")
 
     _section("📨", "Channel volume")
     _chart_or_info(
-        charts.channel_distribution_chart(analytics_channel_distribution(db, since, account)),
+        charts.channel_distribution_chart(_c_channel_dist(since, account)),
         "No data yet.")
 
     _section("🗓️", "Channel × weekday")
     _chart_or_info(
-        charts.channel_weekday_heatmap(analytics_channel_weekday(db, since, account)),
+        charts.channel_weekday_heatmap(_c_channel_weekday(since, account)),
         "No data yet.")
 
     _section("👤", "Top senders")
     _chart_or_info(
-        charts.top_senders_chart(analytics_top_senders(db, since, account=account)),
+        charts.top_senders_chart(_c_top_senders(since, account)),
         "No data yet.")
 
     _section("⏱️", "Time to decision")
     _chart_or_info(
-        charts.decision_time_chart(analytics_decision_times(db, since, account)),
+        charts.decision_time_chart(_c_decision_times(since, account)),
         "No reviewed items yet.")
 
 
