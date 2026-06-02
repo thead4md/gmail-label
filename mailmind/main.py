@@ -208,6 +208,7 @@ def _process_message_id(
     queue_manager: QueueManager,
     reclassify: bool = False,
     account: Optional[str] = None,
+    classify_only: bool = False,
 ) -> None:
     """Fetch one message, persist it, run the classification pipeline.
 
@@ -220,6 +221,10 @@ def _process_message_id(
             immutable email every poll cycle just wastes a Gmail fetch and an
             LLM call. The Gmail message id IS our gmail_id, so this check runs
             before the expensive get_message() call.
+        classify_only: If True, store the prediction (label + channel) but skip
+            the QueueManager entirely. Used by the backfill command so a large
+            historical sweep populates training data WITHOUT flooding the review
+            queue or triggering any action execution.
     """
     if not reclassify and pipeline.db.has_prediction(message_id):
         LOG.debug("Skipping %s — already classified.", message_id)
@@ -260,6 +265,11 @@ def _process_message_id(
             rows = pipeline.db.get_predictions_for_email(email.gmail_id)
             if rows:
                 prediction.id = rows[0]["id"]
+
+        # Backfill path: store the prediction (label + channel) for training,
+        # but never enqueue — a 3-month sweep must not flood the review queue.
+        if classify_only:
+            return
 
         # Feed prediction into the QueueManager if we have a scoring breakdown
         if prediction.scoring_breakdown:
@@ -573,6 +583,112 @@ def prune(retention_days: Optional[int], no_vacuum: bool) -> None:
     if not no_vacuum:
         db.vacuum()
     click.echo(f"Pruned (retention={days}d): {counts}")
+
+
+def _backfill_one_account(
+    db: Database,
+    months: int,
+    max_emails: int,
+    no_llm: bool,
+    reclassify: bool,
+    account: Optional[str],
+    auth_account: Optional[str],
+    allow_interactive: bool,
+) -> int:
+    """Classify-only sweep of one mailbox over the last `months` months.
+
+    Fetches INBOX mail in the date window (read + unread), classifies each,
+    and stores the prediction (label + channel). Never enqueues actions and
+    never writes to Gmail. Returns the number of messages processed.
+    """
+    label = account or "primary"
+    creds = load_stored_credentials(auth_account)
+    if creds is None:
+        if allow_interactive:
+            creds = authenticate(account=auth_account)
+        else:
+            LOG.warning("No stored credentials for mailbox %s — skipping.", label)
+            return 0
+    service = build_gmail_service(creds)
+    fetcher = GmailFetcher(service)
+
+    config = MailMindConfig.from_env()
+    llm_client = None
+    if config.llm_enabled and not no_llm:
+        llm_client = DeepSeekClient(config)
+        LOG.info("[%s] Backfill LLM stage: enabled (%s)", label, config.deepseek_model)
+    else:
+        LOG.info("[%s] Backfill LLM stage: disabled (cost control)", label)
+
+    # dry_run=True: a backfill must never mutate Gmail.
+    pipeline, queue_manager = _build_components(db, dry_run=True, service=service,
+                                                llm_client=llm_client)
+
+    query = f"newer_than:{months}m"
+    LOG.info("[%s] Backfill: listing INBOX message IDs for q=%r (max %d)…",
+             label, query, max_emails)
+    message_ids = fetcher.list_message_ids(
+        label_ids=["INBOX"], max_results=max_emails, query=query,
+    )
+    LOG.info("[%s] Backfill: %d messages in window.", label, len(message_ids))
+
+    processed = 0
+    for i, mid in enumerate(message_ids, 1):
+        _process_message_id(
+            mid, fetcher, pipeline, queue_manager,
+            reclassify=reclassify, account=account, classify_only=True,
+        )
+        processed += 1
+        if i % 100 == 0:
+            LOG.info("[%s] Backfill progress: %d/%d", label, i, len(message_ids))
+
+    LOG.info("[%s] Backfill complete: %d processed.", label, processed)
+    return processed
+
+
+@cli.command()
+@click.option("--months", default=3, type=int, help="Look-back window in months (default: 3).")
+@click.option("--max-emails", default=2000, type=int,
+              help="Max messages to fetch per mailbox (default: 2000).")
+@click.option("--account", default=None, help="Scope to a single mailbox (default: all).")
+@click.option("--with-llm", is_flag=True, default=False,
+              help="Use the DeepSeek LLM tier (costs money; off by default).")
+@click.option("--reclassify", is_flag=True, default=False,
+              help="Re-classify emails that already have a prediction.")
+def backfill(months: int, max_emails: int, account: Optional[str],
+             with_llm: bool, reclassify: bool) -> None:
+    """Classify the last N months of INBOX mail to seed categories + ML training.
+
+    Classify-only: stores label + channel for every email in the window but
+    never enqueues actions and never writes to Gmail. Idempotent — already
+    classified emails are skipped unless --reclassify is given. After it runs,
+    retrain with: python -m mailmind.scripts.train_ml_model
+    """
+    db = _get_db()
+    no_llm = not with_llm
+    accounts = MailMindConfig.load_accounts()
+
+    if account:
+        targets = [account]
+    elif accounts:
+        targets = accounts
+    else:
+        targets = [None]  # legacy single-account
+
+    total = 0
+    for acct in targets:
+        auth_account = _auth_account_for(acct) if acct else None
+        # Primary (or legacy) may use interactive auth; secondaries are skipped if unconnected.
+        is_primary = (acct is None) or (accounts and acct == accounts[0])
+        total += _backfill_one_account(
+            db, months=months, max_emails=max_emails, no_llm=no_llm,
+            reclassify=reclassify, account=acct, auth_account=auth_account,
+            allow_interactive=bool(is_primary),
+        )
+
+    click.echo(f"Backfill complete: {total} message(s) classified across "
+               f"{len(targets)} mailbox(es), window={months}m, llm={'on' if with_llm else 'off'}.")
+    click.echo("Next: python -m mailmind.scripts.train_ml_model  (to retrain on the new data)")
 
 
 def _auth_account_for(account: Optional[str]) -> Optional[str]:
