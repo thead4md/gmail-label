@@ -299,6 +299,29 @@ def test_get_pending_queue_enriched(db, sample_email, sample_prediction):
     assert row["subject"] == "Test message"
 
 
+def test_get_pending_queue_enriched_limit_none(db, sample_email, sample_prediction):
+    """limit=None must mean 'no limit', not crash with SQLite LIMIT NULL.
+
+    The REVIEW tab calls this with limit=None. SQLite raises
+    'IntegrityError: datatype mismatch' on LIMIT NULL, so the function must
+    coalesce None to an unbounded query. (Dashboard tests mock this query, so
+    only a real-DB test catches the regression.)
+    """
+    fp = make_action_fingerprint(sample_email.gmail_id, "star", {})
+    upsert_queue_item(db, QueueItem(
+        email_gmail_id=sample_email.gmail_id,
+        prediction_id=sample_prediction.id,
+        action="star", params={}, action_fingerprint=fp,
+        status="pending", confidence=0.85, priority_score=85,
+        reason_json={"reason": "test"},
+    ))
+
+    results = get_pending_queue_enriched(db, limit=None)       # no account
+    assert len(results) == 1
+    results_acct = get_pending_queue_enriched(db, limit=None, account=None)
+    assert len(results_acct) == 1
+
+
 # ---------------------------------------------------------------------------
 # Step 4 regression: DB-level UNIQUE constraint on action_fingerprint
 # ---------------------------------------------------------------------------
