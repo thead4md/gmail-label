@@ -9,6 +9,14 @@ primary_region = "ams"
   MAILMIND_DATA_DIR = "/data/.mailmind"
   MAILMIND_MODEL_PATH = "/data/.mailmind/model.pkl"
   MAILMIND_POLL_SECONDS = "120"
+  # CPU optimization: pin numpy/scikit-learn BLAS + OpenMP to a single thread.
+  # The machine has one shared vCPU; without these, BLAS oversubscribes threads
+  # that contend over that one core (context-switch overhead) and allocate extra
+  # per-thread memory. Single-threaded is faster here and trims the OOM margin.
+  OMP_NUM_THREADS = "1"
+  OPENBLAS_NUM_THREADS = "1"
+  MKL_NUM_THREADS = "1"
+  NUMEXPR_NUM_THREADS = "1"
 
 [[mounts]]
   source = "mailmind_data"
@@ -16,6 +24,9 @@ primary_region = "ams"
   processes = ["app"]
 
 [[vm]]
+  # Right-sized for a single-user, bursty workload (120s poll + weekly retrain).
+  # Observed load avg ~0.11 on 1 core (≈90% idle) — more CPUs would sit unused.
+  # The earlier crash was a MEMORY (OOM) issue, fixed by 512mb → 1gb. Keep shared/1.
   memory = "1gb"
   cpu_kind = "shared"
   cpus = 1
