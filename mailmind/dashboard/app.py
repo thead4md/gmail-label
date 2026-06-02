@@ -18,8 +18,11 @@ import streamlit as st
 
 from mailmind.config import MailMindConfig
 from mailmind.dashboard.helpers import (
+    action_items_html,
     channel_chip_html,
     confidence_bar_html,
+    confidence_sparkline_html,
+    deadline_pill_html,
     email_card_html,
     filter_now_items,
     format_unix_ts,
@@ -32,6 +35,7 @@ from mailmind.dashboard.helpers import (
     sender_avatar_html,
     trust_badge_html,
 )
+from mailmind.dashboard import charts
 from mailmind.dashboard.theme import (
     LABEL_COLORS,
     channel_color,
@@ -39,12 +43,21 @@ from mailmind.dashboard.theme import (
     label_color,
     trust_color,
 )
-from mailmind.intelligence.feedback import handle_approve, handle_correction, handle_reject
+from mailmind.intelligence.feedback import (
+    handle_approve, handle_correction, handle_reject,
+    handle_know_sender, handle_mute_sender, handle_block_sender,
+)
 from mailmind.processing.queue_manager import QueueManager
 from mailmind.storage.database import Database
 from mailmind.storage.queries import (
+    analytics_channel_distribution,
+    analytics_channel_weekday,
+    analytics_decision_times,
+    analytics_label_distribution,
+    analytics_top_senders,
     build_digest,
     get_ml_model_metadata,
+    get_new_senders,
     get_pending_queue_enriched,
     get_queue_stats,
     get_recent_predictions_with_emails,
@@ -160,6 +173,12 @@ def render_now_tab(account: Optional[str] = None) -> None:
             unsafe_allow_html=True,
         )
 
+        # Action items and deadlines
+        ai_html = action_items_html(reason.get("action_items"))
+        dl_html = deadline_pill_html(reason.get("deadlines"))
+        if ai_html or dl_html:
+            st.markdown(dl_html + ai_html, unsafe_allow_html=True)
+
         # Approve button below the card
         col_btn, col_spacer = st.columns([1, 5])
         with col_btn:
@@ -192,6 +211,10 @@ def _render_reason_panel(reason: Dict[str, Any], item: Dict[str, Any]) -> None:
     conf = item.get("confidence")
     if conf is not None:
         rows.append(("Confidence", confidence_bar_html(conf)))
+
+    spark = confidence_sparkline_html(reason)
+    if spark:
+        rows.append(("Confidence trend", spark))
 
     tier = item.get("trust_tier") or reason.get("trust_tier")
     if tier:
@@ -247,6 +270,31 @@ def _render_reason_panel(reason: Dict[str, Any], item: Dict[str, Any]) -> None:
 
 def render_review_tab(account: Optional[str] = None) -> None:
     db = get_db()
+
+    # ── New senders ──────────────────────────────────────────────────
+    new_senders = get_new_senders(db, account=account)
+    if new_senders:
+        _section("🆕", f"New senders — {len(new_senders)}")
+        for i, s in enumerate(new_senders):
+            sender = s["sender"]
+            c_name, c_know, c_mute, c_block = st.columns([3, 1, 1, 1])
+            with c_name:
+                st.markdown(
+                    f'{sender_avatar_html(sender)}&nbsp;'
+                    f'<span style="font-size:13px;">{sender}</span> '
+                    f'<span style="font-size:11px;color:#94A3B8;">'
+                    f'{s["pending_count"]} pending</span>',
+                    unsafe_allow_html=True,
+                )
+            with c_know:
+                if st.button("✅ Know", key=f"know_{i}_{sender}"):
+                    handle_know_sender(db, sender); st.toast("Trusted", icon="✅"); st.rerun()
+            with c_mute:
+                if st.button("🔇 Mute", key=f"mute_{i}_{sender}"):
+                    handle_mute_sender(db, sender); st.toast("Muted", icon="🔇"); st.rerun()
+            with c_block:
+                if st.button("🚫 Block", key=f"block_{i}_{sender}"):
+                    handle_block_sender(db, sender); st.toast("Blocked", icon="🚫"); st.rerun()
 
     # ── Recent predictions ───────────────────────────────────────────
     _section("📊", "Recent predictions")
@@ -578,12 +626,15 @@ def main() -> None:
     inject_css()
     account = _render_sidebar()
 
-    tab_now, tab_review, tab_automate = st.tabs(["📍 NOW", "📋 REVIEW", "⚙️ AUTOMATE"])
+    tab_now, tab_review, tab_insights, tab_automate = st.tabs(
+        ["📍 NOW", "📋 REVIEW", "📈 INSIGHTS", "⚙️ AUTOMATE"])
 
     with tab_now:
         render_now_tab(account)
     with tab_review:
         render_review_tab(account)
+    with tab_insights:
+        render_insights_tab(account)
     with tab_automate:
         render_automate_tab(account)
 

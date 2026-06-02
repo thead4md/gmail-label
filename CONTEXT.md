@@ -5983,7 +5983,8 @@ graph TD
 | `mailmind/config.py` | Configuration management for MailMind Pass 7+. | MailMindConfig | ✅ Complete |
 | `mailmind/dashboard/__init__.py` |  | — | ✅ Stable |
 | `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), get_action_executor(), render_now_tab(), render_review_tab(), render_automate_tab(), main() | ✅ Complete |
-| `mailmind/dashboard/helpers.py` |  | filter_now_items(), get_time_ago_str(), format_unix_ts(), get_confidence_badge(), get_heartbeat_status(), parse_reason_json(), sender_avatar_html(), label_chip_html(), channel_chip_html(), confidence_bar_html(), trust_badge_html(), reply_needed_pill_html(), email_card_html() | ✅ Complete |
+| `mailmind/dashboard/charts.py` | Altair chart builders for the INSIGHTS tab. Dark-theme styled. | label_distribution_chart(), channel_distribution_chart(), top_senders_chart(), decision_time_chart(), channel_weekday_heatmap() | ✅ Complete |
+| `mailmind/dashboard/helpers.py` |  | filter_now_items(), get_time_ago_str(), format_unix_ts(), get_confidence_badge(), get_heartbeat_status(), parse_reason_json(), sender_avatar_html(), label_chip_html(), channel_chip_html(), confidence_bar_html(), trust_badge_html(), reply_needed_pill_html(), email_card_html(), action_items_html(), deadline_pill_html(), confidence_sparkline_html() | ✅ Complete |
 | `mailmind/dashboard/theme.py` | MailMind Dashboard — CSS design system. | label_color(), channel_color(), trust_color(), inject_css() | ✅ Complete |
 | `mailmind/ingestion/__init__.py` | Ingestion package: Gmail auth, fetching, and parsing. | — | ✅ Stable |
 | `mailmind/ingestion/auth.py` | Gmail OAuth2 authentication helpers for MailMind. | load_stored_credentials(), authenticate(), build_gmail_service() | ✅ Complete |
@@ -5992,7 +5993,7 @@ graph TD
 | `mailmind/intelligence/__init__.py` |  | — | ✅ Stable |
 | `mailmind/intelligence/channels.py` | MailMind — email channel detection. | detect_channel(), enrich_prediction_with_channel() | ✅ Complete |
 | `mailmind/intelligence/explainer.py` |  | ReasonPayload, build_reason_payload() | ✅ Complete |
-| `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction() | ✅ Complete |
+| `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction(), handle_know_sender(), handle_mute_sender(), handle_block_sender() | ✅ Complete |
 | `mailmind/intelligence/sender_memory.py` |  | SenderProfileSummary, get_sender_profile(), get_sender_trust_tier(), update_from_outcome(), get_similar_sender_history() | ✅ Complete |
 | `mailmind/intelligence/thread_analyzer.py` | MailMind — thread and reply-needed intelligence. | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
@@ -6017,7 +6018,7 @@ graph TD
 | `mailmind/storage/database.py` | Database abstraction for MailMind using SQLite. | Database, open_database_from_config_path() | ✅ Complete |
 | `mailmind/storage/migrations.py` | Migration definitions and application helpers for MailMind SQLite schema. | apply_migrations() | ✅ Complete |
 | `mailmind/storage/models.py` | Data models for MailMind storage layer. | now_ts(), Email, Prediction, ActionApplied, Feedback, SenderReputation, SystemState, QueueItem | ✅ Complete |
-| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata() | ✅ Complete |
+| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata(), get_new_senders(), set_sender_trust_tier(), analytics_label_distribution(), analytics_channel_distribution(), analytics_top_senders(), analytics_decision_times(), analytics_channel_weekday() | ✅ Complete |
 | `mailmind/utils/__init__.py` |  | — | ✅ Stable |
 | `mailmind/utils/fingerprint.py` |  | make_action_fingerprint() | ✅ Complete |
 <!-- AUTO:END:module_map -->
@@ -7606,7 +7607,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 437 tests passing.
+Pass 7 complete. 463 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

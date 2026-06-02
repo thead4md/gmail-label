@@ -758,3 +758,130 @@ def get_ml_model_metadata(db: Database) -> Optional[Dict[str, Any]]:
         "version": meta.get("version"),
     }
 
+
+def get_new_senders(db: Database, account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return distinct senders with NO approve/reject history yet.
+
+    A sender is 'new' if they have no sender_profiles row, or a row with
+    zero recorded decisions (total_approved + total_rejected == 0).
+    Scoped to pending queue items so the screening list stays actionable.
+    """
+    account_clause = " AND aq.account = ?" if account else ""
+    params: tuple = (account,) if account else ()
+    rows = db.execute_sql(
+        f"""
+        SELECT DISTINCT e.sender               AS sender,
+                        COUNT(aq.id)            AS pending_count,
+                        MAX(aq.created_at)      AS last_seen
+        FROM action_queue aq
+        JOIN emails e ON e.gmail_id = aq.email_gmail_id
+        LEFT JOIN sender_profiles sp ON sp.sender_email = e.sender
+        WHERE aq.status = 'pending'{account_clause}
+          AND (sp.sender_email IS NULL
+               OR (COALESCE(sp.total_approved,0) + COALESCE(sp.total_rejected,0)) = 0)
+        GROUP BY e.sender
+        ORDER BY last_seen DESC
+        """,
+        params if params else None,
+    ).fetchall()
+    return [
+        {"sender": r["sender"], "pending_count": r["pending_count"],
+         "last_seen": r["last_seen"]}
+        for r in rows if r["sender"]
+    ]
+
+
+def set_sender_trust_tier(db: Database, sender_email: str, tier: str) -> None:
+    """Force a sender's trust_tier directly (used by new-sender screening).
+
+    tier must be one of: 'trusted', 'neutral', 'watchlist'.
+    Creates the profile row if absent.
+    """
+    if tier not in ("trusted", "neutral", "watchlist"):
+        raise ValueError(f"invalid tier: {tier}")
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO sender_profiles "
+            "(sender_email, total_seen, total_approved, total_rejected, last_action_ts, trust_tier) "
+            "VALUES (?, 0, 0, 0, ?, ?)",
+            (sender_email, now, tier),
+        )
+        cur.execute(
+            "UPDATE sender_profiles SET trust_tier = ?, last_action_ts = ? WHERE sender_email = ?",
+            (tier, now, sender_email),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Analytics queries for INSIGHTS tab
+# ---------------------------------------------------------------------------
+
+
+def analytics_label_distribution(db: Database, since_ts: int,
+                                  account: Optional[str] = None) -> List[Dict[str, Any]]:
+    acc = " AND account = ?" if account else ""
+    p = (since_ts, account) if account else (since_ts,)
+    rows = db.execute_sql(
+        f"""SELECT primary_label AS label, COUNT(*) AS count
+            FROM predictions
+            WHERE created_at >= ? AND primary_label IS NOT NULL{acc}
+            GROUP BY primary_label ORDER BY count DESC""", p).fetchall()
+    return [{"label": r["label"], "count": r["count"]} for r in rows]
+
+
+def analytics_channel_distribution(db: Database, since_ts: int,
+                                   account: Optional[str] = None) -> List[Dict[str, Any]]:
+    acc = " AND account = ?" if account else ""
+    p = (since_ts, account) if account else (since_ts,)
+    rows = db.execute_sql(
+        f"""SELECT COALESCE(channel,'unknown') AS channel, COUNT(*) AS count
+            FROM predictions
+            WHERE created_at >= ?{acc}
+            GROUP BY channel ORDER BY count DESC""", p).fetchall()
+    return [{"channel": r["channel"], "count": r["count"]} for r in rows]
+
+
+def analytics_top_senders(db: Database, since_ts: int, limit: int = 10,
+                          account: Optional[str] = None) -> List[Dict[str, Any]]:
+    acc = " AND aq.account = ?" if account else ""
+    p = (since_ts, account, limit) if account else (since_ts, limit)
+    rows = db.execute_sql(
+        f"""SELECT e.sender AS sender, COUNT(*) AS volume,
+                   SUM(CASE WHEN aq.status IN ('approved','executed') THEN 1 ELSE 0 END) AS approved
+            FROM action_queue aq JOIN emails e ON e.gmail_id = aq.email_gmail_id
+            WHERE aq.created_at >= ?{acc}
+            GROUP BY e.sender ORDER BY volume DESC LIMIT ?""", p).fetchall()
+    out = []
+    for r in rows:
+        vol = r["volume"] or 0
+        appr = r["approved"] or 0
+        out.append({"sender": r["sender"], "volume": vol,
+                    "approval_rate": round(appr / vol, 3) if vol else 0.0})
+    return out
+
+
+def analytics_decision_times(db: Database, since_ts: int,
+                             account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Minutes between created_at and reviewed_at for reviewed items."""
+    acc = " AND account = ?" if account else ""
+    p = (since_ts, account) if account else (since_ts,)
+    rows = db.execute_sql(
+        f"""SELECT (reviewed_at - created_at) AS secs
+            FROM action_queue
+            WHERE reviewed_at IS NOT NULL AND created_at >= ?{acc}""", p).fetchall()
+    return [{"minutes": round((r["secs"] or 0) / 60.0, 1)} for r in rows if r["secs"] is not None]
+
+
+def analytics_channel_weekday(db: Database, since_ts: int,
+                              account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """channel × weekday counts for a heatmap (weekday 0=Sun..6=Sat per SQLite %w)."""
+    acc = " AND account = ?" if account else ""
+    p = (since_ts, account) if account else (since_ts,)
+    rows = db.execute_sql(
+        f"""SELECT COALESCE(channel,'unknown') AS channel,
+                   CAST(strftime('%w', created_at, 'unixepoch') AS INTEGER) AS weekday,
+                   COUNT(*) AS count
+            FROM predictions WHERE created_at >= ?{acc}
+            GROUP BY channel, weekday""", p).fetchall()
+    return [{"channel": r["channel"], "weekday": r["weekday"], "count": r["count"]} for r in rows]
