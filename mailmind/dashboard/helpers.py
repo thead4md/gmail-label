@@ -272,3 +272,64 @@ def email_card_html(
   </div>
 </div>
 """
+
+
+def action_items_html(items: Optional[list]) -> str:
+    """Render a 📋 chip listing action items; empty string if none."""
+    items = items or []
+    if not items:
+        return ""
+    lines = "".join(
+        f'<div style="font-size:12px;color:#E2E8F0;padding:2px 0;">• {i}</div>'
+        for i in items[:5]
+    )
+    return (
+        f'<details style="margin-top:4px;">'
+        f'<summary style="font-size:11px;color:#5B8AF0;cursor:pointer;">'
+        f'📋 {len(items)} action item(s)</summary>{lines}</details>'
+    )
+
+
+def deadline_pill_html(deadlines: Optional[list]) -> str:
+    """Render a ⏰ red deadline pill; empty string if none."""
+    deadlines = deadlines or []
+    if not deadlines:
+        return ""
+    first = deadlines[0][:60]
+    return (
+        f'<span class="mm-chip" style="color:#FF4757;border-color:#FF475740;'
+        f'background:#FF475718;">⏰ {first}</span>'
+    )
+
+
+def confidence_sparkline_html(reason: Optional[dict]) -> str:
+    """Inline SVG sparkline of rules→ML→LLM confidence votes.
+    Reads ml_confidence / llm_confidence / score (0-100) from reason_json.
+    Returns '' if there is nothing to plot.
+    """
+    reason = reason or {}
+    pts = []
+    score = reason.get("score")
+    if isinstance(score, (int, float)):
+        pts.append(("rules", max(0.0, min(1.0, score / 100.0))))
+    if reason.get("ml_confidence") is not None:
+        pts.append(("ml", float(reason["ml_confidence"])))
+    if reason.get("llm_confidence") is not None:
+        pts.append(("llm", float(reason["llm_confidence"])))
+    if len(pts) < 2:
+        return ""
+    w, h, n = 120, 28, len(pts)
+    step = w / (n - 1)
+    coords = [(i * step, h - (v * h)) for i, (_, v) in enumerate(pts)]
+    path = " ".join(
+        ("M" if i == 0 else "L") + f"{x:.1f},{y:.1f}" for i, (x, y) in enumerate(coords)
+    )
+    dots = "".join(
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.5" fill="#5B8AF0"/>'
+        for x, y in coords
+    )
+    return (
+        f'<svg width="{w}" height="{h}" style="vertical-align:middle;">'
+        f'<path d="{path}" stroke="#5B8AF0" stroke-width="2" fill="none"/>'
+        f'{dots}</svg>'
+    )

@@ -39,6 +39,8 @@ class ThreadContext:
     open_question_detected: bool
     waiting_on_other_party: bool
     thread_summary:         Optional[str] = None
+    action_items:           list = None   # list[str]; defaults to [] in analyze()
+    deadlines:              list = None   # list[str]; defaults to [] in analyze()
 
 
 class ThreadAnalyzer:
@@ -96,11 +98,53 @@ class ThreadAnalyzer:
         re.I | re.UNICODE,
     )
 
+    # ── Action item signals ─────────────────────────────────────────
+    _ACTION_ITEM_RE = re.compile(
+        r"(please (review|send|complete|confirm|sign|approve|provide)|"
+        r"can you (please )?(send|review|complete|confirm|provide|sign)|"
+        r"could you (please )?(send|review|complete|provide)|"
+        r"we need you to|action required|"
+        # Hungarian imperatives
+        r"k[eé]rem (k[uü]ldje|n[eé]zze [aá]t|k[eé]sz[ií]tse|t[oö]ltse ki|"
+        r"ír[jJ]a al[aá]|hagyja j[oó]v[aá]|igazolja vissza|biztos[ií]tsa)|"
+        r"k[eé]rj[uü]k (k[uü]ldje|t[oö]ltse|er[oő]s[ií]tse)|"
+        r"sz[uü]ks[eé]g[uü]nk van|int[eé]zze el|v[eé]gezze el)",
+        re.I | re.UNICODE,
+    )
+
+    # ── Deadline signals ─────────────────────────────────────────────
+    _DEADLINE_RE = re.compile(
+        r"(by (monday|tuesday|wednesday|thursday|friday|tomorrow|end of day|eod|"
+        r"\d{1,2}(st|nd|rd|th)?)|"
+        r"due (date|by|on)|deadline|no later than|"
+        # Hungarian: határidő, péntekig, május 3-ig, ISO/dotted dates
+        r"hat[aá]rid[oő]|"
+        r"\w+ig\b|"                      # -ig suffix (péntekig, holnapig)
+        r"\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}|"  # 2026.06.02 / 2026-06-02
+        r"\d{1,2}-[aá]n|\d{1,2}-[eé]n)",     # 3-án, 5-én
+        re.I | re.UNICODE,
+    )
+
     # Hungarian "Válasz:" prefix = "Re:" in some email clients
     _HU_REPLY_SUBJECT_RE = re.compile(r"^(re:|fw:|fwd:|v[aá]lasz:|továbbítás:)", re.I | re.UNICODE)
 
     # Question mark — works the same in Hungarian
     _QUESTION_RE = re.compile(r"\?")
+
+    @staticmethod
+    def _extract_lines(body: str, pattern) -> list:
+        """Return up to 5 distinct matching sentences/lines, trimmed to 140 chars."""
+        out, seen = [], set()
+        for raw in re.split(r"[.\n!?]", body):
+            line = raw.strip()
+            if line and pattern.search(line):
+                key = line.lower()[:60]
+                if key not in seen:
+                    seen.add(key)
+                    out.append(line[:140])
+            if len(out) >= 5:
+                break
+        return out
 
     @classmethod
     def analyze(cls, email, db=None) -> ThreadContext:
@@ -126,6 +170,10 @@ class ThreadAnalyzer:
         # ── Waiting on other party ───────────────────────────────────
         waiting_on_other_party = bool(cls._WAITING_RE.search(body_lc))
 
+        # ── Action items and deadlines ──────────────────────────────
+        action_items = cls._extract_lines(body, cls._ACTION_ITEM_RE)
+        deadlines = cls._extract_lines(body, cls._DEADLINE_RE)
+
         # ── Thread summary (first meaningful line, ≤ 200 chars) ─────
         summary: Optional[str] = None
         try:
@@ -142,4 +190,6 @@ class ThreadAnalyzer:
             open_question_detected=open_question_detected,
             waiting_on_other_party=waiting_on_other_party,
             thread_summary=summary,
+            action_items=action_items,
+            deadlines=deadlines,
         )

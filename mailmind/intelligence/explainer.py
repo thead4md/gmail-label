@@ -20,6 +20,8 @@ class ReasonPayload:
     thread_summary: Optional[str]
     reply_needed: bool
     similar_past_actions: List[dict]
+    action_items: List[str]
+    deadlines: List[str]
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in self.__dict__.items()}, default=str)
@@ -61,9 +63,13 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
 
     thread_summary = None
     reply_needed = False
+    action_items: List[str] = []
+    deadlines: List[str] = []
     if thread_context:
         thread_summary = thread_context.get('thread_summary')
         reply_needed = thread_context.get('reply_needed', False)
+        action_items = thread_context.get('action_items') or []
+        deadlines = thread_context.get('deadlines') or []
 
     payload = ReasonPayload(
         primary_label=prediction.primary_label or '',
@@ -76,6 +82,8 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
         thread_summary=thread_summary,
         reply_needed=reply_needed,
         similar_past_actions=similar,
+        action_items=action_items,
+        deadlines=deadlines,
     )
     return payload
 
