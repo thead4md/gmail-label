@@ -5982,7 +5982,7 @@ graph TD
 | `mailmind/actions/safety.py` | Safety policy checks for MailMind action execution. | SafetyDecision, SafetyPolicy | ✅ Complete |
 | `mailmind/config.py` | Configuration management for MailMind Pass 7+. | MailMindConfig | ✅ Complete |
 | `mailmind/dashboard/__init__.py` |  | — | ✅ Stable |
-| `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), get_action_executor(), render_now_tab(), render_review_tab(), render_automate_tab(), main() | ✅ Complete |
+| `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), get_action_executor(), render_now_tab(), render_review_tab(), render_automate_tab(), render_insights_tab(), main() | ✅ Complete |
 | `mailmind/dashboard/charts.py` | Altair chart builders for the INSIGHTS tab. Dark-theme styled. | label_distribution_chart(), channel_distribution_chart(), top_senders_chart(), decision_time_chart(), channel_weekday_heatmap() | ✅ Complete |
 | `mailmind/dashboard/helpers.py` |  | filter_now_items(), get_time_ago_str(), format_unix_ts(), get_confidence_badge(), get_heartbeat_status(), parse_reason_json(), sender_avatar_html(), label_chip_html(), channel_chip_html(), confidence_bar_html(), trust_badge_html(), reply_needed_pill_html(), email_card_html(), action_items_html(), deadline_pill_html(), confidence_sparkline_html() | ✅ Complete |
 | `mailmind/dashboard/theme.py` | MailMind Dashboard — CSS design system. | label_color(), channel_color(), trust_color(), inject_css() | ✅ Complete |
@@ -7607,7 +7607,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 463 tests passing.
+Pass 7 complete. 466 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

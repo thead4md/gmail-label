@@ -40,6 +40,11 @@ def _render_review():
     _a.render_review_tab()
 
 
+def _render_insights():
+    from mailmind.dashboard import app as _a  # noqa: PLC0415
+    _a.render_insights_tab()
+
+
 # ---------------------------------------------------------------------------
 # Test-data factory
 # ---------------------------------------------------------------------------
@@ -299,3 +304,54 @@ class TestRenderReviewTab:
         assert not at.exception
         all_md = ' '.join(el.value for el in at.markdown)
         assert '92' in all_md or '0.92' in all_md
+
+
+# ---------------------------------------------------------------------------
+# INSIGHTS tab — regression guard for the missing render_insights_tab bug
+# ---------------------------------------------------------------------------
+
+def _insights_stack(rows=None):
+    rows = rows if rows is not None else []
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch('mailmind.dashboard.app.get_db', return_value=MagicMock()))
+    for fn in (
+        'analytics_label_distribution', 'analytics_channel_distribution',
+        'analytics_channel_weekday', 'analytics_top_senders', 'analytics_decision_times',
+    ):
+        stack.enter_context(patch(f'mailmind.dashboard.app.{fn}', return_value=rows))
+    return stack
+
+
+class TestRenderInsightsTab:
+
+    def test_render_insights_tab_is_defined(self):
+        from mailmind.dashboard import app as a
+        assert hasattr(a, 'render_insights_tab'), \
+            "render_insights_tab must be defined — main() calls it"
+
+    def test_empty_insights_renders_without_exception(self):
+        with _insights_stack([]):
+            at = AppTest.from_function(_render_insights)
+            at.run()
+        assert not at.exception
+        # Every section falls back to an info message when there's no data
+        assert len(at.info) >= 1
+
+    def test_insights_with_data_renders_charts(self):
+        # Each analytics fn gets rows shaped the way its chart builder expects.
+        returns = {
+            'analytics_label_distribution':   [{'label': 'WORK', 'count': 5}],
+            'analytics_channel_distribution': [{'channel': 'team', 'count': 4}],
+            'analytics_channel_weekday':      [{'channel': 'team', 'weekday': 1, 'count': 2}],
+            'analytics_top_senders':          [{'sender': 'a@b.com', 'volume': 3,
+                                                'approval_rate': 0.5}],
+            'analytics_decision_times':       [{'minutes': 2.0}],
+        }
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch('mailmind.dashboard.app.get_db', return_value=MagicMock()))
+        for fn, rows in returns.items():
+            stack.enter_context(patch(f'mailmind.dashboard.app.{fn}', return_value=rows))
+        with stack:
+            at = AppTest.from_function(_render_insights)
+            at.run()
+        assert not at.exception
