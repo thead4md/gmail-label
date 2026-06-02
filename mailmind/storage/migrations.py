@@ -223,6 +223,10 @@ MIGRATIONS: List[Tuple[str, str]] = [
         -- is a filtering/attribution column.
         """,
     ),
+    (
+        "0016_add_channel_to_predictions",
+        """-- No-op placeholder; handled in Python with column existence checks.""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -255,6 +259,8 @@ ACTION_QUEUE_COLUMNS: List[Tuple[str, str]] = [
 ]
 
 THREAD_CONTEXT_COLUMN: List[Tuple[str, str]] = [("thread_context_json", "TEXT")]
+
+CHANNEL_COLUMN: List[Tuple[str, str]] = [("channel", "TEXT")]
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -338,6 +344,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             _ensure_columns(conn, "predictions", THREAD_CONTEXT_COLUMN)
         elif name == "0015_add_account_dimension":
             _apply_account_dimension(conn)
+        elif name == "0016_add_channel_to_predictions":
+            _ensure_columns(conn, "predictions", CHANNEL_COLUMN)
         else:
             cur.executescript(sql)
         cur.execute(

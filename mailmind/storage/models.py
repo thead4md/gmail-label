@@ -101,6 +101,9 @@ class Prediction:
     # Which mailbox this prediction belongs to (multi-account). None = legacy.
     account: Optional[str] = None
 
+    # Communication channel detected by intelligence/channels.py. None = not yet detected.
+    channel: Optional[str] = None
+
 
 @dataclass
 class ActionApplied:

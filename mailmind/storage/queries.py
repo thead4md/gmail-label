@@ -273,6 +273,7 @@ def _row_to_prediction_with_email_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "llm_rationale": row["llm_rationale"],
         "action_hint": row["action_hint"],
         "email_gmail_id": row["email_gmail_id"],
+        "channel": row["channel"],
     }
 
 
@@ -299,7 +300,8 @@ def get_recent_predictions_with_emails(
             p.confidence,
             p.llm_rationale,
             p.llm_action_hint as action_hint,
-            p.email_gmail_id
+            p.email_gmail_id,
+            p.channel
         FROM predictions p
         JOIN emails e ON e.gmail_id = p.email_gmail_id
         WHERE p.primary_label IS NOT NULL{account_clause}
@@ -461,7 +463,8 @@ def get_pending_queue_enriched(
             p.primary_label,
             p.confidence as prediction_confidence,
             p.ml_confidence,
-            p.llm_confidence
+            p.llm_confidence,
+            p.channel
         FROM action_queue aq
         LEFT JOIN emails e ON e.gmail_id = aq.email_gmail_id
         LEFT JOIN sender_profiles sp ON sp.sender_email = e.sender
@@ -472,7 +475,7 @@ def get_pending_queue_enriched(
         """,
         params,
     ).fetchall()
-    
+
     result = []
     for r in rows:
         reason_json_raw = r['reason_json'] or '{}'
@@ -480,7 +483,7 @@ def get_pending_queue_enriched(
             reason = json.loads(reason_json_raw) if isinstance(reason_json_raw, str) else reason_json_raw
         except Exception:
             reason = {}
-         
+
         result.append({
             'id': r['id'],
             'email_gmail_id': r['email_gmail_id'],
@@ -507,6 +510,7 @@ def get_pending_queue_enriched(
             'prediction_confidence': r['prediction_confidence'],
             'ml_confidence': r['ml_confidence'],
             'llm_confidence': r['llm_confidence'],
+            'channel': r['channel'],
         })
     
     return result

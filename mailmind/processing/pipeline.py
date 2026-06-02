@@ -20,6 +20,7 @@ from .scorer import PriorityScorer, ScoreResult
 from ..actions.safety import SafetyPolicy
 from ..ml.classifier_router import ClassifierRouter, RoutingResult
 from ..intelligence.thread_analyzer import ThreadAnalyzer
+from ..intelligence.channels import detect_channel
 
 if TYPE_CHECKING:
     from ..ml.inference import MLResult
@@ -167,6 +168,24 @@ class Pipeline:
             LOG.debug("Attached thread_context_json: %s", prediction.thread_context_json)
         except Exception as e:
             LOG.debug("Thread analysis failed: %s", e)
+
+        # Detect communication channel (newsletter / transactional / team / …)
+        try:
+            user_domain = None
+            sender = getattr(email, "sender", None) or ""
+            # derive the user's own domain from the account this email belongs to
+            acct = getattr(prediction, "account", None) or getattr(email, "account", None)
+            if acct and "@" in acct:
+                user_domain = acct.split("@", 1)[1]
+            prediction.channel = detect_channel(
+                subject=getattr(email, "subject", None),
+                sender=sender,
+                body_text=getattr(email, "body_text", None),
+                user_domain=user_domain,
+            )
+            LOG.debug("Detected channel: %s", prediction.channel)
+        except Exception as e:
+            LOG.debug("Channel detection failed: %s", e)
 
         try:
             prediction.id = self.db.save_prediction(prediction)

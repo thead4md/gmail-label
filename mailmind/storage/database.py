@@ -105,8 +105,8 @@ class Database:
             " (email_gmail_id, model, labels, score, priority_score, confidence,"
             "  primary_label, pipeline_used, action_suggested, rule_matches, scoring_breakdown, thread_context_json,"
             "  ml_confidence, llm_confidence, llm_label, llm_rationale, llm_action_hint,"
-            "  llm_needs_review, classifier_source, llm_called_at, created_at, account)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "  llm_needs_review, classifier_source, llm_called_at, created_at, account, channel)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(email_gmail_id) DO UPDATE SET"
             "  model=excluded.model, labels=excluded.labels, score=excluded.score,"
             "  priority_score=excluded.priority_score, confidence=excluded.confidence,"
@@ -117,7 +117,7 @@ class Database:
             "  llm_label=excluded.llm_label, llm_rationale=excluded.llm_rationale,"
             "  llm_action_hint=excluded.llm_action_hint, llm_needs_review=excluded.llm_needs_review,"
             "  classifier_source=excluded.classifier_source, llm_called_at=excluded.llm_called_at,"
-            "  created_at=excluded.created_at, account=excluded.account;"
+            "  created_at=excluded.created_at, account=excluded.account, channel=excluded.channel;"
         )
         with self.transaction() as cur:
             cur.execute(
@@ -145,6 +145,7 @@ class Database:
                     pred.llm_called_at,
                     pred.created_at or int(__import__("time").time()),
                     pred.account,
+                    getattr(pred, 'channel', None),
                 ),
             )
             # lastrowid is unreliable on the ON CONFLICT UPDATE path; resolve
