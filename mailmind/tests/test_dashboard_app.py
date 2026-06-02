@@ -355,3 +355,31 @@ class TestRenderInsightsTab:
             at = AppTest.from_function(_render_insights)
             at.run()
         assert not at.exception
+
+
+# ---------------------------------------------------------------------------
+# Magic-display guard (AST): a bare ternary expression-statement like
+#   st.altair_chart(c) if c else st.info("...")
+# is an ast.Expr whose value is ast.IfExp. Streamlit "magic" wraps non-Call
+# expression statements in st.write(); st.write(<DeltaGenerator>) then dumps a
+# DeltaGenerator help table to the page. Plain `st.foo(...)` calls are ast.Call
+# and are skipped by magic. This guard fails if any bare ternary statement
+# sneaks back into app.py.
+# ---------------------------------------------------------------------------
+
+def test_no_bare_ternary_expression_statements_in_app():
+    import ast
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "dashboard" / "app.py").read_text()
+    tree = ast.parse(src)
+    offenders = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.IfExp)
+    ]
+    assert not offenders, (
+        f"Bare ternary expression-statements at lines {offenders} in app.py — "
+        "Streamlit magic will wrap these in st.write() and dump DeltaGenerator "
+        "help tables. Use an explicit if/else statement instead."
+    )
