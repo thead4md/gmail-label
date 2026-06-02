@@ -227,6 +227,23 @@ MIGRATIONS: List[Tuple[str, str]] = [
         "0016_add_channel_to_predictions",
         """-- No-op placeholder; handled in Python with column existence checks.""",
     ),
+    (
+        "0017_add_performance_indexes",
+        """
+        CREATE INDEX IF NOT EXISTS idx_aq_status_account_priority
+            ON action_queue(status, account, priority_score, created_at);
+        CREATE INDEX IF NOT EXISTS idx_aq_email_gmail_id
+            ON action_queue(email_gmail_id);
+        CREATE INDEX IF NOT EXISTS idx_predictions_account_created
+            ON predictions(account, created_at);
+        CREATE INDEX IF NOT EXISTS idx_predictions_label
+            ON predictions(primary_label);
+        CREATE INDEX IF NOT EXISTS idx_predictions_channel
+            ON predictions(channel);
+        CREATE INDEX IF NOT EXISTS idx_sender_profiles_trust_tier
+            ON sender_profiles(trust_tier);
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
