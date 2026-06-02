@@ -2,6 +2,8 @@
 
 A privacy-first Gmail classification and automation assistant. MailMind fetches unread emails across one or more mailboxes, runs them through a three-tier hybrid pipeline (rules → ML → LLM), queues suggested actions for human review, and only writes labels to Gmail after you explicitly grant a sender autopilot or click Approve. All sensitive data stays local.
 
+**Bilingual:** all heuristic detection (channels, reply-needed, action items, deadlines) works in **English and Hungarian**.
+
 **Live dashboard:** [mailmind-adam.fly.dev](https://mailmind-adam.fly.dev) (Fly.io, Streamlit)
 
 ---
@@ -17,8 +19,12 @@ A privacy-first Gmail classification and automation assistant. MailMind fetches 
 - **Activity digest** — dashboard panel + `mailmind digest` CLI: classified / executed / pending / corrections / top labels over any window.
 - **Self-maintaining** — daily retention sweep prunes old cached emails + VACUUMs the SQLite file; predictions table is upserted (one row per email, latest wins) so storage stays bounded.
 - **Sender memory** — tracks per-sender trust (trusted / neutral / watchlist) and approval/rejection counts; updates automatically from your decisions; shared across mailboxes.
-- **Thread intelligence** — detects reply-needed emails, waiting-on-other-party, open questions, and extracts thread summaries.
-- **Explainability** — every queued action stores a full `reason_json` payload (label, confidence, score breakdown, rule matches, trust tier, thread context) shown in the Review tab.
+- **Channel detection** — every email is classified into a communication channel (newsletter / transactional / team / personal / marketing / automated) by fast bilingual heuristics, surfaced as colour chips in the UI and charted in INSIGHTS.
+- **Thread intelligence** — detects reply-needed emails, waiting-on-other-party, open questions, extracts thread summaries, and pulls out **action items** and **deadlines** (e.g. "by Friday", "péntekig", `2026.06.15`).
+- **New-sender screening** — first-time senders surface in a dedicated REVIEW section with one-click **Know / Mute / Block** (Block also rejects all their pending items).
+- **Analytics (INSIGHTS tab)** — Altair charts: label distribution, channel volume, channel × weekday heatmap, top senders by approval rate, and time-to-decision histogram.
+- **Modern dark UI** — card-based dark theme, sender avatars, confidence bars + rules→ML→LLM sparkline, animated watcher heartbeat, and a mobile-responsive layout.
+- **Explainability** — every queued action stores a full `reason_json` payload (label, confidence, score breakdown, rule matches, trust tier, thread context, action items) shown in the Review tab.
 - **Safe by construction** — dry-run mode default everywhere; `delete` action requires 1.00 confidence (unreachable); URGENT/FINANCE/PERSONAL emails cannot be auto-archived; ActionExecutor + SafetyPolicy fully tested.
 
 ---
@@ -97,8 +103,9 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 | Tab | Purpose |
 |---|---|
-| **NOW** | High-priority and reply-needed items — single Approve per item |
-| **REVIEW** | Recent predictions + pending actions with full reasoning (Why this?) and Approve / Reject / Edit Label |
+| **NOW** | High-priority and reply-needed items as cards — sender avatar, label/channel chips, confidence bar, action-item + deadline chips, single Approve per item |
+| **REVIEW** | New-sender screening (Know / Mute / Block) + recent predictions + pending actions with full reasoning (Why this?), confidence sparkline, and Approve / Reject / Edit Label |
+| **INSIGHTS** | Analytics charts — label distribution, channel volume, channel × weekday heatmap, top senders, time-to-decision |
 | **AUTOMATE** | Activity digest, sender trust profiles, **per-sender autopilot toggles**, model health, queue statistics |
 
 The sidebar shows:
@@ -185,13 +192,16 @@ mailmind/
 │
 ├── intelligence/
 │   ├── sender_memory.py     # Sender trust profiles (trusted/neutral/watchlist)
-│   ├── thread_analyzer.py   # Heuristic thread / reply-needed detection
+│   ├── channels.py          # Bilingual channel detection (newsletter/team/…)
+│   ├── thread_analyzer.py   # Bilingual reply-needed + action item / deadline extraction
 │   ├── explainer.py         # ReasonPayload builder → reason_json in queue
-│   └── feedback.py          # Approve (executes!) / reject / correct handlers
+│   └── feedback.py          # Approve (executes!) / reject / correct + Know/Mute/Block
 │
-├── dashboard/               # Three-tab Streamlit review UI
-│   ├── app.py               # NOW / REVIEW / AUTOMATE + mailbox switcher + heartbeat
-│   └── helpers.py           # Pure formatting helpers (testable without Streamlit)
+├── dashboard/               # Four-tab Streamlit review UI (dark theme)
+│   ├── app.py               # NOW / REVIEW / INSIGHTS / AUTOMATE + switcher + heartbeat
+│   ├── helpers.py           # Pure formatting + HTML/SVG card helpers (testable)
+│   ├── theme.py             # CSS design system, colour maps, mobile breakpoints
+│   └── charts.py            # Altair chart builders for the INSIGHTS tab
 │
 ├── ml/
 │   ├── model.py             # scikit-learn model wrapper
@@ -209,14 +219,14 @@ mailmind/
 │
 ├── storage/
 │   ├── database.py          # SQLite abstraction (WAL mode, upserts, prune, vacuum)
-│   ├── migrations.py        # Linear idempotent migrations (0001–0015)
+│   ├── migrations.py        # Linear idempotent migrations (0001–0016)
 │   ├── models.py            # Dataclasses: Email, Prediction, QueueItem (account-aware)
-│   └── queries.py           # All DB query helpers (account-scoped read paths)
+│   └── queries.py           # All DB query helpers (account-scoped + analytics)
 │
 ├── utils/
 │   └── fingerprint.py       # SHA-256 action fingerprint (dedup)
 │
-└── tests/                   # 339 pytest tests
+└── tests/                   # 463 pytest tests
 ```
 
 ---
@@ -225,7 +235,7 @@ mailmind/
 
 ```bash
 pytest mailmind/tests/ -q
-# 339 passed
+# 463 passed
 ```
 
 Tests use in-memory SQLite — no network, no Gmail API, no LLM calls. The ActionExecutor and SafetyPolicy paths (which actually mutate Gmail in production) have dedicated test files covering dry-run, protected categories, delete-blocked, rate limit, and every supported action.
