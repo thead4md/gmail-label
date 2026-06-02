@@ -217,3 +217,38 @@ def handle_correction(
     )
 
     return True
+
+
+def handle_know_sender(db: Database, sender_email: str) -> bool:
+    """Mark a sender as trusted (you know them)."""
+    from ..storage.queries import set_sender_trust_tier
+    if not sender_email:
+        return False
+    set_sender_trust_tier(db, sender_email, "trusted")
+    return True
+
+
+def handle_mute_sender(db: Database, sender_email: str) -> bool:
+    """Mute a sender: watchlist tier (their mail is downranked, not deleted)."""
+    from ..storage.queries import set_sender_trust_tier
+    if not sender_email:
+        return False
+    set_sender_trust_tier(db, sender_email, "watchlist")
+    return True
+
+
+def handle_block_sender(db: Database, sender_email: str) -> bool:
+    """Block a sender: watchlist tier + reject all their pending queue items."""
+    from ..storage.queries import set_sender_trust_tier
+    if not sender_email:
+        return False
+    set_sender_trust_tier(db, sender_email, "watchlist")
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            """UPDATE action_queue SET status = 'rejected', reviewed_at = ?
+               WHERE status = 'pending' AND email_gmail_id IN (
+                   SELECT gmail_id FROM emails WHERE sender = ?)""",
+            (now, sender_email),
+        )
+    return True

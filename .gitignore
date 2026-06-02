@@ -56,3 +56,6 @@ mailmind/.pytest_cache/
 mailmind/__pycache__/
 mailmind/.env
 mailmind/credentials.json
+
+# Stray tilde dir accidentally created by shell expansion
+~/
