@@ -140,7 +140,9 @@ class TestRenderNowTab:
             at = AppTest.from_function(_render_now)
             at.run()
         assert not at.exception
-        assert len(at.info) >= 1
+        # Empty state is rendered as a custom HTML div (not st.info in the redesign)
+        all_md = ' '.join(el.value for el in at.markdown)
+        assert 'mm-empty' in all_md or 'caught up' in all_md.lower()
         assert len(at.button) == 0
 
     def test_single_item_shows_exactly_one_approve_button(self):
@@ -195,7 +197,8 @@ class TestRenderNowTab:
             at.run()
         assert not at.exception
         all_md = ' '.join(el.value for el in at.markdown)
-        assert 'Reply Needed' in all_md
+        # The redesign embeds this in the HTML card as "Reply needed" (lowercase n)
+        assert 'reply needed' in all_md.lower()
 
     def test_thread_summary_shown_when_present(self):
         item = _item(priority_score=90)
@@ -244,11 +247,14 @@ class TestRenderReviewTab:
             at.run()
         assert not at.exception
         all_md = ' '.join(el.value for el in at.markdown)
-        assert 'Similar Past Actions' in all_md
-        # Source-level guard: confirm the wrong key is absent from app.py
+        # The redesigned reason panel renders this as "Past actions" (compact label)
+        assert 'past actions' in all_md.lower() or 'archive' in all_md.lower()
+        # Source-level guard: the old wrong key must not appear in app.py
         src = (pathlib.Path(__file__).parent.parent / 'dashboard' / 'app.py').read_text()
         assert "reason.get('similar_approvals')" not in src
         assert 'reason.get("similar_approvals")' not in src
+        # The correct key must be used
+        assert 'similar_past_actions' in src
 
     def test_race_condition_approve_shows_warning(self):
         item = _item()

@@ -125,3 +125,150 @@ def parse_reason_json(raw: Any) -> Dict[str, Any]:
         except Exception:
             pass
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Rich HTML visual helpers (returned as strings, rendered via st.markdown)
+# These do NOT import streamlit — fully testable.
+# ---------------------------------------------------------------------------
+
+def sender_avatar_html(sender: Optional[str], color: str = "#5B8AF0") -> str:
+    """Return an HTML circle avatar with the sender's first initial."""
+    initial = "?"
+    s = (sender or "").strip()
+    # Try display name part before <addr>
+    if "<" in s:
+        s = s.split("<")[0].strip()
+    if s:
+        initial = s[0].upper()
+    # Derive a stable background from the initial
+    hues = {"A":220,"B":170,"C":280,"D":30,"E":190,"F":340,"G":120,"H":200,
+            "I":260,"J":40,"K":155,"L":310,"M":20,"N":230,"O":50,"P":270,
+            "Q":80,"R":0,"S":140,"T":200,"U":310,"V":60,"W":180,"X":300,
+            "Y":90,"Z":230}
+    hue = hues.get(initial, 220)
+    bg  = f"hsl({hue},60%,38%)"
+    return (
+        f'<div class="mm-avatar" style="background:{bg};color:#fff;">'
+        f'{initial}</div>'
+    )
+
+
+def label_chip_html(label: Optional[str]) -> str:
+    """Render a coloured label chip."""
+    from mailmind.dashboard.theme import label_color
+    lbl = (label or "").upper()
+    color = label_color(lbl)
+    return (
+        f'<span class="mm-chip" '
+        f'style="color:{color};border-color:{color}20;background:{color}18;">'
+        f'{lbl}</span>'
+    )
+
+
+def channel_chip_html(channel: Optional[str]) -> str:
+    """Render a channel chip (newsletter, team, transactional, …)."""
+    from mailmind.dashboard.theme import channel_color
+    ch    = (channel or "unknown").lower()
+    color = channel_color(ch)
+    icon  = {
+        "newsletter":    "📨",
+        "transactional": "🧾",
+        "team":          "👥",
+        "personal":      "💬",
+        "marketing":     "📣",
+        "automated":     "🤖",
+    }.get(ch, "📧")
+    return (
+        f'<span class="mm-chip" '
+        f'style="color:{color};border-color:{color}20;background:{color}18;">'
+        f'{icon} {ch}</span>'
+    )
+
+
+def confidence_bar_html(conf: Optional[float]) -> str:
+    """Return an inline HTML confidence bar (green/amber/red)."""
+    v = conf or 0.0
+    pct = int(v * 100)
+    color = "#2ED573" if v > 0.8 else "#FFA502" if v > 0.5 else "#FF4757"
+    return (
+        f'<div style="display:inline-flex;align-items:center;gap:6px;">'
+        f'<div class="mm-conf-bar-wrap">'
+        f'<div class="mm-conf-bar" style="width:{pct}%;background:{color};"></div>'
+        f'</div>'
+        f'<span style="font-size:11px;color:{color};font-weight:600;">{pct}%</span>'
+        f'</div>'
+    )
+
+
+def trust_badge_html(tier: Optional[str]) -> str:
+    """Return a coloured trust-tier badge."""
+    from mailmind.dashboard.theme import trust_color
+    t     = (tier or "neutral").lower()
+    color = trust_color(t)
+    icon  = {"trusted": "✅", "neutral": "⚪", "watchlist": "🚫"}.get(t, "⚪")
+    return (
+        f'<span class="mm-trust-badge" '
+        f'style="background:{color}20;color:{color};border:1px solid {color}40;">'
+        f'{icon} {t}</span>'
+    )
+
+
+def reply_needed_pill_html() -> str:
+    """Return a 'Reply Needed' pill badge."""
+    return '<span class="mm-pill-reply">💬 Reply needed</span>'
+
+
+def email_card_html(
+    subject: str,
+    sender: str,
+    time_ago: str,
+    label: Optional[str] = None,
+    channel: Optional[str] = None,
+    confidence: Optional[float] = None,
+    reply_needed: bool = False,
+    thread_summary: Optional[str] = None,
+) -> str:
+    """Compose the full HTML for a NOW-tab email card (display only).
+
+    Interactive widgets (Approve button) must be rendered separately
+    via st.button() after this markdown block.
+    """
+    from mailmind.dashboard.theme import label_color
+
+    lbl_color = label_color((label or "").upper())
+    avatar    = sender_avatar_html(sender)
+    chips     = ""
+    if label:
+        chips += label_chip_html(label) + " "
+    if channel and channel != "unknown":
+        chips += channel_chip_html(channel) + " "
+    conf_bar = confidence_bar_html(confidence) if confidence is not None else ""
+    reply_p  = reply_needed_pill_html() if reply_needed else ""
+    summary_row = ""
+    if thread_summary:
+        trunc = thread_summary[:120] + ("…" if len(thread_summary) > 120 else "")
+        summary_row = (
+            f'<div class="mm-snippet" style="margin-top:4px;font-style:italic;">'
+            f'"{trunc}"</div>'
+        )
+
+    sender_short = (sender or "Unknown").split("<")[0].strip()[:40]
+    subj_short   = (subject or "[No Subject]")[:70]
+
+    return f"""
+<div class="mm-card" style="border-left-color:{lbl_color};">
+  {avatar}
+  <div class="mm-card-body">
+    <div class="mm-sender">{sender_short}</div>
+    <div class="mm-subject">{subj_short}</div>
+    {summary_row}
+    <div class="mm-meta">
+      {chips}
+      {conf_bar}
+      {reply_p}
+      <span class="mm-time">{time_ago}</span>
+    </div>
+  </div>
+</div>
+"""
