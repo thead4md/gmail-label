@@ -1,81 +1,139 @@
+"""MailMind — thread and reply-needed intelligence.
+
+Heuristic-first: fast, deterministic, no network calls.
+Optional LLM summarization falls back gracefully on any error.
+
+Bilingual: English + Hungarian.
+
+Hungarian grammar notes for the patterns below:
+  - Verb conjugations vary heavily; we match on stems where possible.
+  - "kérem" = please / I ask  (formal imperative)
+  - "tudna" = could you (conditional)
+  - "jelezze / jelezzük" = let me/us know
+  - "visszaigazol" = confirm  (visszaigazolás = confirmation)
+  - "várom" = I'm waiting for
+  - "megkapná / megküldené" = could you send
+  - "értesít" = notify / let know
+  - "hamarosan" = soon
+  - "visszajelz" = get back / respond (stem covers visszajelzünk, visszajelzést)
+  - "felkeressük / megkeressük" = we will contact you
+  - Question markers: "?" works in Hungarian just like English.
+    Additionally: "ugye" (right?), "-e" suffix (yes/no question particle)
+    but these are hard to regex; "?" coverage is sufficient.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
 import re
 import logging
+from dataclasses import dataclass
+from typing import Optional
 
 LOG = logging.getLogger(__name__)
 
 
 @dataclass
 class ThreadContext:
-    is_thread: bool
-    thread_length: int
-    reply_needed: bool
+    is_thread:              bool
+    thread_length:          int
+    reply_needed:           bool
     open_question_detected: bool
     waiting_on_other_party: bool
-    thread_summary: Optional[str] = None
+    thread_summary:         Optional[str] = None
 
 
 class ThreadAnalyzer:
-    """Heuristic-first thread analyzer with optional LLM summarization.
+    """Heuristic-first thread analyzer with optional LLM summarization."""
 
-    Rules are intentionally conservative and deterministic.
-    """
+    # ── Reply-needed signals ─────────────────────────────────────────
+    # Compiled once at class definition time for speed.
+    # re.I handles Unicode case-folding in Python 3 (É→é, Á→á, etc.)
+    _REPLY_RE = re.compile(
+        r"(please confirm|can you|let me know|could you|will you|"
+        r"would you|please advise|your response|get back to me|"
+        r"awaiting your|waiting for your reply|"
+        # ── Hungarian ──────────────────────────────────────────────
+        r"k[eé]rem (erős[ií]tse|visszaigazol|jelezze|tudassa|k[uü]ld|"
+        r"v[eé]lekedj|válaszoljon|válaszolj)"  # kérem erősítse meg / jelezze / küldje
+        r"|k[eé]rem sz[ií]veskedjen"           # kérem szíveskedjen + verb
+        r"|tudn[aá] (k[uü]ld|seg[ií]t|v[aá]laszol|megerős[ií]t|jelezni)" # tudna küldeni / segíteni
+        r"|v[aá]rom .{0,25}(v[aá]lasz[aá]t|visszajelz[eé]s[eé]t|megerős[ií]t[eé]s[eé]t)"  # várom (mielőbbi) válaszát
+        r"|k[eé]rn[eé]k (egy v[aá]laszt|visszajelz[eé]st|megerős[ií]t[eé]st)"       # kérnék egy választ
+        r"|visszajelz[eé]s[eé]t k[eé]rem"     # visszajelzését kérem
+        r"|meg tudn[aá] erős[ií]teni"          # meg tudná erősíteni
+        r"|el tudn[aá] k[uü]ldeni"             # el tudná küldeni
+        r"|jelezze|jelezzen|jelezd"            # jelezze (let me know — very common)
+        r"|tudassa|tudasson|tudasd"            # tudassa (please inform)
+        r"|[eé]rtes[ií]tsen|[eé]rtes[ií]tsd"  # értesítsen (please notify)
+        r"|v[aá]laszoljon|v[aá]laszolj"        # válaszoljon (please reply)
+        r"|sz[ií]veskedjen v[aá]laszolni"      # szíveskedjen válaszolni
+        r"|k[eé]rj[uü]k (erős[ií]tse|jelezze|k[uü]ld|v[aá]laszolj)" # kérjük erősítse meg
+        r"|k[eé]rdezni szeretn[eé]k"           # kérdezni szeretnék (I'd like to ask)
+        r"|k[eé]rd[eé]sem van"                 # kérdésem van (I have a question)
+        r"|mi a v[eé]lem[eé]nye|mi a v[eé]lem[eé]nyed)"  # mi a véleménye (what do you think)
+        ,
+        re.I | re.UNICODE,
+    )
 
-    REPLY_PHRASES = [
-        r"please confirm",
-        r"can you",
-        r"let me know",
-        r"could you",
-        r"please",
-        r"will you",
-    ]
+    # ── Waiting-on-other-party signals ───────────────────────────────
+    _WAITING_RE = re.compile(
+        r"(we'll update|i'll get back|i will get back|we will get back|follow up|"
+        r"will reach out|we will contact|stay tuned|keep you posted|"
+        # ── Hungarian ──────────────────────────────────────────────
+        r"hamarosan visszat[eé]r[uü]nk"        # hamarosan visszatérünk (we'll get back soon)
+        r"|visszajelz[uü]nk"                   # visszajelzünk (we'll get back to you)
+        r"|[eé]rtes[ií]teni fogjuk"            # értesíteni fogjuk (we'll notify you)
+        r"|felkeress[uü]k|megkeress[uü]k"      # felkeressük (we'll contact you)
+        r"|[eé]rtes[ií]t[eé]st k[uü]ld[uü]nk" # értesítést küldünk (we'll send notification)
+        r"|hamarosan [eé]rtes[ií]t[jü]k"       # hamarosan értesítjük (we'll notify you soon)
+        r"|dolgozunk rajta"                    # dolgozunk rajta (we're working on it)
+        r"|folyamatban van"                    # folyamatban van (in progress)
+        r"|[aá]tv[eé]tel[uü]nket megerős[ií]tj[uü]k"  # átvételünket megerősítjük (we confirm receipt)
+        r"|hamarosan v[aá]laszolunk"           # hamarosan válaszolunk (we'll reply soon)
+        r"|nemsok[aá]ra visszajelz[uü]nk"      # nemsokára visszajelzünk
+        r"|munkat[aá]rsunk (felveszi|megkeresi) (önnel|veled)"  # colleague will contact
+        r"|k[eé]s[oő]bb visszajelz[uü]nk)"     # később visszajelzünk (we'll get back later)
+        ,
+        re.I | re.UNICODE,
+    )
 
-    WAITING_PHRASES = [
-        r"we'll update",
-        r"i'll get back",
-        r"i will get back",
-        r"we will get back",
-        r"follow up",
-    ]
+    # Hungarian "Válasz:" prefix = "Re:" in some email clients
+    _HU_REPLY_SUBJECT_RE = re.compile(r"^(re:|fw:|fwd:|v[aá]lasz:|továbbítás:)", re.I | re.UNICODE)
 
-    QUESTION_RE = re.compile(r"\?")
+    # Question mark — works the same in Hungarian
+    _QUESTION_RE = re.compile(r"\?")
 
-    @staticmethod
-    def analyze(email, db=None) -> ThreadContext:
-        # Basic heuristics
-        body = (email.body_text or "").lower()
-        # is_thread: true if thread_id present or 're:' in subject
-        is_thread = bool(email.thread_id) or (email.subject and email.subject.lower().startswith("re:"))
-        # thread_length: count of 'On ' markers or 're:' occurrences as a heuristic
-        thread_length = (body.count('\n>') + body.count('re:') + 1) if is_thread else 1
+    @classmethod
+    def analyze(cls, email, db=None) -> ThreadContext:
+        body = (getattr(email, "body_text", None) or "")
+        subj = (getattr(email, "subject", None) or "")
 
-        # reply_needed: detect phrases or question marks
-        reply_needed = False
-        for pat in ThreadAnalyzer.REPLY_PHRASES:
-            if re.search(pat, body):
-                reply_needed = True
-                break
-        if not reply_needed and ThreadAnalyzer.QUESTION_RE.search(body):
-            reply_needed = True
+        # ── Thread detection ────────────────────────────────────────
+        is_thread = (
+            bool(getattr(email, "thread_id", None))
+            or bool(cls._HU_REPLY_SUBJECT_RE.match(subj))
+        )
+        thread_length = (body.count("\n>") + body.lower().count("re:") + 1) if is_thread else 1
 
-        # open_question_detected: presence of question marks
-        open_question_detected = bool(ThreadAnalyzer.QUESTION_RE.search(body))
+        # ── Reply needed ────────────────────────────────────────────
+        body_lc = body.lower()
+        reply_needed = bool(cls._REPLY_RE.search(body_lc))
+        if not reply_needed:
+            reply_needed = bool(cls._QUESTION_RE.search(body))
 
-        # waiting_on_other_party
-        waiting_on_other_party = any(re.search(p, body) for p in ThreadAnalyzer.WAITING_PHRASES)
+        # ── Open question ────────────────────────────────────────────
+        open_question_detected = bool(cls._QUESTION_RE.search(body))
 
-        # thread_summary: optional lightweight first-line summary (first 200 chars)
-        summary = None
+        # ── Waiting on other party ───────────────────────────────────
+        waiting_on_other_party = bool(cls._WAITING_RE.search(body_lc))
+
+        # ── Thread summary (first meaningful line, ≤ 200 chars) ─────
+        summary: Optional[str] = None
         try:
-            first_lines = " ".join(line.strip() for line in body.splitlines() if line.strip())
-            if first_lines:
-                summary = first_lines[:200]
-        except Exception as e:
-            LOG.debug("Failed to build thread summary: %s", e)
-            summary = None
+            lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+            if lines:
+                summary = " ".join(lines)[:200]
+        except Exception as exc:
+            LOG.debug("Failed to build thread summary: %s", exc)
 
         return ThreadContext(
             is_thread=is_thread,
@@ -85,4 +143,3 @@ class ThreadAnalyzer:
             waiting_on_other_party=waiting_on_other_party,
             thread_summary=summary,
         )
-

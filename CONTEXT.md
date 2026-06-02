@@ -5994,7 +5994,7 @@ graph TD
 | `mailmind/intelligence/explainer.py` |  | ReasonPayload, build_reason_payload() | ✅ Complete |
 | `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction() | ✅ Complete |
 | `mailmind/intelligence/sender_memory.py` |  | SenderProfileSummary, get_sender_profile(), get_sender_trust_tier(), update_from_outcome(), get_similar_sender_history() | ✅ Complete |
-| `mailmind/intelligence/thread_analyzer.py` |  | ThreadContext, ThreadAnalyzer | ✅ Complete |
+| `mailmind/intelligence/thread_analyzer.py` | MailMind — thread and reply-needed intelligence. | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
 | `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
 | `mailmind/main.py` | MailMind — main entry point. | cli(), run(), digest(), prune(), auth(), accounts() | ✅ Complete |
@@ -7606,7 +7606,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 390 tests passing.
+Pass 7 complete. 433 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->
