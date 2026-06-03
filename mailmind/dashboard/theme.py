@@ -33,6 +33,9 @@ CHANNEL_COLORS: dict[str, str] = {
     "personal":      "#FFA502",
     "marketing":     "#FF6B81",
     "automated":     "#747D8C",
+    "docs":          "#4285F4",
+    "calendar":      "#0F9D58",
+    "tasks":         "#F4B400",
     "unknown":       "#4A5568",
 }
 

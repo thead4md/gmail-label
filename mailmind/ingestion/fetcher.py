@@ -138,6 +138,17 @@ class GmailFetcher:
             LOG.error("ensure_label('%s') failed: %s", label_name, e)
             return None
 
+    def list_label_map(self) -> Dict[str, str]:
+        """Return {label_id: name} for all labels in the mailbox."""
+        def call():
+            return self.service.users().labels().list(userId=self.user_id).execute()
+        try:
+            labs = _retry(call).get("labels", [])
+            return {l["id"]: l["name"] for l in labs if l.get("id") and l.get("name")}
+        except HttpError as e:
+            LOG.error("list_label_map failed: %s", e)
+            return {}
+
     def batch_add_label(self, message_ids: List[str], label_id: str) -> int:
         """Add ``label_id`` to many messages via Gmail's batchModify endpoint.
 

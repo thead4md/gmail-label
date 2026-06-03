@@ -6,7 +6,10 @@ from typing import Any, Optional
 
 from ..storage.database import Database
 from ..storage.models import Email
-from ..storage.queries import log_correction, update_sender_profile
+from ..storage.queries import (
+    log_correction, update_sender_profile, set_sender_label_rule,
+    set_thread_label_rule,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -251,4 +254,105 @@ def handle_block_sender(db: Database, sender_email: str) -> bool:
                    SELECT gmail_id FROM emails WHERE sender = ?)""",
             (now, sender_email),
         )
+    return True
+
+
+def handle_label_email(
+    db: Database,
+    queue_id: int,
+    label: str,
+    scope: str,
+    executor: Optional[Any] = None,
+    account: Optional[str] = None,
+) -> bool:
+    """Create a label rule based on user feedback.
+
+    scope: "email" (one-off correction), "thread" (rule for this thread),
+           or "sender" (rule for this sender)
+    When executor is provided, applies the label to Gmail via the same path
+    as handle_approve.
+
+    Returns True if the item was found and label rule set, False if not found.
+    """
+    if scope not in ("email", "thread", "sender"):
+        raise ValueError(f"invalid scope: {scope}")
+
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "SELECT email_gmail_id, action FROM action_queue WHERE id = ?",
+            (queue_id,),
+        )
+        queue_row = cur.fetchone()
+        if not queue_row:
+            return False
+
+        gmail_id = queue_row["email_gmail_id"]
+        original_action = queue_row["action"]
+
+        # Get email details for thread_id and sender
+        cur.execute("SELECT thread_id, sender FROM emails WHERE gmail_id = ?", (gmail_id,))
+        email_row = cur.fetchone()
+        if not email_row:
+            return False
+
+        thread_id = email_row["thread_id"]
+        sender = email_row["sender"]
+
+        # Create the rule based on scope
+        if scope == "thread" and thread_id:
+            set_thread_label_rule(db, thread_id, label)
+            LOG.info(f"Created thread rule: thread_id={thread_id} → {label}")
+        elif scope == "sender" and sender:
+            set_sender_label_rule(db, sender, label, account=account)
+            LOG.info(f"Created sender rule: sender={sender} → {label}")
+        # scope == "email" doesn't create a persistent rule, just logs the correction
+
+        # Log the correction for training
+        log_correction(
+            db,
+            gmail_id,
+            original_label=None,
+            corrected_label=label,
+            original_action=original_action,
+            corrected_action=None,
+            source='dashboard_label_rule',
+        )
+
+    # Apply the label to Gmail if executor is provided
+    if executor is not None:
+        from ..processing.scorer import ScoreResult
+        email_row = db.get_email_by_gmail_id(gmail_id)
+        if email_row is None:
+            LOG.warning("Labeled queue %s references missing email %s", queue_id, gmail_id)
+            return True
+
+        email = Email(
+            gmail_id=email_row['gmail_id'],
+            thread_id=email_row['thread_id'],
+            sender=email_row['sender'],
+            recipients=(email_row['recipients'] or '').split(',') if email_row['recipients'] else [],
+            subject=email_row['subject'],
+            snippet=email_row['snippet'],
+            body_text=email_row['body_text'],
+            date_ts=email_row['date_ts'],
+            labels=(email_row['labels'] or '').split(',') if email_row['labels'] else [],
+            parsed=bool(email_row['parsed']),
+        )
+
+        # Fake a high-confidence score for the executor
+        score = ScoreResult(
+            total_score=100,
+            base_score=100,
+            rule_contribution=0,
+            direct_mention_bonus=0,
+            recency_bonus=0,
+            sender_trust=0,
+            primary_label=label,
+        )
+        try:
+            executor.execute_action(email, "label", score)
+        except Exception as exc:
+            LOG.error("Executor raised applying label %s to queue %s: %s", label, queue_id, exc, exc_info=True)
+
     return True

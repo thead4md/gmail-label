@@ -83,6 +83,7 @@ class Pipeline:
         self,
         email: Email,
         auto_action: bool = False,
+        account: Optional[str] = None,
     ) -> Prediction:
         """Process an email through the full pipeline."""
         LOG.info(f"Processing email {email.gmail_id} from {email.sender}")
@@ -108,7 +109,9 @@ class Pipeline:
         if self.classifier_router is not None:
             # Reuse the rules already evaluated above (line ~90) instead of
             # letting route() run them a second time.
-            routing_result = self.classifier_router.route(email, rule_matches=rule_matches)
+            routing_result = self.classifier_router.route(
+                email, rule_matches=rule_matches, db=self.db, account=account
+            )
             if routing_result is not None:
                 LOG.info(
                     "email %s classified by %s \u2192 %s (%.2f)",

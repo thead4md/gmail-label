@@ -69,7 +69,7 @@ def _collect_training_data_from_db(
                    LIMIT 1
                ) AS corrected_label,
                e.subject, e.snippet, e.sender,
-               e.body_text, e.date_ts, e.recipients, e.labels
+               e.body_text, e.date_ts, e.recipients, e.labels, e.user_labels
         FROM predictions p
         JOIN emails e ON e.gmail_id = p.email_gmail_id
         WHERE p.primary_label IS NOT NULL
@@ -87,13 +87,15 @@ def _collect_training_data_from_db(
             continue
         seen_gmail_ids.add(gmail_id)
 
-        # Human correction wins over the machine's past prediction.
+        # Priority: explicit correction > your real Gmail label > rules guess.
         corrected = row["corrected_label"]
-        label = corrected or row["primary_label"]
+        user_labels = [x for x in (row["user_labels"] or "").split(",") if x]
+        label = corrected or (user_labels[0] if user_labels else row["primary_label"])
         if corrected and corrected != row["primary_label"]:
             correction_overrides += 1
-        if label not in VALID_LABELS:
+        if not label:
             continue
+        # NOTE: VALID_LABELS filter removed — taxonomy is now whatever you actually use.
 
         # Build a text corpus from available fields
         subject = row["subject"] or ""
@@ -119,6 +121,19 @@ def _collect_training_data_from_db(
         ))
 
     if len(corpus) >= min_samples:
+        # Drop sparse labels (< 5 examples) to avoid poisoning the model
+        from collections import Counter
+        label_counts = Counter(labels)
+        valid_indices = [i for i, lbl in enumerate(labels) if label_counts[lbl] >= 5]
+
+        original_count = len(corpus)
+        if len(valid_indices) < len(labels):
+            dropped = len(labels) - len(valid_indices)
+            corpus = [corpus[i] for i in valid_indices]
+            labels = [labels[i] for i in valid_indices]
+            vectors = [vectors[i] for i in valid_indices]
+            LOG.info(f"Dropped {dropped} samples with sparse labels (< 5 examples)")
+
         LOG.info(
             "Collected %d training samples from predictions table (labels: %s); "
             "%d overridden by user corrections.",

@@ -817,6 +817,51 @@ def apply_labels(months: int, account: Optional[str], prefix: str, execute: bool
                    f"(window={months}m). Re-run with --execute to apply.")
 
 
+@cli.command(name="refresh-labels")
+@click.option("--account", default=None, help="Scope to a single mailbox (default: all).")
+def refresh_labels(account):
+    """Resolve & store each email's real Gmail labels (DB-only; no Gmail writes)."""
+    db = _get_db()
+    accounts = MailMindConfig.load_accounts()
+    targets = [account] if account else (accounts or [None])
+    total = 0
+    for acct in targets:
+        auth_account = _auth_account_for(acct) if acct else None
+        is_primary = (acct is None) or (accounts and acct == accounts[0])
+        total += _refresh_labels_one_account(db, acct, auth_account, bool(is_primary))
+    click.echo(f"refresh-labels: {total} emails now carry user labels.")
+
+
+def _refresh_labels_one_account(db: Database, account, auth_account, allow_interactive) -> int:
+    """Resolve each email's Gmail label IDs to truth-label names; store on emails.user_labels."""
+    from mailmind.intelligence.labels import truth_label_policy, resolve_truth_labels
+    creds = load_stored_credentials(auth_account)
+    if creds is None:
+        if allow_interactive:
+            creds = authenticate(account=auth_account)
+        else:
+            LOG.warning("refresh-labels: no creds for %s — skipping.", account or "primary")
+            return 0
+    fetcher = GmailFetcher(build_gmail_service(creds))
+    id_to_name = fetcher.list_label_map()
+    if id_to_name:
+        db.upsert_label_map(account, id_to_name)
+    include, exclude = truth_label_policy()
+    rows = db.execute_sql(
+        "SELECT gmail_id, labels FROM emails WHERE account IS ?", (account,)
+    ).fetchall()
+    updated = 0
+    for r in rows:
+        ids = [x for x in (r["labels"] or "").split(",") if x]
+        names = resolve_truth_labels(ids, id_to_name, include, exclude)
+        db.set_email_user_labels(r["gmail_id"], ",".join(names))
+        if names:
+            updated += 1
+    LOG.info("refresh-labels[%s]: %d/%d emails got user labels.",
+             account or "primary", updated, len(rows))
+    return updated
+
+
 def _auth_account_for(account: Optional[str]) -> Optional[str]:
     """Map a mailbox to its token-storage identity.
 

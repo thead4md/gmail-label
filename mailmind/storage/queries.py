@@ -816,6 +816,73 @@ def set_sender_trust_tier(db: Database, sender_email: str, tier: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sender & thread label rules
+# ---------------------------------------------------------------------------
+
+
+def set_sender_label_rule(db: Database, sender_email: str, label: str,
+                          account: Optional[str] = None) -> None:
+    """Create or replace a rule: always label mail from sender_email with label."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR REPLACE INTO sender_label_rules "
+            "(sender_email, label, account, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (sender_email, label, account, now),
+        )
+
+
+def set_thread_label_rule(db: Database, thread_id: str, label: str) -> None:
+    """Create or replace a rule: always label this thread with label."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR REPLACE INTO thread_label_rules "
+            "(thread_id, label, created_at) "
+            "VALUES (?, ?, ?)",
+            (thread_id, label, now),
+        )
+
+
+def get_sender_label(db: Database, sender_email: str, account: Optional[str] = None) -> Optional[str]:
+    """Return the label rule for sender_email, or None if no rule exists."""
+    row = db.execute_sql(
+        "SELECT label FROM sender_label_rules "
+        "WHERE sender_email = ? AND account IS ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (sender_email, account),
+    ).fetchone()
+    return row["label"] if row else None
+
+
+def get_thread_label(db: Database, thread_id: str) -> Optional[str]:
+    """Return the label rule for thread_id, or None if no rule exists."""
+    row = db.execute_sql(
+        "SELECT label FROM thread_label_rules "
+        "WHERE thread_id = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (thread_id,),
+    ).fetchone()
+    return row["label"] if row else None
+
+
+def get_gmail_labels(db: Database, account: Optional[str] = None) -> List[str]:
+    """Return the list of Gmail label names for display.
+
+    Used by the dashboard to populate label selection dropdowns.
+    Returns just the label names (from gmail_label_map).
+    """
+    acc = " WHERE account = ?" if account else ""
+    params = (account,) if account else ()
+    rows = db.execute_sql(
+        f"SELECT DISTINCT name FROM gmail_label_map{acc} ORDER BY name",
+        params,
+    ).fetchall()
+    return [r["name"] for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Analytics queries for INSIGHTS tab
 # ---------------------------------------------------------------------------
 

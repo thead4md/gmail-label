@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..processing.rules import RulesEngine
     from ..ml.inference import MLResult
     from ..ml.model import MLClassifier
+    from ..storage.database import Database
 
 LOG = logging.getLogger(__name__)
 
@@ -59,14 +60,55 @@ class ClassifierRouter:
         self.ml_threshold = ml_threshold
         self.llm_enabled = llm_enabled
 
-    def route(self, email: Email, rule_matches: Optional[list] = None) -> RoutingResult:
+    def route(
+        self,
+        email: Email,
+        rule_matches: Optional[list] = None,
+        db: Optional["Database"] = None,
+        account: Optional[str] = None,
+    ) -> RoutingResult:
         """Route an email through the classifier tiers.
 
         rule_matches: pre-computed RulesEngine.evaluate(email) result. When the
         caller (Pipeline.process) already ran the rules, pass them in to avoid a
         redundant second evaluation. None → evaluate here (back-compat for any
         direct callers / tests).
+
+        db, account: passed by Pipeline.process to check sender/thread label rules.
+        When db is provided, label rules (created by user feedback) are checked first.
         """
+        # --- TIER 0: User-defined label rules (sender + thread) ---
+        if db is not None:
+            from ..storage.queries import get_sender_label, get_thread_label
+
+            # Check thread rule first (more specific)
+            if email.thread_id:
+                thread_label = get_thread_label(db, email.thread_id)
+                if thread_label:
+                    LOG.debug(
+                        "Tier 0 (thread rule) handles email %s: label=%s",
+                        email.gmail_id, thread_label,
+                    )
+                    return RoutingResult(
+                        source="rule",
+                        label=thread_label,
+                        confidence=1.0,
+                    )
+
+            # Check sender rule
+            if email.sender:
+                sender_label = get_sender_label(db, email.sender, account=account)
+                if sender_label:
+                    LOG.debug(
+                        "Tier 0 (sender rule) handles email %s: label=%s",
+                        email.gmail_id, sender_label,
+                    )
+                    return RoutingResult(
+                        source="rule",
+                        label=sender_label,
+                        confidence=1.0,
+                    )
+
         # --- TIER 1: Rules Engine ---
         if rule_matches is None:
             rule_matches = self.rules_engine.evaluate(email)
