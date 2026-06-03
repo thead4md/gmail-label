@@ -350,23 +350,26 @@ def sender_table_html(profiles: List[Dict[str, Any]]) -> str:
         return ""
     rows_html = ""
     for p in profiles:
-        email = p.get("sender_email") or "—"
-        tier  = p.get("trust_tier") or "neutral"
-        seen  = p.get("total_seen", 0)
-        rate  = p.get("approval_rate", 0.0)
+        email  = p.get("sender_email") or "—"
+        tier   = p.get("trust_tier") or "neutral"
+        count  = p.get("email_count", 0)
+        appr   = p.get("total_approved", 0)
+        rej    = p.get("total_rejected", 0)
+        rate   = p.get("approval_rate", 0.0)
+        rate_cell = confidence_bar_html(rate) if (appr + rej) > 0 else '<span style="color:var(--mm-text-muted);">—</span>'
         rows_html += (
             f"<tr>"
             f'<td style="width:44px;padding:6px 8px;">{sender_avatar_html(email)}</td>'
             f"<td>{email}</td>"
             f"<td>{trust_badge_html(tier)}</td>"
-            f'<td style="text-align:right;color:var(--mm-text-muted);">{seen}</td>'
-            f"<td>{confidence_bar_html(rate)}</td>"
+            f'<td style="text-align:right;color:var(--mm-text-muted);">{count}</td>'
+            f"<td>{rate_cell}</td>"
             f"</tr>"
         )
     return (
         '<div class="mm-table-wrap"><table class="mm-table">'
         '<thead><tr><th style="width:44px;"></th><th>Sender</th><th>Trust</th>'
-        '<th style="text-align:right;">Seen</th><th>Approval rate</th></tr></thead>'
+        '<th style="text-align:right;">Emails</th><th>Approval rate</th></tr></thead>'
         f"<tbody>{rows_html}</tbody></table></div>"
     )
 

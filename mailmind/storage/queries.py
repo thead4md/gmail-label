@@ -595,48 +595,76 @@ def get_executed_queue_enriched(
     return result
 
 
-def get_sender_profiles(db: Database) -> List[Dict[str, Any]]:
-    """Return all sender profiles as dicts for dashboard display."""
+def get_sender_profiles(db: Database, coverage: float = 0.75) -> List[Dict[str, Any]]:
+    """Return sender profiles covering `coverage` fraction of email volume.
+
+    Merges existing sender_profiles rows with high-volume senders from the
+    emails table who don't have a profile yet. Senders are ordered by email
+    count DESC; we include enough to cover `coverage` of total messages so
+    one-off senders are excluded without needing an arbitrary hard limit.
+    """
     rows = db.execute_sql(
         """
+        WITH counts AS (
+            SELECT sender, COUNT(*) AS email_count
+            FROM emails
+            WHERE sender IS NOT NULL AND sender != ''
+            GROUP BY sender
+        ),
+        ranked AS (
+            SELECT
+                sender,
+                email_count,
+                SUM(email_count) OVER (
+                    ORDER BY email_count DESC
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS cumulative,
+                SUM(email_count) OVER () AS grand_total
+            FROM counts
+        )
         SELECT
-            sender_email,
-            display_name,
-            total_seen,
-            total_approved,
-            total_rejected,
-            last_action_ts,
-            trust_tier,
-            auto_action_eligible
-        FROM sender_profiles
-        ORDER BY total_approved DESC
-        """
+            r.sender               AS sender_email,
+            sp.display_name,
+            COALESCE(sp.total_approved, 0)       AS total_approved,
+            COALESCE(sp.total_rejected, 0)       AS total_rejected,
+            sp.last_action_ts,
+            COALESCE(sp.trust_tier, 'neutral')   AS trust_tier,
+            COALESCE(sp.auto_action_eligible, 0) AS auto_action_eligible,
+            r.email_count
+        FROM ranked r
+        LEFT JOIN sender_profiles sp ON sp.sender_email = r.sender
+        WHERE (r.cumulative - r.email_count) < r.grand_total * ?
+        ORDER BY r.email_count DESC
+        """,
+        (coverage,),
     ).fetchall()
-    
+
     result = []
     for r in rows:
         total_all = (r['total_approved'] or 0) + (r['total_rejected'] or 0)
-        approval_rate = 0.0
-        if total_all > 0:
-            approval_rate = (r['total_approved'] or 0) / total_all
-        
+        approval_rate = round((r['total_approved'] or 0) / total_all, 3) if total_all else 0.0
         result.append({
-            'sender_email': r['sender_email'],
-            'display_name': r['display_name'],
-            'total_seen': r['total_seen'] or 0,
-            'total_approved': r['total_approved'] or 0,
-            'total_rejected': r['total_rejected'] or 0,
-            'approval_rate': round(approval_rate, 3),
-            'trust_tier': r['trust_tier'] or 'neutral',
+            'sender_email':         r['sender_email'],
+            'display_name':         r['display_name'],
+            'total_approved':       r['total_approved'] or 0,
+            'total_rejected':       r['total_rejected'] or 0,
+            'approval_rate':        approval_rate,
+            'trust_tier':           r['trust_tier'] or 'neutral',
             'auto_action_eligible': bool(r['auto_action_eligible']),
+            'email_count':          r['email_count'] or 0,
         })
-    
+
     return result
 
 
 def toggle_sender_auto_action(db: Database, sender_email: str, enabled: bool) -> None:
-    """Toggle auto-action eligibility for a sender."""
+    """Toggle auto-action eligibility for a sender, creating the row if absent."""
+    now = int(time.time())
     with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO sender_profiles (sender_email, last_action_ts) VALUES (?, ?)",
+            (sender_email, now),
+        )
         cur.execute(
             "UPDATE sender_profiles SET auto_action_eligible = ? WHERE sender_email = ?",
             (int(bool(enabled)), sender_email),

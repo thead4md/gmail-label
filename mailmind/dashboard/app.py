@@ -746,13 +746,19 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                     unsafe_allow_html=True,
                 )
             with col_stats:
-                appr = profile.get("total_approved", 0)
-                rej  = profile.get("total_rejected", 0)
-                rate = profile.get("approval_rate", 0.0)
+                appr  = profile.get("total_approved", 0)
+                rej   = profile.get("total_rejected", 0)
+                rate  = profile.get("approval_rate", 0.0)
+                vol   = profile.get("email_count", 0)
+                if (appr + rej) > 0:
+                    stats_html = (
+                        f'✅ {appr} approved &nbsp; ❌ {rej} rejected &nbsp; '
+                        f'{confidence_bar_html(rate)}'
+                    )
+                else:
+                    stats_html = f'📧 {vol} emails'
                 st.markdown(
-                    f'<span style="font-size:12px;color:#94A3B8;">'
-                    f'✅ {appr} approved &nbsp; ❌ {rej} rejected &nbsp; '
-                    f'{confidence_bar_html(rate)}</span>',
+                    f'<span style="font-size:12px;color:#94A3B8;">{stats_html}</span>',
                     unsafe_allow_html=True,
                 )
             with col_toggle:
@@ -766,7 +772,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                         icon="⚡" if new_val else "⏸️",
                     )
     else:
-        st.info("No sender profiles yet — they appear as you approve/reject items.")
+        st.info("No emails in the database yet.")
 
     # ── Label priority weights ──────────────────────────────────────
     _section("⚖️", "Label priority weights")
