@@ -714,6 +714,109 @@ def backfill(months: int, max_emails: int, account: Optional[str],
     click.echo("Next: python -m mailmind.scripts.train_ml_model  (to retrain on the new data)")
 
 
+def _friendly_label(primary_label: str) -> str:
+    """'MASS_EMAIL' -> 'Mass Email', 'WORK' -> 'Work'."""
+    return (primary_label or "").replace("_", " ").title()
+
+
+def _apply_labels_one_account(
+    db: Database,
+    since_ts: int,
+    account: Optional[str],
+    auth_account: Optional[str],
+    allow_interactive: bool,
+    prefix: str,
+    execute: bool,
+) -> dict:
+    """Stamp predicted category labels onto Gmail for one mailbox.
+
+    Dry-run (execute=False) only counts; nothing is written. Returns a dict of
+    {label_name: count} plus an 'applied' total.
+    """
+    from mailmind.storage.queries import get_labeled_predictions
+
+    label_lbl = account or "primary"
+    preds = get_labeled_predictions(db, since_ts=since_ts, account=account)
+    if not preds:
+        LOG.info("[%s] apply-labels: no classified emails in window.", label_lbl)
+        return {"applied": 0}
+
+    # Group message ids by destination Gmail label name.
+    by_label: dict = {}
+    for p in preds:
+        name = f"{prefix}{_friendly_label(p['primary_label'])}"
+        by_label.setdefault(name, []).append(p["email_gmail_id"])
+
+    counts = {name: len(ids) for name, ids in by_label.items()}
+    if not execute:
+        return {**counts, "applied": 0}
+
+    # Live path: authenticate, ensure each label exists, batch-add.
+    creds = load_stored_credentials(auth_account)
+    if creds is None:
+        if allow_interactive:
+            creds = authenticate(account=auth_account)
+        else:
+            LOG.warning("[%s] apply-labels: no credentials — skipping.", label_lbl)
+            return {"applied": 0}
+    fetcher = GmailFetcher(build_gmail_service(creds))
+
+    applied = 0
+    for name, ids in by_label.items():
+        label_id = fetcher.ensure_label(name)
+        if not label_id:
+            LOG.warning("[%s] apply-labels: could not ensure label '%s'.", label_lbl, name)
+            continue
+        applied += fetcher.batch_add_label(ids, label_id)
+        LOG.info("[%s] apply-labels: %s -> %d messages.", label_lbl, name, len(ids))
+    return {**counts, "applied": applied}
+
+
+@cli.command(name="apply-labels")
+@click.option("--months", default=3, type=int, help="Look-back window in months (default: 3).")
+@click.option("--account", default=None, help="Scope to a single mailbox (default: all).")
+@click.option("--prefix", default="MailMind/",
+              help="Gmail label prefix (default: 'MailMind/' — nests under one parent).")
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually write labels to Gmail. Omit for a dry-run preview.")
+def apply_labels(months: int, account: Optional[str], prefix: str, execute: bool) -> None:
+    """Stamp MailMind's predicted category onto Gmail messages in bulk.
+
+    DRY-RUN BY DEFAULT: prints how many emails would get each label and writes
+    nothing. Re-run with --execute to apply. Idempotent (re-adding an existing
+    label is a no-op) and additive only (never archives/deletes).
+    """
+    db = _get_db()
+    since_ts = int(time.time()) - months * 30 * 86400
+    accounts = MailMindConfig.load_accounts()
+    targets = [account] if account else (accounts or [None])
+
+    grand_total = 0
+    grand_applied = 0
+    for acct in targets:
+        auth_account = _auth_account_for(acct) if acct else None
+        is_primary = (acct is None) or (accounts and acct == accounts[0])
+        res = _apply_labels_one_account(
+            db, since_ts=since_ts, account=acct, auth_account=auth_account,
+            allow_interactive=bool(is_primary), prefix=prefix, execute=execute,
+        )
+        applied = res.pop("applied", 0)
+        grand_applied += applied
+        scope = acct or "primary"
+        if res:
+            click.echo(f"[{scope}]")
+            for name, n in sorted(res.items(), key=lambda kv: -kv[1]):
+                click.echo(f"   {name}: {n}")
+                grand_total += n
+
+    if execute:
+        click.echo(f"\napply-labels: applied labels to {grand_applied} message(s) "
+                   f"across {len(targets)} mailbox(es).")
+    else:
+        click.echo(f"\nDRY RUN: would label {grand_total} message(s) "
+                   f"(window={months}m). Re-run with --execute to apply.")
+
+
 def _auth_account_for(account: Optional[str]) -> Optional[str]:
     """Map a mailbox to its token-storage identity.
 

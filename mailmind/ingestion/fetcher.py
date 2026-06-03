@@ -114,6 +114,56 @@ class GmailFetcher:
             time.sleep(self.rate_limit_seconds)
         return results
 
+    def ensure_label(self, label_name: str) -> Optional[str]:
+        """Return the Gmail label id for ``label_name``, creating it if absent.
+
+        Nested labels (e.g. 'MailMind/Work') are created automatically by Gmail
+        when the name contains '/'. Returns None on API error.
+        """
+        def _list():
+            return self.service.users().labels().list(userId=self.user_id).execute()
+
+        try:
+            existing = _retry(_list).get("labels", [])
+            for lab in existing:
+                if lab.get("name") == label_name:
+                    return lab.get("id")
+
+            def _create():
+                return self.service.users().labels().create(
+                    userId=self.user_id, body={"name": label_name}).execute()
+
+            return _retry(_create).get("id")
+        except HttpError as e:
+            LOG.error("ensure_label('%s') failed: %s", label_name, e)
+            return None
+
+    def batch_add_label(self, message_ids: List[str], label_id: str) -> int:
+        """Add ``label_id`` to many messages in batched HTTP requests (≤100/call).
+
+        Adding a label a message already has is a no-op in Gmail, so this is
+        idempotent. Returns the number of messages submitted.
+        """
+        if not message_ids or not label_id:
+            return 0
+        submitted = 0
+        for start in range(0, len(message_ids), 100):
+            chunk = message_ids[start:start + 100]
+
+            def call(chunk=chunk):
+                batch = self.service.new_batch_http_request()
+                for mid in chunk:
+                    batch.add(self.service.users().messages().modify(
+                        userId=self.user_id, id=mid,
+                        body={"addLabelIds": [label_id]}))
+                batch.execute()
+                return None
+
+            _retry(call)
+            submitted += len(chunk)
+            time.sleep(self.rate_limit_seconds)
+        return submitted
+
     def get_history(self, start_history_id: int, history_types: Optional[List[str]] = None) -> Dict[str, Any]:
         """Retrieve history records since `start_history_id`.
 
