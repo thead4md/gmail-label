@@ -887,3 +887,24 @@ def analytics_channel_weekday(db: Database, since_ts: int,
             FROM predictions WHERE created_at >= ?{acc}
             GROUP BY channel, weekday""", p).fetchall()
     return [{"channel": r["channel"], "weekday": r["weekday"], "count": r["count"]} for r in rows]
+
+
+def get_labeled_predictions(
+    db: Database, since_ts: int, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return (email_gmail_id, primary_label) for classified emails in the window.
+
+    Used by the `apply-labels` command to stamp MailMind's predicted category
+    onto the actual Gmail messages. Only rows with a non-empty primary_label.
+    """
+    acc = " AND account = ?" if account else ""
+    params: tuple = (since_ts, account) if account else (since_ts,)
+    rows = db.execute_sql(
+        f"""SELECT email_gmail_id, primary_label
+            FROM predictions
+            WHERE created_at >= ? AND primary_label IS NOT NULL
+              AND primary_label != ''{acc}""",
+        params,
+    ).fetchall()
+    return [{"email_gmail_id": r["email_gmail_id"], "primary_label": r["primary_label"]}
+            for r in rows]
