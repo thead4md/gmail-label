@@ -209,6 +209,9 @@ def _process_message_id(
     account: Optional[str] = None,
     classify_only: bool = False,
     prefetched_raw: Optional[dict] = None,
+    label_map: Optional[dict] = None,
+    truth_include: Optional[list] = None,
+    truth_exclude: Optional[list] = None,
 ) -> None:
     """Fetch one message, persist it, run the classification pipeline.
 
@@ -251,6 +254,18 @@ def _process_message_id(
     except Exception as exc:
         LOG.warning("Failed to insert email %s: %s", email.gmail_id, exc)
         return
+
+    # Capture the email's real Gmail labels as training signal (Phase 1a, automatic).
+    if label_map is not None:
+        try:
+            from mailmind.intelligence.labels import resolve_truth_labels
+            names = resolve_truth_labels(
+                email.labels or [], label_map,
+                truth_include or [], truth_exclude or [],
+            )
+            pipeline.db.set_email_user_labels(email.gmail_id, ",".join(names))
+        except Exception as exc:
+            LOG.debug("user_labels capture failed for %s: %s", email.gmail_id, exc)
 
     try:
         # auto_action=False — QueueManager handles execution decisions
@@ -353,6 +368,14 @@ def _run_once(
 
     pipeline, queue_manager = _build_components(db, dry_run, service, llm_client=llm_client)
 
+    # Refresh the label-id→name map once per cycle so new mail can be tagged
+    # with the user's real labels (truth signal). Cheap: one labels.list call.
+    from mailmind.intelligence.labels import truth_label_policy
+    label_map = fetcher.list_label_map()
+    if label_map:
+        db.upsert_label_map(account, label_map)
+    truth_include, truth_exclude = truth_label_policy()
+
     # Fetch only UNREAD INBOX messages. Gmail treats UNREAD as a label, so
     # passing both label ids returns their intersection (unread in inbox).
     # Read mail drops out of the set, so the loop stops re-scanning it.
@@ -370,7 +393,9 @@ def _run_once(
         if raw is None:
             continue
         _process_message_id(mid, fetcher, pipeline, queue_manager,
-                            account=account, prefetched_raw=raw)
+                            account=account, prefetched_raw=raw,
+                            label_map=label_map, truth_include=truth_include,
+                            truth_exclude=truth_exclude)
 
     LOG.info("[%s] Run complete.", label)
 
@@ -497,6 +522,29 @@ def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 8640
         LOG.error("Retention sweep failed: %s", exc, exc_info=True)
 
 
+def _maybe_refresh_labels(db: Database, interval_seconds: int = 86400) -> None:
+    """Re-resolve user_labels across all mail at most once per interval.
+    Catches labels the user changed directly in Gmail on older messages.
+    Tracked in system_state; failures never take down the watch loop.
+    """
+    try:
+        last = db.get_state("last_label_refresh_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+        accounts = MailMindConfig.load_accounts()
+        for acct in (accounts or [None]):
+            auth_account = _auth_account_for(acct) if acct else None
+            is_primary = (acct is None) or (accounts and acct == accounts[0])
+            try:
+                _refresh_labels_one_account(db, acct, auth_account, bool(is_primary))
+            except Exception as exc:
+                LOG.warning("label refresh failed for %s: %s", acct or "primary", exc)
+        db.set_state("last_label_refresh_ts", str(now))
+    except Exception as exc:
+        LOG.warning("label refresh skipped: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -545,6 +593,7 @@ def run(
                 _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
                 _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
+                _maybe_refresh_labels(db)
                 _record_heartbeat(db)
             except KeyboardInterrupt:
                 raise
