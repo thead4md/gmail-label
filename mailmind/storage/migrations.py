@@ -244,6 +244,23 @@ MIGRATIONS: List[Tuple[str, str]] = [
             ON sender_profiles(trust_tier);
         """,
     ),
+    (
+        "0018_add_user_labels_and_label_map",
+        """-- Handled in apply_migrations: emails.user_labels column + gmail_label_map table.""",
+    ),
+    (
+        "0019_add_sender_and_thread_label_rules",
+        """-- Handled in apply_migrations: sender_label_rules + thread_label_rules tables.""",
+    ),
+    (
+        "0020_create_label_priority",
+        """
+        CREATE TABLE IF NOT EXISTS label_priority (
+            label TEXT PRIMARY KEY,
+            weight INTEGER CHECK (weight >= -20 AND weight <= 30)
+        );
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -363,6 +380,28 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             _apply_account_dimension(conn)
         elif name == "0016_add_channel_to_predictions":
             _ensure_columns(conn, "predictions", CHANNEL_COLUMN)
+        elif name == "0018_add_user_labels_and_label_map":
+            _ensure_columns(conn, "emails", [("user_labels", "TEXT")])
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS gmail_label_map ("
+                " account TEXT, label_id TEXT, name TEXT,"
+                " PRIMARY KEY (account, label_id))"
+            )
+        elif name == "0019_add_sender_and_thread_label_rules":
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS sender_label_rules ("
+                " sender_email TEXT NOT NULL,"
+                " label TEXT NOT NULL,"
+                " account TEXT,"
+                " created_at INTEGER DEFAULT (strftime('%s','now')),"
+                " PRIMARY KEY (sender_email, label, account))"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS thread_label_rules ("
+                " thread_id TEXT PRIMARY KEY,"
+                " label TEXT NOT NULL,"
+                " created_at INTEGER DEFAULT (strftime('%s','now')))"
+            )
         else:
             cur.executescript(sql)
         cur.execute(

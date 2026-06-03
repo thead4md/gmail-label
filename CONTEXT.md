@@ -5993,12 +5993,13 @@ graph TD
 | `mailmind/intelligence/__init__.py` |  | — | ✅ Stable |
 | `mailmind/intelligence/channels.py` | MailMind — email channel detection. | detect_channel(), enrich_prediction_with_channel() | ✅ Complete |
 | `mailmind/intelligence/explainer.py` |  | ReasonPayload, build_reason_payload() | ✅ Complete |
-| `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction(), handle_know_sender(), handle_mute_sender(), handle_block_sender() | ✅ Complete |
+| `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction(), handle_know_sender(), handle_mute_sender(), handle_block_sender(), handle_label_email() | ✅ Complete |
+| `mailmind/intelligence/labels.py` | Decide which Gmail labels count as user 'ground truth' for learning. | truth_label_policy(), is_truth_label(), resolve_truth_labels() | ✅ Complete |
 | `mailmind/intelligence/sender_memory.py` |  | SenderProfileSummary, get_sender_profile(), get_sender_trust_tier(), update_from_outcome(), get_similar_sender_history() | ✅ Complete |
 | `mailmind/intelligence/thread_analyzer.py` | MailMind — thread and reply-needed intelligence. | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
 | `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
-| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), digest(), prune(), backfill(), apply_labels(), auth(), accounts() | ✅ Complete |
+| `mailmind/main.py` | MailMind — main entry point. | cli(), run(), digest(), prune(), backfill(), apply_labels(), refresh_labels(), auth(), accounts() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
@@ -6017,7 +6018,7 @@ graph TD
 | `mailmind/storage/database.py` | Database abstraction for MailMind using SQLite. | Database, open_database_from_config_path() | ✅ Complete |
 | `mailmind/storage/migrations.py` | Migration definitions and application helpers for MailMind SQLite schema. | apply_migrations() | ✅ Complete |
 | `mailmind/storage/models.py` | Data models for MailMind storage layer. | now_ts(), Email, Prediction, ActionApplied, Feedback, SenderReputation, SystemState, QueueItem | ✅ Complete |
-| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata(), get_new_senders(), set_sender_trust_tier(), analytics_label_distribution(), analytics_channel_distribution(), analytics_top_senders(), analytics_decision_times(), analytics_channel_weekday(), get_labeled_predictions() | ✅ Complete |
+| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata(), get_new_senders(), set_sender_trust_tier(), set_sender_label_rule(), set_thread_label_rule(), get_sender_label(), get_thread_label(), get_gmail_labels(), analytics_label_distribution(), analytics_channel_distribution(), analytics_top_senders(), analytics_decision_times(), analytics_channel_weekday(), get_labeled_predictions() | ✅ Complete |
 | `mailmind/utils/__init__.py` |  | — | ✅ Stable |
 | `mailmind/utils/fingerprint.py` |  | make_action_fingerprint() | ✅ Complete |
 <!-- AUTO:END:module_map -->
@@ -6035,7 +6036,7 @@ graph TD
 ```python
 class Pipeline:
     def __init__(db: Database, rules_engine: RulesEngine, scorer: PriorityScorer, executor: Optional['ActionExecutor'], safety_policy: Optional[SafetyPolicy], llm_client: Optional['DeepSeekClient'], llm_skip_threshold: int, llm_max_calls_per_run: int, classifier_router: Optional[ClassifierRouter])
-    def process(self, email: Email, auto_action: bool)
+    def process(self, email: Email, auto_action: bool, account: Optional[str])
     def add_ml_stage(self, ml_fn)
     def add_llm_stage(self, llm_fn)
     def add_feedback_loop(self, feedback_processor)
@@ -6114,6 +6115,8 @@ class MailMindConfig:
 | `MAILMIND_FETCH_MAX` | `50` | No | Max emails per fetch run |
 | `MAILMIND_POLL_SECONDS` | `120` | No | Poll interval in seconds (--watch mode) |
 | `MAILMIND_RETENTION_DAYS` | `90` | No | — |
+| `MAILMIND_TRUTH_LABELS_EXCLUDE` | `AI/,MailMind/` | No | — |
+| `MAILMIND_TRUTH_LABELS_INCLUDE` | `""` (empty) | No | — |
 | `MAILMIND_USER_EMAIL` | `""` (empty) | No | User's primary email for scoring boosts |
 | `NO_PROXY` | `""` (empty) | No | — |
 | `NPY_PROMOTION_STATE` | `weak` | No | — |
@@ -7605,7 +7608,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 497 tests passing.
+Pass 7 complete. 529 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

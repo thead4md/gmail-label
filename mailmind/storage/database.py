@@ -317,6 +317,48 @@ class Database:
         self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
         self._conn.execute("VACUUM;")
 
+    # --- Label priority weights ---
+    def set_label_priority(self, label: str, weight: int) -> None:
+        """Set or update the weight for a label.
+
+        Args:
+            label: Label name (e.g., 'URGENT', 'WORK').
+            weight: Priority weight, clamped -20..+30.
+        """
+        weight = max(-20, min(30, int(weight)))
+        with self.transaction() as cur:
+            cur.execute(
+                "INSERT INTO label_priority (label, weight) VALUES (?, ?)"
+                " ON CONFLICT(label) DO UPDATE SET weight=excluded.weight",
+                (label, weight),
+            )
+
+    def get_label_priorities(self) -> dict[str, int]:
+        """Get all label priorities as {label: weight}."""
+        assert self._conn is not None
+        cur = self._conn.cursor()
+        cur.execute("SELECT label, weight FROM label_priority")
+        return {row["label"]: row["weight"] for row in cur.fetchall()}
+
+    # --- Label mapping and truth labels ---
+    def upsert_label_map(self, account, mapping: dict) -> None:
+        with self.transaction() as cur:
+            for lid, name in (mapping or {}).items():
+                cur.execute(
+                    "INSERT INTO gmail_label_map (account, label_id, name) VALUES (?, ?, ?)"
+                    " ON CONFLICT(account, label_id) DO UPDATE SET name=excluded.name",
+                    (account, lid, name))
+
+    def get_label_map(self, account) -> dict:
+        cur = self._conn.cursor()
+        cur.execute("SELECT label_id, name FROM gmail_label_map WHERE account IS ?", (account,))
+        return {r["label_id"]: r["name"] for r in cur.fetchall()}
+
+    def set_email_user_labels(self, gmail_id: str, user_labels_csv: str) -> None:
+        with self.transaction() as cur:
+            cur.execute("UPDATE emails SET user_labels = ? WHERE gmail_id = ?",
+                        (user_labels_csv, gmail_id))
+
     # --- Utilities for tests / migrations ---
     def execute_sql(self, sql: str, params: Optional[tuple] = None) -> sqlite3.Cursor:
         assert self._conn is not None

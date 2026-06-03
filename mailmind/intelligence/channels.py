@@ -136,6 +136,27 @@ _AUTOMATED_SENDER_RE = re.compile(
     re.I | re.UNICODE,
 )
 
+_GOOGLE_DOCS_RE = re.compile(
+    r"(docs\.google\.com|drive-shares-noreply@google\.com|"
+    r"comments-noreply@docs\.google\.com|"
+    r"(commented|mentioned you|shared)( on| a)? (a )?(document|file|spreadsheet|presentation)|"
+    r"megosztott (egy )?(dokumentumot|f[aá]jlt))",
+    re.I | re.UNICODE,
+)
+
+_CALENDAR_RE = re.compile(
+    r"(calendar-notification@google\.com|@resource\.calendar\.google\.com|"
+    r"\binvitation\b|\bdeclined\b|\baccepted\b.*\b(event|meeting)|"
+    r"napt[aá]r|esem[eé]ny|megh[ií]v[oó])",
+    re.I | re.UNICODE,
+)
+
+_TASKS_RE = re.compile(
+    r"(tasks-noreply@google\.com|marked .* complete|completed the task|"
+    r"feladat (k[eé]sz|teljes[ií]tve|befejez))",
+    re.I | re.UNICODE,
+)
+
 
 def detect_channel(
     subject: Optional[str],
@@ -162,6 +183,14 @@ def detect_channel(
     # ── 1. Automated / monitoring ───────────────────────────────────
     if _AUTOMATED_SUBJECT_RE.search(subj) or _AUTOMATED_SENDER_RE.search(src):
         return "automated"
+
+    # ── Google Docs / Calendar / Tasks (specific, before generic buckets) ──
+    if _CALENDAR_RE.search(subj) or _CALENDAR_RE.search(src):
+        return "calendar"
+    if _GOOGLE_DOCS_RE.search(corpus) or _GOOGLE_DOCS_RE.search(src):
+        return "docs"
+    if _TASKS_RE.search(corpus) or _TASKS_RE.search(src):
+        return "tasks"
 
     # ── 2. Transactional (order / account / auth) ───────────────────
     if _TRANSACTIONAL_SUBJECT_RE.search(subj) or _TRANSACTIONAL_SENDER_RE.search(src):

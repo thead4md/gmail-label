@@ -48,6 +48,7 @@ class ScoreResult:
     direct_mention_bonus: int
     recency_bonus: int
     sender_trust: int
+    label_priority_weight: int = 0
     penalties: Dict[str, int] = field(default_factory=dict)
     primary_label: Optional[str] = None
     breakdown_text: str = ""
@@ -126,6 +127,19 @@ class PriorityScorer:
         # Add memory nudge into sender_trust aggregation
         sender_trust = int(sender_trust) + int(memory_nudge)
 
+        # 5c. Label priority weight
+        label_priority_weight = 0
+        try:
+            if db and primary_label:
+                priorities = {}
+                from ..storage.database import Database
+                if isinstance(db, Database):
+                    priorities = db.get_label_priorities()
+                label_priority_weight = priorities.get(primary_label, 0)
+        except Exception:
+            # Fail-safe: do not crash scoring if label priorities unavailable
+            label_priority_weight = 0
+
         # 6. Penalties accumulate
         penalties = {}
 
@@ -140,13 +154,13 @@ class PriorityScorer:
         total_penalties = sum(penalties.values())
 
         # 7. Clamp to 0-100
-        score_before_clamp = base_score + rule_contribution + direct_mention_bonus + recency_bonus + sender_trust + total_penalties
+        score_before_clamp = base_score + rule_contribution + direct_mention_bonus + recency_bonus + sender_trust + label_priority_weight + total_penalties
         total_score = max(0, min(100, score_before_clamp))
 
         # 8. Generate breakdown text
         breakdown = self._build_breakdown_text(
             primary_label, base_score, rule_contribution, direct_mention_bonus, recency_bonus,
-            sender_trust, penalties, matched_rule_names, score_before_clamp, total_score
+            sender_trust, label_priority_weight, penalties, matched_rule_names, score_before_clamp, total_score
         )
 
         result = ScoreResult(
@@ -156,6 +170,7 @@ class PriorityScorer:
             direct_mention_bonus=direct_mention_bonus,
             recency_bonus=recency_bonus,
             sender_trust=sender_trust,
+            label_priority_weight=label_priority_weight,
             penalties=penalties,
             primary_label=primary_label,
             breakdown_text=breakdown,
@@ -228,6 +243,7 @@ class PriorityScorer:
         direct_mention_bonus: int,
         recency_bonus: int,
         sender_trust: int,
+        label_priority_weight: int,
         penalties: Dict[str, int],
         matched_rule_names: List[str],
         score_before_clamp: int,
@@ -242,6 +258,8 @@ class PriorityScorer:
             f"Recency bonus: {recency_bonus}",
             f"Sender trust: {sender_trust}",
         ]
+        if label_priority_weight != 0:
+            lines.append(f"Label priority weight: {label_priority_weight}")
         if penalties:
             penalty_str = ", ".join(f"{k}={v}" for k, v in penalties.items())
             lines.append(f"Penalties: {penalty_str}")

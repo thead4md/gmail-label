@@ -46,8 +46,10 @@ from mailmind.dashboard.theme import (
 from mailmind.intelligence.feedback import (
     handle_approve, handle_correction, handle_reject,
     handle_know_sender, handle_mute_sender, handle_block_sender,
+    handle_label_email,
 )
 from mailmind.processing.queue_manager import QueueManager
+from mailmind.processing.scorer import LABEL_BASE_SCORES
 from mailmind.storage.database import Database
 from mailmind.storage.queries import (
     analytics_channel_distribution,
@@ -56,6 +58,7 @@ from mailmind.storage.queries import (
     analytics_label_distribution,
     analytics_top_senders,
     build_digest,
+    get_gmail_labels,
     get_ml_model_metadata,
     get_new_senders,
     get_pending_queue_enriched,
@@ -124,6 +127,10 @@ def _c_model_metadata():
 @st.cache_data(ttl=300)
 def _c_label_dist(since, account):
     return analytics_label_distribution(get_db(), since, account)
+
+@st.cache_data(ttl=300)
+def _c_gmail_labels(account):
+    return get_gmail_labels(get_db(), account=account)
 
 @st.cache_data(ttl=300)
 def _c_channel_dist(since, account):
@@ -455,18 +462,29 @@ def render_review_tab(account: Optional[str] = None) -> None:
                     st.session_state[f"edit_review_{item_id}"] = True
 
             if st.session_state.get(f"edit_review_{item_id}"):
-                col_sel, col_save = st.columns(2)
+                col_sel, col_scope, col_save = st.columns(3)
+                gmail_labels = _c_gmail_labels(account) or list(LABEL_COLORS.keys())
                 with col_sel:
                     new_label = st.selectbox(
                         "New label",
-                        options=list(LABEL_COLORS.keys()),
+                        options=gmail_labels,
                         key=f"review_label_select_{item_id}",
+                    )
+                with col_scope:
+                    scope = st.radio(
+                        "Apply to",
+                        options=["email", "thread", "sender"],
+                        horizontal=True,
+                        key=f"review_label_scope_{item_id}",
                     )
                 with col_save:
                     if st.button("Save", key=f"review_save_label_{item_id}"):
-                        acted = handle_correction(db, item_id, corrected_label=new_label)
+                        if scope in ("thread", "sender"):
+                            acted = handle_label_email(db, item_id, new_label, scope, executor=get_action_executor(), account=account)
+                        else:
+                            acted = handle_correction(db, item_id, corrected_label=new_label)
                         if acted:
-                            st.toast(f"✏️ → {new_label}", icon="✏️")
+                            st.toast(f"✏️ → {new_label} ({scope})", icon="✏️")
                             st.session_state.pop(f"edit_review_{item_id}", None)
                             _invalidate()
                             st.rerun()
@@ -594,6 +612,50 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                     )
     else:
         st.info("No sender profiles yet — they appear as you approve/reject items.")
+
+    # ── Label priority weights ──────────────────────────────────────
+    _section("⚖️", "Label priority weights")
+
+    label_priorities = db.get_label_priorities()
+    st.markdown(
+        "<p style='font-size:12px;color:#94A3B8;margin-bottom:16px;'>"
+        "Set weights (−20 to +30) to boost or suppress specific labels in scoring. "
+        "Higher weights increase priority scores.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # Predefined labels from scorer
+    all_labels = list(LABEL_BASE_SCORES.keys())
+
+    for label in all_labels:
+        col_label, col_slider, col_reset = st.columns([1, 3, 1])
+        with col_label:
+            st.markdown(
+                f'<span style="font-size:13px;font-weight:500;">{label}</span>',
+                unsafe_allow_html=True,
+            )
+        with col_slider:
+            current_weight = label_priorities.get(label, 0)
+            new_weight = st.slider(
+                "weight",
+                min_value=-20,
+                max_value=30,
+                value=current_weight,
+                step=1,
+                key=f"label_priority_{label}",
+                label_visibility="collapsed",
+            )
+            if new_weight != current_weight:
+                db.set_label_priority(label, new_weight)
+                _invalidate()
+                st.toast(f"Updated {label} weight to {new_weight}", icon="⚖️")
+        with col_reset:
+            if label_priorities.get(label) is not None:
+                if st.button("Reset", key=f"reset_priority_{label}", use_container_width=True):
+                    # Remove by setting to 0
+                    db.set_label_priority(label, 0)
+                    _invalidate()
+                    st.toast(f"Reset {label} weight", icon="↺")
 
     # ── Model health ────────────────────────────────────────────────
     _section("🤖", "Model health")
