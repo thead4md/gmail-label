@@ -518,6 +518,83 @@ def get_pending_queue_enriched(
     return result
 
 
+def get_executed_queue_enriched(
+    db: Database, limit: int = 100, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return executed/approved/failed queue items enriched with email and sender info.
+    was_auto=True means autopilot fired without human review.
+    """
+    account_clause = " AND aq.account = ?" if account else ""
+    params: tuple = (account, limit) if account else (limit,)
+    rows = db.execute_sql(
+        f"""
+        SELECT
+            aq.id,
+            aq.email_gmail_id,
+            aq.action,
+            aq.status,
+            aq.confidence,
+            aq.priority_score,
+            aq.reason_json,
+            aq.created_at,
+            aq.reviewed_at,
+            aq.executed_at,
+            CASE
+                WHEN aq.reviewed_at IS NULL AND aq.status = 'executed' THEN 1
+                ELSE 0
+            END AS was_auto,
+            e.subject,
+            e.sender,
+            e.date_ts,
+            e.snippet,
+            sp.trust_tier,
+            p.primary_label,
+            p.confidence AS prediction_confidence,
+            p.ml_confidence,
+            p.llm_confidence,
+            p.channel
+        FROM action_queue aq
+        LEFT JOIN emails e ON e.gmail_id = aq.email_gmail_id
+        LEFT JOIN sender_profiles sp ON sp.sender_email = e.sender
+        LEFT JOIN predictions p ON p.id = aq.prediction_id
+        WHERE aq.status IN ('executed', 'approved', 'execute_failed'){account_clause}
+        ORDER BY COALESCE(aq.executed_at, aq.reviewed_at, aq.created_at) DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    result = []
+    for r in rows:
+        reason_json_raw = r['reason_json'] or '{}'
+        try:
+            reason = json.loads(reason_json_raw) if isinstance(reason_json_raw, str) else reason_json_raw
+        except Exception:
+            reason = {}
+        result.append({
+            'id': r['id'],
+            'email_gmail_id': r['email_gmail_id'],
+            'action': r['action'],
+            'status': r['status'],
+            'confidence': r['confidence'],
+            'priority_score': r['priority_score'],
+            'reason_json': reason,
+            'created_at': r['created_at'],
+            'reviewed_at': r['reviewed_at'],
+            'executed_at': r['executed_at'],
+            'was_auto': bool(r['was_auto']),
+            'subject': r['subject'],
+            'sender': r['sender'],
+            'snippet': r['snippet'],
+            'trust_tier': r['trust_tier'],
+            'primary_label': r['primary_label'],
+            'prediction_confidence': r['prediction_confidence'],
+            'ml_confidence': r['ml_confidence'],
+            'llm_confidence': r['llm_confidence'],
+            'channel': r['channel'],
+        })
+    return result
+
+
 def get_sender_profiles(db: Database) -> List[Dict[str, Any]]:
     """Return all sender profiles as dicts for dashboard display."""
     rows = db.execute_sql(

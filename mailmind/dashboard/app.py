@@ -22,6 +22,7 @@ from mailmind.dashboard.helpers import (
     channel_chip_html,
     confidence_bar_html,
     confidence_sparkline_html,
+    corrections_table_html,
     deadline_pill_html,
     email_card_html,
     email_preview_html,
@@ -30,6 +31,7 @@ from mailmind.dashboard.helpers import (
     get_confidence_badge,
     get_heartbeat_status,
     get_time_ago_str,
+    history_badge_html,
     label_chip_html,
     parse_reason_json,
     reply_needed_pill_html,
@@ -60,11 +62,13 @@ from mailmind.storage.queries import (
     analytics_label_distribution,
     analytics_top_senders,
     build_digest,
+    get_executed_queue_enriched,
     get_gmail_labels,
     get_ml_model_metadata,
     get_new_senders,
     get_pending_queue_enriched,
     get_queue_stats,
+    get_recent_corrections,
     get_recent_predictions_with_emails,
     get_sender_profiles,
     toggle_sender_auto_action,
@@ -133,6 +137,14 @@ def _c_label_dist(since, account):
 @st.cache_data(ttl=300)
 def _c_gmail_labels(account):
     return get_gmail_labels(get_db(), account=account)
+
+@st.cache_data(ttl=60)
+def _c_executed(limit, account):
+    return get_executed_queue_enriched(get_db(), limit=limit, account=account)
+
+@st.cache_data(ttl=60)
+def _c_corrections():
+    return get_recent_corrections(get_db(), limit=50)
 
 @st.cache_data(ttl=300)
 def _c_channel_dist(since, account):
@@ -530,6 +542,117 @@ def render_review_tab(account: Optional[str] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tab: HISTORY
+# ---------------------------------------------------------------------------
+def render_history_tab(account: Optional[str] = None) -> None:
+    import time as _time
+    db = get_db()
+    _section("📋", "Recent activity")
+    col_win, _ = st.columns([1, 3])
+    with col_win:
+        history_days = st.slider("Window (days)", 1, 30, 7, key="history_days")
+    cutoff_ts = int(_time.time()) - history_days * 86400
+    all_executed = _c_executed(100, account)
+    items = [
+        it for it in all_executed
+        if (it.get("executed_at") or it.get("reviewed_at") or it.get("created_at") or 0)
+        >= cutoff_ts
+    ]
+    if not items:
+        st.markdown(
+            '<div class="mm-empty">'
+            '<div class="mm-empty-icon">📭</div>'
+            '<div class="mm-empty-text">No activity in this window</div>'
+            '<div class="mm-empty-sub">Widen the slider or run the pipeline</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        for idx, item in enumerate(items):
+            item_id  = item.get("id")
+            subject  = (item.get("subject") or "[No Subject]")[:60]
+            sender   = (item.get("sender")  or "Unknown")[:30]
+            label    = item.get("primary_label")
+            conf     = item.get("confidence") or 0.0
+            was_auto = item.get("was_auto", False)
+            status   = item.get("status", "executed")
+            actioned_ts = (
+                item.get("executed_at") or item.get("reviewed_at") or item.get("created_at")
+            )
+            time_ago = get_time_ago_str(actioned_ts)
+            status_icon = {"executed": "✅", "approved": "👍", "execute_failed": "⚠️"}.get(status, "•")
+            with st.expander(f"{status_icon} {sender} — {subject}", expanded=False):
+                st.markdown(
+                    f'{label_chip_html(label)} {history_badge_html(was_auto)} '
+                    f'<span style="font-size:11px;color:#94A3B8;">{time_ago}</span>',
+                    unsafe_allow_html=True,
+                )
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown(f"**Sender:** {item.get('sender', 'Unknown')}")
+                    st.markdown(f"**Action:** `{item.get('action', 'N/A')}`")
+                    st.markdown(f"**Status:** `{status}`")
+                with col2:
+                    st.markdown(
+                        f"**Label:** {label_chip_html(label)}&nbsp;&nbsp;{confidence_bar_html(conf)}",
+                        unsafe_allow_html=True,
+                    )
+                    ch = item.get("channel")
+                    if ch:
+                        st.markdown(channel_chip_html(ch), unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f"**Actioned:** {format_unix_ts(actioned_ts)}")
+                    st.markdown(f"**Mode:** {'🤖 Auto-pilot' if was_auto else '👤 Manual'}")
+                st.markdown(
+                    '<div class="mm-section-header" style="margin-top:12px;">🤔 Why this?</div>',
+                    unsafe_allow_html=True,
+                )
+                reason = parse_reason_json(item.get("reason_json"))
+                _render_reason_panel(reason, item)
+                snippet = item.get("snippet") or ""
+                _prev = email_preview_html(snippet)
+                if _prev:
+                    st.markdown(
+                        '<div class="mm-section-header" style="margin-top:12px;">📄 Preview</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(_prev, unsafe_allow_html=True)
+                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+                if st.button("✏️ Correct label", key=f"hist_edit_{idx}_{item_id}"):
+                    st.session_state[f"edit_history_{item_id}"] = True
+                if st.session_state.get(f"edit_history_{item_id}"):
+                    gmail_labels = _c_gmail_labels(account) or list(LABEL_COLORS.keys())
+                    predicted_label = label or (gmail_labels[0] if gmail_labels else "WORK")
+                    default_idx = gmail_labels.index(predicted_label) if predicted_label in gmail_labels else 0
+                    col_sel, col_save, col_cancel = st.columns([2, 1, 1])
+                    with col_sel:
+                        new_label = st.selectbox(
+                            "Correct label", options=gmail_labels, index=default_idx,
+                            key=f"hist_label_select_{item_id}",
+                        )
+                    with col_save:
+                        if st.button("Save", key=f"hist_save_label_{item_id}"):
+                            acted = handle_correction(db, item_id, corrected_label=new_label)
+                            if acted:
+                                st.toast(f"✏️ Corrected → {new_label}", icon="✏️")
+                                st.session_state.pop(f"edit_history_{item_id}", None)
+                                _invalidate()
+                                st.rerun()
+                            else:
+                                st.warning("Item no longer found in queue.")
+                    with col_cancel:
+                        if st.button("Cancel", key=f"hist_cancel_{item_id}"):
+                            st.session_state.pop(f"edit_history_{item_id}", None)
+                            st.rerun()
+    _section("✏️", "Correction history")
+    corrections = _c_corrections()
+    if corrections:
+        st.markdown(corrections_table_html(corrections), unsafe_allow_html=True)
+    else:
+        st.info("No corrections yet — correct a label above to start training the system.")
+
+
+# ---------------------------------------------------------------------------
 # Tab 3: AUTOMATE
 # ---------------------------------------------------------------------------
 
@@ -865,13 +988,15 @@ def main() -> None:
     inject_css()
     account = _render_sidebar()
 
-    tab_now, tab_review, tab_insights, tab_automate = st.tabs(
-        ["📍 NOW", "📋 REVIEW", "📈 INSIGHTS", "⚙️ AUTOMATE"])
+    tab_now, tab_review, tab_history, tab_insights, tab_automate = st.tabs(
+        ["📍 NOW", "📋 REVIEW", "🕐 HISTORY", "📈 INSIGHTS", "⚙️ AUTOMATE"])
 
     with tab_now:
         render_now_tab(account)
     with tab_review:
         render_review_tab(account)
+    with tab_history:
+        render_history_tab(account)
     with tab_insights:
         render_insights_tab(account)
     with tab_automate:

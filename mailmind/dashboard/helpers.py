@@ -368,3 +368,44 @@ def sender_table_html(profiles: List[Dict[str, Any]]) -> str:
         '<th style="text-align:right;">Seen</th><th>Approval rate</th></tr></thead>'
         f"<tbody>{rows_html}</tbody></table></div>"
     )
+
+
+def history_badge_html(was_auto: bool) -> str:
+    """AUTO (amber) or MANUAL (blue) badge, reusing .mm-chip styles."""
+    color = "#FFA502" if was_auto else "#5B8AF0"
+    label = "AUTO" if was_auto else "MANUAL"
+    return (
+        f'<span class="mm-chip" '
+        f'style="color:{color};border-color:{color}20;background:{color}18;">'
+        f'{label}</span>'
+    )
+
+
+def corrections_table_html(corrections: List[Dict[str, Any]]) -> str:
+    """Styled .mm-table for correction history."""
+    if not corrections:
+        return ""
+    rows_html = ""
+    for c in corrections:
+        date_str = format_unix_ts(c.get("created_at"))
+        email_id = (c.get("email_gmail_id") or "—")[:20]
+        orig = c.get("original_label") or "—"
+        corr = c.get("corrected_label") or "—"
+        source = c.get("source") or "dashboard"
+        rows_html += (
+            f"<tr>"
+            f'<td style="color:var(--mm-text-muted);white-space:nowrap;">{date_str}</td>'
+            f'<td style="color:var(--mm-text-faint);font-family:monospace;font-size:11px;">{email_id}</td>'
+            f"<td>{label_chip_html(orig)}</td>"
+            f'<td style="color:var(--mm-text-muted);">→</td>'
+            f"<td>{label_chip_html(corr)}</td>"
+            f'<td><span class="mm-chip" style="color:var(--mm-text-muted);'
+            f'border-color:var(--mm-border);background:var(--mm-surface-2);">{source}</span></td>'
+            f"</tr>"
+        )
+    return (
+        '<div class="mm-table-wrap"><table class="mm-table">'
+        "<thead><tr><th>Date</th><th>Email ID</th><th>Original</th>"
+        "<th></th><th>Corrected</th><th>Source</th></tr></thead>"
+        f"<tbody>{rows_html}</tbody></table></div>"
+    )
