@@ -71,24 +71,27 @@ class ActionExecutor:
         email: Email,
         score: ScoreResult,
     ) -> Optional[str]:
-        """Suggest an action based on score and primary label.
+        """Suggest an action based on priority score and primary label.
 
-        Returns action name if confidence meets threshold, else None.
+        total_score is the *priority* score (0-100), not classification
+        confidence. Never compare total_score/100 against CONFIDENCE_THRESHOLDS
+        — those thresholds are for classification confidence (0-1 from the LLM),
+        which lives on Prediction.confidence, not on ScoreResult.
         """
-        confidence = score.total_score / 100.0  # Normalize to 0-1
         primary_label = score.primary_label or "NOTIFICATION"
+        total_score = score.total_score
 
-        # Simple heuristic for suggested action
-        if score.total_score >= 80 and confidence >= CONFIDENCE_THRESHOLDS["star"]:
+        if total_score >= 80:
             return "star"
-        elif score.total_score >= 60 and confidence >= CONFIDENCE_THRESHOLDS["mark_important"]:
+        elif total_score >= 60:
             return "mark_important"
-        elif primary_label == "NEWSLETTER" and confidence >= CONFIDENCE_THRESHOLDS["archive"]:
+        elif primary_label in ("NEWSLETTER", "MASS_EMAIL"):
+            # Newsletters/mass-mail are correctly classified; archive regardless
+            # of priority score (which is intentionally suppressed for bulk mail).
             return "archive"
-        elif score.total_score >= 50:
+        else:
+            # Any other classified email is worth labeling.
             return "label"
-
-        return None
 
     def execute_action(
         self,

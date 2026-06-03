@@ -389,7 +389,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                     f'{sender_avatar_html(sender)}&nbsp;'
                     f'<span style="font-size:13px;">{sender}</span> '
                     f'<span style="font-size:11px;color:#94A3B8;">'
-                    f'{s["pending_count"]} pending</span>',
+                    f'{s["email_count"]} emails</span>',
                     unsafe_allow_html=True,
                 )
             with c_know:

@@ -869,30 +869,31 @@ def get_ml_model_metadata(db: Database) -> Optional[Dict[str, Any]]:
 def get_new_senders(db: Database, account: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return distinct senders with NO approve/reject history yet.
 
-    A sender is 'new' if they have no sender_profiles row, or a row with
-    zero recorded decisions (total_approved + total_rejected == 0).
-    Scoped to pending queue items so the screening list stays actionable.
+    Sources from predictions (not action_queue) so emails that were classified
+    but never queued still surface here. A sender is 'new' if they have no
+    sender_profiles row with recorded decisions.
     """
-    account_clause = " AND aq.account = ?" if account else ""
+    account_clause = " AND p.account = ?" if account else ""
     params: tuple = (account,) if account else ()
     rows = db.execute_sql(
         f"""
         SELECT DISTINCT e.sender               AS sender,
-                        COUNT(aq.id)            AS pending_count,
-                        MAX(aq.created_at)      AS last_seen
-        FROM action_queue aq
-        JOIN emails e ON e.gmail_id = aq.email_gmail_id
+                        COUNT(p.id)            AS email_count,
+                        MAX(p.created_at)      AS last_seen
+        FROM predictions p
+        JOIN emails e ON e.gmail_id = p.email_gmail_id
         LEFT JOIN sender_profiles sp ON sp.sender_email = e.sender
-        WHERE aq.status = 'pending'{account_clause}
+        WHERE e.sender IS NOT NULL{account_clause}
           AND (sp.sender_email IS NULL
                OR (COALESCE(sp.total_approved,0) + COALESCE(sp.total_rejected,0)) = 0)
         GROUP BY e.sender
         ORDER BY last_seen DESC
+        LIMIT 50
         """,
         params if params else None,
     ).fetchall()
     return [
-        {"sender": r["sender"], "pending_count": r["pending_count"],
+        {"sender": r["sender"], "email_count": r["email_count"],
          "last_seen": r["last_seen"]}
         for r in rows if r["sender"]
     ]
@@ -1018,20 +1019,25 @@ def analytics_channel_distribution(db: Database, since_ts: int,
 
 def analytics_top_senders(db: Database, since_ts: int, limit: int = 10,
                           account: Optional[str] = None) -> List[Dict[str, Any]]:
-    acc = " AND aq.account = ?" if account else ""
+    # Source from emails (all received mail), not action_queue (only queued items).
+    # Join action_queue LEFT to compute approval_rate where available.
+    acc_e = " AND e.account = ?" if account else ""
     p = (since_ts, account, limit) if account else (since_ts, limit)
     rows = db.execute_sql(
-        f"""SELECT e.sender AS sender, COUNT(*) AS volume,
-                   SUM(CASE WHEN aq.status IN ('approved','executed') THEN 1 ELSE 0 END) AS approved
-            FROM action_queue aq JOIN emails e ON e.gmail_id = aq.email_gmail_id
-            WHERE aq.created_at >= ?{acc}
+        f"""SELECT e.sender AS sender, COUNT(DISTINCT e.id) AS volume,
+                   SUM(CASE WHEN aq.status IN ('approved','executed') THEN 1 ELSE 0 END) AS approved,
+                   COUNT(aq.id) AS queued
+            FROM emails e
+            LEFT JOIN action_queue aq ON aq.email_gmail_id = e.gmail_id
+            WHERE e.date_ts >= ?{acc_e}
             GROUP BY e.sender ORDER BY volume DESC LIMIT ?""", p).fetchall()
     out = []
     for r in rows:
         vol = r["volume"] or 0
         appr = r["approved"] or 0
+        queued = r["queued"] or 0
         out.append({"sender": r["sender"], "volume": vol,
-                    "approval_rate": round(appr / vol, 3) if vol else 0.0})
+                    "approval_rate": round(appr / queued, 3) if queued else 0.0})
     return out
 
 

@@ -58,7 +58,12 @@ class QueueManager:
         force: bool = False,
     ) -> Optional[QueueItem]:
         """Idempotently enqueue or execute based on prediction. Returns QueueItem or None."""
-        confidence = score_result.total_score / 100.0
+        # Use the LLM/ML classification confidence (0-1), NOT total_score/100.
+        # total_score is the *priority* score — intentionally 0 for newsletters —
+        # and has nothing to do with how certain the classifier is.
+        confidence = float(getattr(prediction, 'confidence', None) or 0.0)
+        if not confidence:
+            confidence = score_result.total_score / 100.0
         suggested_action = prediction.action_suggested
 
         # Tier 1: Auto-execute
@@ -119,6 +124,12 @@ class QueueManager:
                         int(time.time()),
                     ),
                 )
+            # Update sender trust so autopilot actions count toward profile stats.
+            try:
+                from mailmind.storage.queries import update_sender_profile
+                update_sender_profile(db, email.sender, 'approved')
+            except Exception:
+                LOG.debug("update_sender_profile failed for auto-executed %s", email.gmail_id)
             return "executed"
 
         # Tier 3: Low confidence - skip
