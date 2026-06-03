@@ -339,7 +339,8 @@ def email_preview_html(snippet: Optional[str]) -> str:
     """Render a snippet preview box beneath an email card. Returns '' if empty."""
     if not snippet:
         return ""
-    safe = snippet.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:400]
+    import html as _html
+    safe = _html.escape(_html.unescape(snippet[:400]))
     return f'<div class="mm-preview-box">{safe}</div>'
 
 

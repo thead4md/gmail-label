@@ -249,6 +249,28 @@ _CSS = """
   border-radius: var(--mm-radius-sm) !important;
   color: var(--mm-text) !important;
 }
+/* Selectbox dropdown popover (fixes white list on dark background) */
+[data-baseweb="popover"],
+[data-baseweb="popover"] > div {
+  background: var(--mm-surface-2) !important;
+}
+[data-baseweb="popover"] ul,
+[data-baseweb="popover"] [role="listbox"] {
+  background: var(--mm-surface-2) !important;
+  border: 1px solid var(--mm-border) !important;
+}
+[data-baseweb="popover"] li,
+[data-baseweb="popover"] [role="option"] {
+  background: var(--mm-surface-2) !important;
+  color: var(--mm-text) !important;
+}
+[data-baseweb="popover"] li:hover,
+[data-baseweb="popover"] [role="option"]:hover,
+[data-baseweb="popover"] [aria-selected="true"],
+[data-baseweb="popover"] [aria-current="true"] {
+  background: var(--mm-surface-3) !important;
+  color: var(--mm-text) !important;
+}
 
 /* ─── Dividers ──────────────────────────────────────────────────── */
 hr { border-color: var(--mm-border) !important; margin: 20px 0 !important; }
@@ -472,7 +494,29 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
 """
 
 
-@st.cache_resource
-def inject_css() -> None:
-    """Inject the full MailMind CSS theme into the current Streamlit page."""
+_LIGHT_VARS = """
+:root {
+  --mm-bg:          #F0F4F8;
+  --mm-surface:     #FFFFFF;
+  --mm-surface-2:   #F7F9FC;
+  --mm-surface-3:   #EDF1F7;
+  --mm-border:      #C8D5E8;
+  --mm-border-soft: #DDE6F4;
+  --mm-text:        #1A2232;
+  --mm-text-muted:  #526070;
+  --mm-text-faint:  #8FA0B5;
+  --mm-shadow:      0 4px 24px rgba(0,0,0,.10);
+  --mm-shadow-sm:   0 2px 8px rgba(0,0,0,.06);
+}
+"""
+
+_SYSTEM_VARS = f"@media (prefers-color-scheme: light) {{ {_LIGHT_VARS} }}"
+
+
+def inject_css(theme: str = "dark") -> None:
+    """Inject the full MailMind CSS theme. theme: 'dark' | 'light' | 'system'."""
     st.markdown(f"<style>{_CSS}</style>", unsafe_allow_html=True)
+    if theme == "light":
+        st.markdown(f"<style>{_LIGHT_VARS}</style>", unsafe_allow_html=True)
+    elif theme == "system":
+        st.markdown(f"<style>{_SYSTEM_VARS}</style>", unsafe_allow_html=True)

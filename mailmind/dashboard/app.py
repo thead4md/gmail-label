@@ -854,8 +854,13 @@ def render_automate_tab(account: Optional[str] = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _get_theme() -> str:
+    """Return the current theme preference ('dark', 'light', 'system')."""
+    return st.session_state.get("_theme", "dark")
+
+
 def _render_sidebar() -> Optional[str]:
-    """Render mailbox switcher + watcher heartbeat; return selected account."""
+    """Render mailbox switcher, heartbeat, theme picker; return selected account."""
     st.sidebar.markdown(
         '<div style="font-size:20px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">'
         '📧 MailMind</div>'
@@ -893,6 +898,21 @@ def _render_sidebar() -> Optional[str]:
         st.sidebar.warning("⚠️ Watch loop may be hung")
     elif hb["status"] == "never":
         st.sidebar.info("⏳ Start the watcher: `mailmind run --watch`")
+
+    # Theme picker
+    st.sidebar.markdown("---")
+    _THEME_OPTIONS = {"🌙 Dark": "dark", "☀️ Light": "light", "💻 System": "system"}
+    current = _get_theme()
+    current_label = next(k for k, v in _THEME_OPTIONS.items() if v == current)
+    chosen_label = st.sidebar.radio(
+        "Theme", list(_THEME_OPTIONS.keys()),
+        index=list(_THEME_OPTIONS.keys()).index(current_label),
+        label_visibility="collapsed",
+    )
+    chosen = _THEME_OPTIONS[chosen_label]
+    if chosen != current:
+        st.session_state["_theme"] = chosen
+        st.rerun()
 
     return account
 
@@ -1031,7 +1051,7 @@ def main() -> None:
     if not _check_password():
         return
 
-    inject_css()
+    inject_css(_get_theme())
     account = _render_sidebar()
 
     tab_now, tab_review, tab_history, tab_insights, tab_automate = st.tabs(
