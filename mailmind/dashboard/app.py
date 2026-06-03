@@ -383,7 +383,9 @@ def render_review_tab(account: Optional[str] = None) -> None:
     db = get_db()
 
     # ── New senders ──────────────────────────────────────────────────
-    new_senders = _c_new_senders(account)
+    _dismissed_senders = st.session_state.get("dismissed_senders", set())
+    new_senders = [s for s in _c_new_senders(account)
+                   if s["sender"] not in _dismissed_senders]
     if new_senders:
         _section("🆕", f"New senders — {len(new_senders)}")
         for i, s in enumerate(new_senders):
@@ -399,13 +401,19 @@ def render_review_tab(account: Optional[str] = None) -> None:
                 )
             with c_know:
                 if st.button("✅ Know", key=f"know_{i}_{sender}"):
-                    handle_know_sender(db, sender); st.toast("Trusted", icon="✅"); _invalidate(); st.rerun()
+                    handle_know_sender(db, sender)
+                    st.session_state.setdefault("dismissed_senders", set()).add(sender)
+                    st.toast("Trusted", icon="✅"); _invalidate(); st.rerun()
             with c_mute:
                 if st.button("🔇 Mute", key=f"mute_{i}_{sender}"):
-                    handle_mute_sender(db, sender); st.toast("Muted", icon="🔇"); _invalidate(); st.rerun()
+                    handle_mute_sender(db, sender)
+                    st.session_state.setdefault("dismissed_senders", set()).add(sender)
+                    st.toast("Muted", icon="🔇"); _invalidate(); st.rerun()
             with c_block:
                 if st.button("🚫 Block", key=f"block_{i}_{sender}"):
-                    handle_block_sender(db, sender); st.toast("Blocked", icon="🚫"); _invalidate(); st.rerun()
+                    handle_block_sender(db, sender)
+                    st.session_state.setdefault("dismissed_senders", set()).add(sender)
+                    st.toast("Blocked", icon="🚫"); _invalidate(); st.rerun()
 
     # ── Recent predictions ───────────────────────────────────────────
     _section("📊", "Recent predictions")
