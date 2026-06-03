@@ -827,7 +827,41 @@ def render_insights_tab(account: Optional[str] = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _check_password() -> bool:
+    """Return True if the user is authenticated (or no password is configured)."""
+    import os
+    required = os.environ.get("DASHBOARD_PASSWORD", "").strip()
+    if not required:
+        return True  # no password set — open access
+
+    if st.session_state.get("_authenticated"):
+        return True
+
+    inject_css()
+    st.markdown(
+        '<div style="max-width:360px;margin:80px auto 0;">'
+        '<div style="font-size:24px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">📧 MailMind</div>'
+        '<div style="font-size:12px;color:#64748B;margin-bottom:28px;">Enter the dashboard password to continue.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    col, _ = st.columns([1, 2])
+    with col:
+        pwd = st.text_input("Password", type="password", label_visibility="collapsed",
+                            placeholder="Password")
+        if st.button("Unlock", use_container_width=True):
+            if pwd == required:
+                st.session_state["_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    return False
+
+
 def main() -> None:
+    if not _check_password():
+        return
+
     inject_css()
     account = _render_sidebar()
 

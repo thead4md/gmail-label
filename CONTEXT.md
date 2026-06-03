@@ -6096,6 +6096,7 @@ class MailMindConfig:
 | `ARROW_PRE_0_15_IPC_FORMAT` | `0` | No | — |
 | `ARROW_PRE_1_0_METADATA_VERSION` | `0` | No | — |
 | `COLORTERM` | `""` (empty) | No | — |
+| `DASHBOARD_PASSWORD` | `""` (empty) | No | — |
 | `DEEPSEEK_API_KEY` | `""` (empty) | No | DeepSeek API key; absent → LLM disabled |
 | `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | No | Max LLM API calls per pipeline run |
 | `DEFER_PYDANTIC_BUILD` | `true` | No | — |
