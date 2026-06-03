@@ -44,19 +44,19 @@ def test_ensure_label_creates_when_absent():
 # fetcher.batch_add_label
 # ---------------------------------------------------------------------------
 
-def test_batch_add_label_submits_all_in_chunks():
+def test_batch_add_label_uses_batchmodify_in_1000_chunks():
     service = MagicMock()
-    added = []
-    batch = MagicMock()
-    batch.add.side_effect = lambda req: added.append(req)
-    service.new_batch_http_request.return_value = batch
-
+    bm = service.users.return_value.messages.return_value.batchModify
     f = GmailFetcher(service, rate_limit_seconds=0)
-    ids = [str(i) for i in range(250)]   # 3 chunks of 100/100/50
+
+    ids = [str(i) for i in range(2500)]   # 3 chunks: 1000/1000/500
     submitted = f.batch_add_label(ids, "L1")
-    assert submitted == 250
-    assert service.new_batch_http_request.call_count == 3
-    assert batch.execute.call_count == 3
+    assert submitted == 2500
+    assert bm.call_count == 3
+    # First call body carries the label + a 1000-id chunk
+    _, kwargs = bm.call_args_list[0]
+    assert kwargs["body"]["addLabelIds"] == ["L1"]
+    assert len(kwargs["body"]["ids"]) == 1000
 
 
 def test_batch_add_label_empty_inputs():

@@ -139,24 +139,26 @@ class GmailFetcher:
             return None
 
     def batch_add_label(self, message_ids: List[str], label_id: str) -> int:
-        """Add ``label_id`` to many messages in batched HTTP requests (≤100/call).
+        """Add ``label_id`` to many messages via Gmail's batchModify endpoint.
 
-        Adding a label a message already has is a no-op in Gmail, so this is
-        idempotent. Returns the number of messages submitted.
+        Uses users.messages.batchModify (up to 1000 ids per atomic call) rather
+        than firing one modify per message. The per-message approach silently
+        dropped sub-requests under Gmail's modify rate limit; batchModify applies
+        the label to the whole chunk in a single quota-cheap request and _retry
+        backs off the whole call on transient errors. Idempotent (re-adding an
+        existing label is a no-op). Returns the number of ids submitted.
         """
         if not message_ids or not label_id:
             return 0
         submitted = 0
-        for start in range(0, len(message_ids), 100):
-            chunk = message_ids[start:start + 100]
+        for start in range(0, len(message_ids), 1000):
+            chunk = message_ids[start:start + 1000]
 
             def call(chunk=chunk):
-                batch = self.service.new_batch_http_request()
-                for mid in chunk:
-                    batch.add(self.service.users().messages().modify(
-                        userId=self.user_id, id=mid,
-                        body={"addLabelIds": [label_id]}))
-                batch.execute()
+                self.service.users().messages().batchModify(
+                    userId=self.user_id,
+                    body={"ids": chunk, "addLabelIds": [label_id]},
+                ).execute()
                 return None
 
             _retry(call)
