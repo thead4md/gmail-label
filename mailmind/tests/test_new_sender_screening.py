@@ -6,7 +6,7 @@ import pathlib
 import pytest
 
 from mailmind.storage.database import Database
-from mailmind.storage.models import Email, QueueItem
+from mailmind.storage.models import Email, Prediction, QueueItem
 from mailmind.storage.queries import (
     get_new_senders, set_sender_trust_tier, upsert_queue_item,
     update_sender_profile, get_sender_profiles,
@@ -27,6 +27,10 @@ def db():
 
 def _queue(db, gmail_id, sender, action="star"):
     db.insert_email(Email(gmail_id=gmail_id, sender=sender, subject="S"))
+    # get_new_senders reads predictions, not action_queue
+    db.save_prediction(Prediction(
+        email_gmail_id=gmail_id, model="rules", labels=[],
+        priority_score=50, primary_label="WORK"))
     fp = make_action_fingerprint(gmail_id, action, {})
     return upsert_queue_item(db, QueueItem(
         email_gmail_id=gmail_id, action=action, action_fingerprint=fp, status="pending"))

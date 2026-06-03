@@ -183,7 +183,7 @@ class TestRenderNowTab:
         approve_btns = [b for b in at.button if 'Approve' in b.label]
         assert len(approve_btns) == 1
 
-    def test_no_reject_button_in_now_tab(self):
+    def test_reject_button_present_in_now_tab(self):
         item = _item(priority_score=90)
         item['reason_json']['reply_needed'] = True
         with _now_stack([item]):
@@ -191,7 +191,7 @@ class TestRenderNowTab:
             at.run()
         assert not at.exception
         reject_btns = [b for b in at.button if 'Reject' in b.label]
-        assert len(reject_btns) == 0
+        assert len(reject_btns) == 1
 
     def test_no_edit_button_in_now_tab(self):
         item = _item(priority_score=90)

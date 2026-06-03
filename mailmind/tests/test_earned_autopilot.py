@@ -148,15 +148,20 @@ class TestEarnedAutopilotGate:
         executor.execute_action.assert_called_once()
 
     def test_authorised_sender_but_low_confidence_still_queues(self, db: Database):
-        """Eligibility alone is not enough — 0.90 confidence floor still applies."""
+        """Eligibility alone is not enough — 0.90 confidence floor still applies.
+
+        The gate uses prediction.confidence (classification certainty), not the
+        priority score. Set confidence=0.80 to stay below the 0.90 threshold.
+        """
         from unittest.mock import MagicMock
         executor = MagicMock()
         qm = QueueManager(executor=executor)
         pred = _seed_email_and_prediction(db)
+        pred.confidence = 0.80  # below AUTO_EXECUTE_THRESHOLD (0.90)
         _seed_sender_profile(db, "alice@example.com", eligible=True)
 
         email = Email(gmail_id="g1", sender="alice@example.com")
-        status = qm.enqueue_from_prediction(db, email, _score(80), pred)  # below 0.90
+        status = qm.enqueue_from_prediction(db, email, _score(95), pred)
 
         assert status == "queued"
         executor.execute_action.assert_not_called()

@@ -81,8 +81,9 @@ class TestQueueManager(unittest.TestCase):
     # ------------------------------------------------------------------ #
 
     def test_enqueue_above_threshold_executes(self):
-        """Actions with confidence >= 0.90 should auto-execute."""
-        score = self._make_score(95)  # confidence = 0.95
+        """Actions with prediction.confidence >= 0.90 should auto-execute."""
+        self.test_prediction.confidence = 0.95
+        score = self._make_score(95)
         status = self.queue_manager.enqueue_from_prediction(
             self.mock_db, self.test_email, score, self.test_prediction,
         )
@@ -91,12 +92,13 @@ class TestQueueManager(unittest.TestCase):
         self.mock_executor.execute_action.assert_called_once_with(
             self.test_email, "star", score,
         )
-        # Should have inserted into queue with auto_eligible=1, status='executed'
-        self.mock_db.transaction.assert_called_once()
+        # Two transactions: action_queue INSERT + update_sender_profile
+        self.assertEqual(self.mock_db.transaction.call_count, 2)
 
     def test_enqueue_above_threshold_exactly_90(self):
-        """Confidence exactly 0.90 should auto-execute."""
-        score = self._make_score(90)  # confidence = 0.90
+        """prediction.confidence exactly 0.90 should auto-execute."""
+        self.test_prediction.confidence = 0.90
+        score = self._make_score(90)
         status = self.queue_manager.enqueue_from_prediction(
             self.mock_db, self.test_email, score, self.test_prediction,
         )
@@ -123,8 +125,9 @@ class TestQueueManager(unittest.TestCase):
         self.mock_executor.execute_action.assert_not_called()
 
     def test_enqueue_below_threshold_skips(self):
-        """Actions with confidence < 0.65 should be skipped."""
-        score = self._make_score(50)  # confidence = 0.50
+        """prediction.confidence < 0.65 should be skipped."""
+        self.test_prediction.confidence = 0.50
+        score = self._make_score(50)
         status = self.queue_manager.enqueue_from_prediction(
             self.mock_db, self.test_email, score, self.test_prediction,
         )
@@ -132,8 +135,9 @@ class TestQueueManager(unittest.TestCase):
         self.mock_executor.execute_action.assert_not_called()
 
     def test_enqueue_at_zero_skips(self):
-        """Zero confidence should be skipped."""
-        score = self._make_score(0)  # confidence = 0.00
+        """Zero prediction.confidence should be skipped."""
+        self.test_prediction.confidence = 0.0
+        score = self._make_score(0)
         status = self.queue_manager.enqueue_from_prediction(
             self.mock_db, self.test_email, score, self.test_prediction,
         )
@@ -195,6 +199,7 @@ class TestQueueManager(unittest.TestCase):
             priority_score=95,
             action_suggested="star",
             primary_label="IMPORTANT",
+            confidence=0.95,
         )
         # Intentionally NOT setting prediction.id to simulate unsaved prediction
 
@@ -217,6 +222,7 @@ class TestQueueManager(unittest.TestCase):
             priority_score=95,
             action_suggested="star",
             primary_label="IMPORTANT",
+            confidence=0.95,
         )
         # Return empty list from DB
         self.mock_db.get_predictions_for_email.return_value = []
@@ -234,6 +240,7 @@ class TestQueueManager(unittest.TestCase):
 
     def test_executed_insert_has_correct_fields(self):
         """The executed INSERT should have auto_eligible=1 and status='executed'."""
+        self.test_prediction.confidence = 0.95
         score = self._make_score(95)
 
         # Capture what's passed to the transaction
@@ -243,8 +250,8 @@ class TestQueueManager(unittest.TestCase):
             )
 
         self.assertEqual(status, "executed")
-        # Verify transaction was used
-        self.mock_db.transaction.assert_called_once()
+        # Two transactions: action_queue INSERT + update_sender_profile
+        self.assertEqual(self.mock_db.transaction.call_count, 2)
 
     def test_queued_insert_has_correct_fields(self):
         """The queued INSERT should have auto_eligible=0 and status='pending'."""

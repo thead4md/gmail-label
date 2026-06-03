@@ -105,19 +105,24 @@ class TestSuggestAction:
         executor, _ = _make_executor(db, dry_run=True)
         assert executor.suggest_action(_email(), _score(total=75)) == "mark_important"
 
-    def test_newsletter_high_confidence_suggests_archive(self, db: Database):
+    def test_newsletter_suggests_archive(self, db: Database):
         executor, _ = _make_executor(db, dry_run=True)
-        # NEWSLETTER + score >= 60 first hits mark_important. To exercise the
-        # archive path we need score <60 (so mark_important is skipped) but
-        # confidence (=score/100) still >= 0.85, which is impossible. So in
-        # practice archive is unreachable via suggest_action — pin that.
+        # NEWSLETTER/MASS_EMAIL always archive regardless of priority score —
+        # the priority score is intentionally suppressed for bulk mail, but the
+        # classification itself is the authoritative signal.
         assert executor.suggest_action(
-            _email(), _score(total=50, primary="NEWSLETTER")
-        ) == "label"
+            _email(), _score(total=0, primary="NEWSLETTER")
+        ) == "archive"
+        assert executor.suggest_action(
+            _email(), _score(total=50, primary="MASS_EMAIL")
+        ) == "archive"
 
-    def test_low_score_returns_none(self, db: Database):
+    def test_low_score_non_newsletter_labels(self, db: Database):
         executor, _ = _make_executor(db, dry_run=True)
-        assert executor.suggest_action(_email(), _score(total=40)) is None
+        # Any classified non-newsletter email gets at least "label" so it
+        # reaches the review queue; returning None would silently drop it.
+        assert executor.suggest_action(_email(), _score(total=40)) == "label"
+        assert executor.suggest_action(_email(), _score(total=0)) == "label"
 
 
 class TestExecuteActionDryRun:

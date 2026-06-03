@@ -1029,7 +1029,7 @@ def analytics_top_senders(db: Database, since_ts: int, limit: int = 10,
                    COUNT(aq.id) AS queued
             FROM emails e
             LEFT JOIN action_queue aq ON aq.email_gmail_id = e.gmail_id
-            WHERE e.date_ts >= ?{acc_e}
+            WHERE COALESCE(e.date_ts, e.created_at) >= ?{acc_e}
             GROUP BY e.sender ORDER BY volume DESC LIMIT ?""", p).fetchall()
     out = []
     for r in rows:
