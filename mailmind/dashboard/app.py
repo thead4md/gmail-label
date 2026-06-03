@@ -206,6 +206,9 @@ def _section(icon: str, title: str) -> None:
 def render_now_tab(account: Optional[str] = None) -> None:
     db       = get_db()
     all_items = _c_pending(200, account)
+    # Remove items acted on earlier this session before the cache refreshes.
+    _dismissed = st.session_state.get("dismissed_ids", set())
+    all_items  = [i for i in all_items if i.get("id") not in _dismissed]
     now_items = filter_now_items(all_items, queue_threshold=QueueManager.QUEUE_THRESHOLD)
 
     if not now_items:
@@ -280,6 +283,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
                     handle_correction(db, item_id, corrected_label=chosen_label)
                 acted = handle_approve(db, item_id, executor=get_action_executor())
                 if acted:
+                    st.session_state.setdefault("dismissed_ids", set()).add(item_id)
                     st.toast(f"✅ {subject[:50]}", icon="✅")
                     _invalidate()
                     st.rerun()
@@ -291,6 +295,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
             if st.button("❌ Reject", key=f"now_reject_{idx}_{item_id}"):
                 acted = handle_reject(db, item_id)
                 if acted:
+                    st.session_state.setdefault("dismissed_ids", set()).add(item_id)
                     st.toast(f"❌ {subject[:50]}", icon="❌")
                     _invalidate()
                     st.rerun()
@@ -414,7 +419,8 @@ def render_review_tab(account: Optional[str] = None) -> None:
         st.info("No predictions yet — run the pipeline to classify emails.")
 
     # ── Pending approval ─────────────────────────────────────────────
-    items = _c_pending(None, account)
+    _dismissed = st.session_state.get("dismissed_ids", set())
+    items = [i for i in _c_pending(None, account) if i.get("id") not in _dismissed]
     _section("⏳", f"Pending approval — {len(items)} items")
 
     if not items:
@@ -487,6 +493,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                 if st.button("✅ Approve", key=f"review_approve_{idx}_{item_id}"):
                     acted = handle_approve(db, item_id, executor=get_action_executor())
                     if acted:
+                        st.session_state.setdefault("dismissed_ids", set()).add(item_id)
                         st.toast("✅ Approved", icon="✅")
                         _invalidate()
                         st.rerun()
@@ -499,6 +506,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                 if st.button("❌ Reject", key=f"review_reject_{idx}_{item_id}"):
                     acted = handle_reject(db, item_id)
                     if acted:
+                        st.session_state.setdefault("dismissed_ids", set()).add(item_id)
                         st.toast("❌ Rejected", icon="❌")
                         _invalidate()
                         st.rerun()
