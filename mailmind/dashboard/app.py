@@ -950,15 +950,59 @@ def render_insights_tab(account: Optional[str] = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+_AUTH_COOKIE   = "mm_auth"
+_AUTH_DAYS     = 30
+
+
+def _make_auth_token(secret: str) -> str:
+    import hmac, hashlib, time
+    expiry = int(time.time()) + _AUTH_DAYS * 86400
+    sig = hmac.new(secret.encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
+    return f"{expiry}:{sig}"
+
+
+def _valid_auth_token(token: str, secret: str) -> bool:
+    import hmac, hashlib, time
+    try:
+        expiry_str, sig = token.split(":", 1)
+        if int(expiry_str) < int(time.time()):
+            return False
+        expected = hmac.new(secret.encode(), expiry_str.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
+
 def _check_password() -> bool:
-    """Return True if the user is authenticated (or no password is configured)."""
+    """Return True if the user is authenticated (or no password is configured).
+
+    Uses a 30-day HMAC-signed cookie so the user doesn't need to re-enter the
+    password on every browser session. Session state acts as the fast path
+    (no cookie round-trip within the same tab).
+    """
     import os
+    from streamlit_cookies_controller import CookieController
+
     required = os.environ.get("DASHBOARD_PASSWORD", "").strip()
     if not required:
-        return True  # no password set — open access
+        return True
 
+    # Fast path: already authenticated this session.
     if st.session_state.get("_authenticated"):
         return True
+
+    # Persistent path: check the cookie (may be None on the very first render
+    # while the cookie component hydrates — handled below).
+    controller = CookieController()
+    token = controller.get(_AUTH_COOKIE)
+
+    if token and _valid_auth_token(token, required):
+        st.session_state["_authenticated"] = True
+        return True
+
+    # If the token was set but is invalid/expired, clear it.
+    if token:
+        controller.remove(_AUTH_COOKIE)
 
     inject_css()
     st.markdown(
@@ -974,6 +1018,8 @@ def _check_password() -> bool:
                             placeholder="Password")
         if st.button("Unlock", use_container_width=True):
             if pwd == required:
+                controller.set(_AUTH_COOKIE, _make_auth_token(required),
+                               max_age=_AUTH_DAYS * 86400)
                 st.session_state["_authenticated"] = True
                 st.rerun()
             else:
