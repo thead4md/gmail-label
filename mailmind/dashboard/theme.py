@@ -399,6 +399,56 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
 .mm-empty-text { font-size: 14px; font-weight: 500; }
 .mm-empty-sub  { font-size: 12px; color: var(--mm-text-faint); margin-top: 4px; }
 
+/* ─── Email snippet preview box ────────────────────────────────── */
+.mm-preview-box {
+  background: var(--mm-surface-2);
+  border: 1px solid var(--mm-border-soft);
+  border-left: 3px solid var(--mm-primary);
+  border-radius: 0 var(--mm-radius-sm) var(--mm-radius-sm) 0;
+  padding: 10px 14px;
+  margin: -4px 0 8px 48px;
+  font-size: 12px;
+  color: var(--mm-text-muted);
+  line-height: 1.6;
+  font-style: italic;
+}
+/* ─── Styled HTML table (replaces st.dataframe) ────────────────── */
+.mm-table-wrap {
+  background: var(--mm-surface);
+  border: 1px solid var(--mm-border);
+  border-radius: var(--mm-radius);
+  overflow: hidden;
+  overflow-x: auto;
+  box-shadow: var(--mm-shadow-sm);
+  margin-bottom: 12px;
+}
+.mm-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  font-family: 'Inter', sans-serif;
+}
+.mm-table thead tr { background: var(--mm-surface-2); }
+.mm-table thead th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+  color: var(--mm-text-muted);
+  border-bottom: 1px solid var(--mm-border);
+  white-space: nowrap;
+}
+.mm-table tbody tr {
+  border-bottom: 1px solid var(--mm-border-soft);
+  transition: background .12s;
+}
+.mm-table tbody tr:hover { background: var(--mm-surface-2); }
+.mm-table tbody td { padding: 8px 12px; color: var(--mm-text); vertical-align: middle; }
+.mm-table tbody tr:last-child { border-bottom: none; }
+
 /* ─── Alert tweaks ──────────────────────────────────────────────── */
 [data-testid="stAlert"] {
   border-radius: var(--mm-radius-sm) !important;

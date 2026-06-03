@@ -24,6 +24,7 @@ from mailmind.dashboard.helpers import (
     confidence_sparkline_html,
     deadline_pill_html,
     email_card_html,
+    email_preview_html,
     filter_now_items,
     format_unix_ts,
     get_confidence_badge,
@@ -33,6 +34,7 @@ from mailmind.dashboard.helpers import (
     parse_reason_json,
     reply_needed_pill_html,
     sender_avatar_html,
+    sender_table_html,
     trust_badge_html,
 )
 from mailmind.dashboard import charts
@@ -238,20 +240,46 @@ def render_now_tab(account: Optional[str] = None) -> None:
             unsafe_allow_html=True,
         )
 
+        snippet = item.get("snippet") or ""
+        _prev = email_preview_html(snippet)
+        if _prev:
+            st.markdown(_prev, unsafe_allow_html=True)
+
         # Action items and deadlines
         ai_html = action_items_html(reason.get("action_items"))
         dl_html = deadline_pill_html(reason.get("deadlines"))
         if ai_html or dl_html:
             st.markdown(dl_html + ai_html, unsafe_allow_html=True)
 
-        # Approve button below the card
-        col_btn, col_spacer = st.columns([1, 5])
-        with col_btn:
+        # Quick-action row: [label dropdown] [Approve] [Reject]
+        gmail_labels = _c_gmail_labels(account) or list(LABEL_COLORS.keys())
+        predicted_label = label or (gmail_labels[0] if gmail_labels else "WORK")
+        default_idx = gmail_labels.index(predicted_label) if predicted_label in gmail_labels else 0
+        col_sel, col_approve, col_reject, col_spacer = st.columns([2, 1, 1, 3])
+        with col_sel:
+            chosen_label = st.selectbox(
+                "Label", options=gmail_labels, index=default_idx,
+                key=f"now_label_{idx}_{item_id}", label_visibility="collapsed",
+            )
+        with col_approve:
             st.markdown('<div class="mm-btn-approve">', unsafe_allow_html=True)
             if st.button("✅ Approve", key=f"now_approve_{idx}_{item_id}"):
+                if chosen_label != predicted_label:
+                    handle_correction(db, item_id, corrected_label=chosen_label)
                 acted = handle_approve(db, item_id, executor=get_action_executor())
                 if acted:
                     st.toast(f"✅ {subject[:50]}", icon="✅")
+                    _invalidate()
+                    st.rerun()
+                else:
+                    st.warning("Already processed or no longer exists.")
+            st.markdown("</div>", unsafe_allow_html=True)
+        with col_reject:
+            st.markdown('<div class="mm-btn-reject">', unsafe_allow_html=True)
+            if st.button("❌ Reject", key=f"now_reject_{idx}_{item_id}"):
+                acted = handle_reject(db, item_id)
+                if acted:
+                    st.toast(f"❌ {subject[:50]}", icon="❌")
                     _invalidate()
                     st.rerun()
                 else:
@@ -429,6 +457,15 @@ def render_review_tab(account: Optional[str] = None) -> None:
             reason = parse_reason_json(item.get("reason_json"))
             _render_reason_panel(reason, item)
 
+            snippet = item.get("snippet") or ""
+            _prev = email_preview_html(snippet)
+            if _prev:
+                st.markdown(
+                    '<div class="mm-section-header" style="margin-top:12px;">📄 Preview</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_prev, unsafe_allow_html=True)
+
             # Action buttons
             st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
             col_approve, col_reject, col_edit = st.columns(3)
@@ -567,12 +604,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
     profiles = _c_sender_profiles()
 
     if profiles:
-        # Summary dataframe
-        df = pd.DataFrame(profiles)[[
-            "sender_email", "trust_tier", "total_seen", "total_approved",
-            "total_rejected", "approval_rate", "auto_action_eligible",
-        ]]
-        st.dataframe(df, use_container_width=True, height=240)
+        st.markdown(sender_table_html(profiles), unsafe_allow_html=True)
 
         # Per-sender autopilot toggles — card layout
         st.markdown(

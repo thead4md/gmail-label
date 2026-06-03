@@ -333,3 +333,38 @@ def confidence_sparkline_html(reason: Optional[dict]) -> str:
         f'<path d="{path}" stroke="#5B8AF0" stroke-width="2" fill="none"/>'
         f'{dots}</svg>'
     )
+
+
+def email_preview_html(snippet: Optional[str]) -> str:
+    """Render a snippet preview box beneath an email card. Returns '' if empty."""
+    if not snippet:
+        return ""
+    safe = snippet.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:400]
+    return f'<div class="mm-preview-box">{safe}</div>'
+
+
+def sender_table_html(profiles: List[Dict[str, Any]]) -> str:
+    """Styled HTML table for sender profiles (replaces st.dataframe)."""
+    if not profiles:
+        return ""
+    rows_html = ""
+    for p in profiles:
+        email = p.get("sender_email") or "—"
+        tier  = p.get("trust_tier") or "neutral"
+        seen  = p.get("total_seen", 0)
+        rate  = p.get("approval_rate", 0.0)
+        rows_html += (
+            f"<tr>"
+            f'<td style="width:44px;padding:6px 8px;">{sender_avatar_html(email)}</td>'
+            f"<td>{email}</td>"
+            f"<td>{trust_badge_html(tier)}</td>"
+            f'<td style="text-align:right;color:var(--mm-text-muted);">{seen}</td>'
+            f"<td>{confidence_bar_html(rate)}</td>"
+            f"</tr>"
+        )
+    return (
+        '<div class="mm-table-wrap"><table class="mm-table">'
+        '<thead><tr><th style="width:44px;"></th><th>Sender</th><th>Trust</th>'
+        '<th style="text-align:right;">Seen</th><th>Approval rate</th></tr></thead>'
+        f"<tbody>{rows_html}</tbody></table></div>"
+    )
