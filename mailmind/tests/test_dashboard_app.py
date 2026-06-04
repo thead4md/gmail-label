@@ -426,20 +426,20 @@ def test_invalidate_clears_only_queue_caches():
     """Verify _invalidate() clears queue-affected caches but not analytics caches."""
     from mailmind.dashboard import app as a
 
-    # Queue/decision-affected caches that SHOULD be cleared
+    # Queue/decision-affected caches that SHOULD be cleared by _invalidate()
     queue_caches = [
         '_c_pending',
         '_c_queue_stats',
         '_c_digest',
         '_c_executed',
         '_c_new_senders',
-        '_c_recent_predictions',
         '_c_corrections',
-        '_c_sender_profiles',
     ]
 
-    # Analytics caches that should NOT be cleared
+    # Caches that should NOT be cleared by _invalidate() (sender or analytics)
     analytics_caches = [
+        '_c_recent_predictions',
+        '_c_sender_profiles',
         '_c_label_dist',
         '_c_channel_dist',
         '_c_channel_weekday',

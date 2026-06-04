@@ -181,16 +181,19 @@ def _c_daily_brief(account):
     return build_daily_brief(db, account=account, llm_client=llm_client)
 
 def _invalidate() -> None:
-    """Clear queue/decision-affected caches after a write so the UI reflects it immediately."""
+    """Clear queue-affected caches after approve/reject/correct/label-weight writes."""
     _c_pending.clear()
     _c_queue_stats.clear()
-    _c_digest.clear()
     _c_executed.clear()
+    _c_digest.clear()
     _c_new_senders.clear()
-    _c_recent_predictions.clear()
     _c_corrections.clear()
+
+
+def _invalidate_senders() -> None:
+    """Clear sender-profile caches after know/mute/block/autopilot-toggle writes."""
     _c_sender_profiles.clear()
-    _c_daily_brief.clear()
+    _c_new_senders.clear()
 
 
 def get_accounts() -> List[str]:
@@ -450,17 +453,17 @@ def render_review_tab(account: Optional[str] = None) -> None:
                 if st.button("✅ Know", key=f"know_{i}_{sender}"):
                     handle_know_sender(db, sender)
                     st.session_state.setdefault("dismissed_senders", set()).add(sender)
-                    st.toast("Trusted", icon="✅"); _invalidate(); st.rerun()
+                    st.toast("Trusted", icon="✅"); _invalidate_senders(); st.rerun()
             with c_mute:
                 if st.button("🔇 Mute", key=f"mute_{i}_{sender}"):
                     handle_mute_sender(db, sender)
                     st.session_state.setdefault("dismissed_senders", set()).add(sender)
-                    st.toast("Muted", icon="🔇"); _invalidate(); st.rerun()
+                    st.toast("Muted", icon="🔇"); _invalidate_senders(); st.rerun()
             with c_block:
                 if st.button("🚫 Block", key=f"block_{i}_{sender}"):
                     handle_block_sender(db, sender)
                     st.session_state.setdefault("dismissed_senders", set()).add(sender)
-                    st.toast("Blocked", icon="🚫"); _invalidate(); st.rerun()
+                    st.toast("Blocked", icon="🚫"); _invalidate_senders(); st.rerun()
 
     # ── Recent predictions ───────────────────────────────────────────
     _section("📊", "Recent predictions")
@@ -843,7 +846,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                 new_val = st.toggle("", value=current, key=f"auto_{email_key}")
                 if new_val != current:
                     toggle_sender_auto_action(db, email_key, new_val)
-                    _invalidate()
+                    _invalidate_senders()
                     st.toast(
                         f"Autopilot {'on' if new_val else 'off'} — {email_key}",
                         icon="⚡" if new_val else "⏸️",
