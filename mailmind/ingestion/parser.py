@@ -59,6 +59,27 @@ def _html_to_text(html_content: str) -> str:
     return text
 
 
+def _extract_unsubscribe_url(list_unsubscribe: Optional[str]) -> Optional[str]:
+    """Extract HTTPS or mailto URL from List-Unsubscribe header.
+
+    Format: List-Unsubscribe: <https://x>, <mailto:u@x>
+    Prefer HTTPS URLs over mailto. Return None if no valid URL found.
+    """
+    if not list_unsubscribe:
+        return None
+
+    urls = re.findall(r"<(https?://[^>]+)>", list_unsubscribe, re.I)
+    if urls:
+        return urls[0]
+
+    # Fall back to mailto if no https URL
+    mailto = re.findall(r"<(mailto:[^>]+)>", list_unsubscribe, re.I)
+    if mailto:
+        return mailto[0]
+
+    return None
+
+
 def _parse_headers(headers: List[Dict[str, str]]) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {}
     for h in headers:
@@ -135,6 +156,10 @@ def parse_message(resource: Dict[str, Any]) -> Email:
         except Exception:
             history_id = None
 
+    # List-Unsubscribe header (prefer https URL, fall back to mailto)
+    list_unsubscribe_hdr = hdrs.get("list-unsubscribe", [None])[0]
+    unsubscribe_url = _extract_unsubscribe_url(list_unsubscribe_hdr)
+
     email = Email(
         gmail_id=msg_id,
         thread_id=thread_id,
@@ -146,6 +171,7 @@ def parse_message(resource: Dict[str, Any]) -> Email:
         date_ts=received_at,
         labels=labels,
         parsed=True,
+        unsubscribe_url=unsubscribe_url,
     )
 
     # Attach additional raw headers if needed in a safe manner

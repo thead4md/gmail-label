@@ -15,13 +15,12 @@ from typing import Callable, List, Optional
 from email.utils import parseaddr
 
 from ..storage.models import Email
+from ..intelligence.patterns import UNSUBSCRIBE_RE, FINANCE_DOMAINS
 
 LOG = logging.getLogger(__name__)
 
-_UNSUBSCRIBE_RE = re.compile(
-    r'unsubscribe|list-unsubscribe|manage\s+subscriptions?|stop\s+receiving|click\s+here.*unsubscribe',
-    re.I
-)
+# Local alias for backward compatibility
+_UNSUBSCRIBE_RE = UNSUBSCRIBE_RE
 
 
 @dataclass
@@ -143,20 +142,10 @@ class RulesEngine:
     @staticmethod
     def _match_finance_sender(email: Email) -> bool:
         """Match known payment/finance provider domains."""
-        finance_domains = {
-            'paypal.com',
-            'stripe.com',
-            'revolut.com',
-            'otp.hu',
-            'wise.com',
-            'transferwise.com',
-            'n26.com',
-            'wise.com',
-        }
         if not email.sender:
             return False
         sender_domain = email.sender.split('@')[-1].lower() if '@' in email.sender else ''
-        return sender_domain in finance_domains
+        return sender_domain in FINANCE_DOMAINS
 
     @staticmethod
     def _match_calendar_invite(email: Email) -> bool:

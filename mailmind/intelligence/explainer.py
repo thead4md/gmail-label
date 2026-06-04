@@ -22,6 +22,7 @@ class ReasonPayload:
     similar_past_actions: List[dict]
     action_items: List[str]
     deadlines: List[str]
+    unsubscribe_url: Optional[str] = None
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in self.__dict__.items()}, default=str)
@@ -31,6 +32,7 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
     # gather pieces
     trust_tier = 'neutral'
     similar = []
+    unsubscribe_url = None
     if prediction is None:
         raise ValueError("prediction required")
     if prediction.rule_matches:
@@ -47,11 +49,15 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
         llm_conf = None
 
     if db and hasattr(prediction, 'email_gmail_id'):
-        # try to get sender profile
+        # try to get sender profile and email metadata
         try:
-            # resolve sender from email row
-            row = db.execute_sql("SELECT sender FROM emails WHERE gmail_id = ?", (prediction.email_gmail_id,)).fetchone()
+            # resolve sender and unsubscribe_url from email row
+            row = db.execute_sql(
+                "SELECT sender, unsubscribe_url FROM emails WHERE gmail_id = ?",
+                (prediction.email_gmail_id,)
+            ).fetchone()
             sender = row['sender'] if row else None
+            unsubscribe_url = row['unsubscribe_url'] if row else None
             if sender:
                 sp = get_sender_profile(db, sender)
                 if sp:
@@ -60,6 +66,7 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
         except Exception:
             trust_tier = 'neutral'
             similar = []
+            unsubscribe_url = None
 
     thread_summary = None
     reply_needed = False
@@ -84,6 +91,7 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
         similar_past_actions=similar,
         action_items=action_items,
         deadlines=deadlines,
+        unsubscribe_url=unsubscribe_url,
     )
     return payload
 

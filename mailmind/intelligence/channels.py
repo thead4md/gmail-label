@@ -27,22 +27,14 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from .patterns import UNSUBSCRIBE_RE, CALENDAR_RE
+
 # ---------------------------------------------------------------------------
 # Compiled patterns  (English + Hungarian, re.I for Unicode case-fold)
 # ---------------------------------------------------------------------------
 
-_UNSUB_RE = re.compile(
-    r"(unsubscribe|opt[ -]?out|manage.*preference|email.*preference|"
-    r"view.*in.*browser|click here to unsubscribe|"
-    # Hungarian
-    r"leiratkoz|kiiratkoz"
-    r"|nem k[eé]rek t[oö]bb"          # "nem kérek több levelet"
-    r"|feliratkoz[aá]s visszavon"      # "feliratkozás visszavonása"
-    r"|h[ií]rlev[eé]l"                # "hírlevél" = newsletter
-    r"|b[öo]ng[eé]sz[öo]ben megtekint" # "böngészőben megtekintés"
-    r"|levéllistá?r[oó]l)",
-    re.I | re.UNICODE,
-)
+# Local aliases for canonical patterns
+_UNSUB_RE = UNSUBSCRIBE_RE
 
 _TRANSACTIONAL_SUBJECT_RE = re.compile(
     r"(order|receipt|invoice|confirmation|shipment|delivery|tracking|"
@@ -144,18 +136,14 @@ _GOOGLE_DOCS_RE = re.compile(
     re.I | re.UNICODE,
 )
 
-_CALENDAR_RE = re.compile(
-    r"(calendar-notification@google\.com|@resource\.calendar\.google\.com|"
-    r"\binvitation\b|\bdeclined\b|\baccepted\b.*\b(event|meeting)|"
-    r"napt[aá]r|esem[eé]ny|megh[ií]v[oó])",
-    re.I | re.UNICODE,
-)
-
 _TASKS_RE = re.compile(
     r"(tasks-noreply@google\.com|marked .* complete|completed the task|"
     r"feladat (k[eé]sz|teljes[ií]tve|befejez))",
     re.I | re.UNICODE,
 )
+
+# Local alias for canonical calendar pattern
+_CALENDAR_RE = CALENDAR_RE
 
 
 def detect_channel(

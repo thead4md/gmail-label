@@ -261,6 +261,10 @@ MIGRATIONS: List[Tuple[str, str]] = [
         );
         """,
     ),
+    (
+        "0021_add_unsubscribe_url_to_emails",
+        """-- Handled in apply_migrations: adds unsubscribe_url column to emails table.""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -295,6 +299,8 @@ ACTION_QUEUE_COLUMNS: List[Tuple[str, str]] = [
 THREAD_CONTEXT_COLUMN: List[Tuple[str, str]] = [("thread_context_json", "TEXT")]
 
 CHANNEL_COLUMN: List[Tuple[str, str]] = [("channel", "TEXT")]
+
+UNSUBSCRIBE_URL_COLUMN: List[Tuple[str, str]] = [("unsubscribe_url", "TEXT")]
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -402,6 +408,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
                 " label TEXT NOT NULL,"
                 " created_at INTEGER DEFAULT (strftime('%s','now')))"
             )
+        elif name == "0021_add_unsubscribe_url_to_emails":
+            _ensure_columns(conn, "emails", UNSUBSCRIBE_URL_COLUMN)
         else:
             cur.executescript(sql)
         cur.execute(

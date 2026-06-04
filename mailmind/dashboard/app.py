@@ -72,6 +72,7 @@ from mailmind.storage.queries import (
     get_recent_corrections,
     get_recent_predictions_with_emails,
     get_sender_profiles,
+    set_sender_label_rule,
     toggle_sender_auto_action,
 )
 
@@ -163,9 +164,33 @@ def _c_top_senders(since, account):
 def _c_decision_times(since, account):
     return analytics_decision_times(get_db(), since, account)
 
+@st.cache_data(ttl=3600)
+def _c_daily_brief(account):
+    from mailmind.intelligence.brief import build_daily_brief
+    from mailmind.llm.deepseek import DeepSeekClient
+    from mailmind.config import MailMindConfig
+
+    db = get_db()
+    config = MailMindConfig.from_env()
+    llm_client = None
+    if config.llm_enabled and config.deepseek_api_key:
+        try:
+            llm_client = DeepSeekClient(config)
+        except Exception:
+            pass
+    return build_daily_brief(db, account=account, llm_client=llm_client)
+
 def _invalidate() -> None:
-    """Clear all cached reads after a write so the UI reflects it immediately."""
-    st.cache_data.clear()
+    """Clear queue/decision-affected caches after a write so the UI reflects it immediately."""
+    _c_pending.clear()
+    _c_queue_stats.clear()
+    _c_digest.clear()
+    _c_executed.clear()
+    _c_new_senders.clear()
+    _c_recent_predictions.clear()
+    _c_corrections.clear()
+    _c_sender_profiles.clear()
+    _c_daily_brief.clear()
 
 
 def get_accounts() -> List[str]:
@@ -229,6 +254,13 @@ def render_now_tab(account: Optional[str] = None) -> None:
 
     st.markdown("")
 
+    # Display daily brief (if available)
+    daily_brief = _c_daily_brief(account)
+    if daily_brief:
+        with st.expander("📋 Today's brief", expanded=False):
+            st.markdown(daily_brief)
+        st.markdown("")
+
     for idx, item in enumerate(now_items):
         item_id  = item.get("id")
         subject  = (item.get("subject") or "[No Subject]")[:80]
@@ -260,6 +292,20 @@ def render_now_tab(account: Optional[str] = None) -> None:
         _prev = email_preview_html(snippet)
         if _prev:
             st.markdown(_prev, unsafe_allow_html=True)
+
+        # Unsubscribe link for newsletters
+        unsub_url = reason.get("unsubscribe_url")
+        channel = item.get("channel")
+        if unsub_url and channel == "newsletter":
+            escaped_url = html.escape(unsub_url)
+            st.markdown(
+                f'<a href="{escaped_url}" target="_blank" style="'
+                f'display:inline-block;font-size:12px;color:#5B8AF0;'
+                f'text-decoration:none;padding:4px 8px;'
+                f'border:1px solid #2D3656;border-radius:3px;">'
+                f'Unsubscribe ↗</a>',
+                unsafe_allow_html=True,
+            )
 
         # Action items and deadlines
         ai_html = action_items_html(reason.get("action_items"))
@@ -492,6 +538,20 @@ def render_review_tab(account: Optional[str] = None) -> None:
                     unsafe_allow_html=True,
                 )
                 st.markdown(_prev, unsafe_allow_html=True)
+
+            # Unsubscribe link for newsletters
+            unsub_url = reason.get("unsubscribe_url")
+            ch = item.get("channel")
+            if unsub_url and ch == "newsletter":
+                escaped_url = html.escape(unsub_url)
+                st.markdown(
+                    f'<a href="{escaped_url}" target="_blank" style="'
+                    f'display:inline-block;font-size:12px;color:#5B8AF0;'
+                    f'text-decoration:none;padding:4px 8px;'
+                    f'border:1px solid #2D3656;border-radius:3px;margin-top:8px;">'
+                    f'Unsubscribe ↗</a>',
+                    unsafe_allow_html=True,
+                )
 
             # Action buttons
             st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
@@ -835,6 +895,50 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                     _invalidate()
                     st.toast(f"Reset {label} weight", icon="↺")
 
+    # ── Create rules from natural language ──────────────────────────
+    _section("✨", "Create rule from description")
+
+    from mailmind.intelligence.nl_rules import parse_rule_nl
+    from mailmind.config import MailMindConfig
+    from mailmind.llm.deepseek import DeepSeekClient
+
+    config = MailMindConfig()
+    rule_text = st.text_input(
+        "Describe a rule (e.g., 'label emails from billing@acme.com as FINANCE')",
+        placeholder="e.g., label anything from newsletter@example.com as NEWSLETTER",
+        key="nl_rule_input",
+    )
+
+    if st.button("Create rule", key="create_rule_button", use_container_width=True):
+        if rule_text.strip():
+            try:
+                client = DeepSeekClient(config)
+                result = parse_rule_nl(rule_text.strip(), client)
+
+                if result.get("error"):
+                    st.error(f"❌ {result['error']}")
+                elif result.get("unsupported"):
+                    st.warning(
+                        f"⚠️ {result['error']}"
+                    )
+                else:
+                    sender = result.get("sender_email")
+                    label = result.get("label")
+                    if sender and label:
+                        from mailmind.storage.queries import set_sender_label_rule
+                        set_sender_label_rule(db, sender, label, account=account)
+                        _invalidate()
+                        st.toast(
+                            f"✅ Rule created: {sender} → {label}",
+                            icon="✨",
+                        )
+                    else:
+                        st.error("❌ Could not extract sender and label from your description.")
+            except Exception as e:
+                st.error(f"❌ Error creating rule: {str(e)}")
+        else:
+            st.warning("Please enter a rule description.")
+
     # ── Model health ────────────────────────────────────────────────
     _section("🤖", "Model health")
     model_meta = _c_model_metadata()
@@ -854,6 +958,54 @@ def render_automate_tab(account: Optional[str] = None) -> None:
             "SSH into the machine and run:\n"
             "`python -m mailmind.scripts.train_ml_model`"
         )
+
+    # ── Bulk newsletter unsubscribe ─────────────────────────────────
+    _section("📰", "Newsletters — unsubscribe")
+
+    newsletters_with_unsub = db.execute_sql(
+        """
+        SELECT DISTINCT e.sender, e.unsubscribe_url, COUNT(*) as email_count
+        FROM emails e
+        WHERE e.unsubscribe_url IS NOT NULL
+          AND e.sender IS NOT NULL
+        GROUP BY e.sender, e.unsubscribe_url
+        ORDER BY email_count DESC
+        LIMIT 20
+        """
+    ).fetchall()
+
+    if newsletters_with_unsub:
+        st.markdown(
+            "<p style='font-size:12px;color:#94A3B8;margin-bottom:12px;'>"
+            "Newsletters and bulk senders with unsubscribe links (one row per sender).</p>",
+            unsafe_allow_html=True,
+        )
+        for row in newsletters_with_unsub:
+            sender = row["sender"] or "Unknown"
+            unsub_url = row["unsubscribe_url"]
+            count = row["email_count"]
+            escaped_url = html.escape(unsub_url)
+            col_sender, col_count, col_unsub = st.columns([2, 1, 1])
+            with col_sender:
+                st.markdown(
+                    f'<span style="font-size:12px;">{html.escape(sender)}</span>',
+                    unsafe_allow_html=True,
+                )
+            with col_count:
+                st.markdown(
+                    f'<span style="font-size:11px;color:#94A3B8;">{count} emails</span>',
+                    unsafe_allow_html=True,
+                )
+            with col_unsub:
+                st.markdown(
+                    f'<a href="{escaped_url}" target="_blank" style="'
+                    f'display:inline-block;font-size:11px;color:#5B8AF0;'
+                    f'text-decoration:none;">'
+                    f'Unsubscribe ↗</a>',
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.info("No newsletters with unsubscribe links yet.")
 
     # ── Queue statistics ────────────────────────────────────────────
     _section("📬", "Queue statistics")

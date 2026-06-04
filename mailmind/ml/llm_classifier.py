@@ -2,6 +2,9 @@
 
 Called only when rules engine and local ML model are not confident enough.
 Returns strictly structured JSON every time. Never raises exceptions.
+
+This module provides both a legacy LLMClassifier interface and an OpenAIAdapter
+that conforms to the unified LLMClassifier Protocol.
 """
 from __future__ import annotations
 
@@ -12,6 +15,8 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from ..taxonomy import OPENAI_LABELS as VALID_LABELS, REVIEW_LABELS
+from ..storage.models import Email
+from ..llm.base import LLMResult
 
 LOG = logging.getLogger(__name__)
 
@@ -182,3 +187,54 @@ class LLMClassifier:
         )
 
         return result
+
+
+class OpenAIAdapter:
+    """Adapter for LLMClassifier to conform to the unified LLMClassifier Protocol.
+
+    Wraps the legacy LLMClassifier interface (which takes individual email fields)
+    and adapts it to accept an Email object, returning LLMResult instead of
+    LLMPrediction for compatibility with the unified Protocol.
+
+    This allows OpenAI classification to be used interchangeably with other
+    LLM providers like DeepSeek through the Protocol interface.
+    """
+
+    def __init__(self, classifier: LLMClassifier):
+        """Initialize the adapter with a LLMClassifier instance.
+
+        Args:
+            classifier: The underlying OpenAI-based LLMClassifier to wrap.
+        """
+        self.classifier = classifier
+
+    def classify_email(self, email: Email) -> LLMResult:
+        """Classify an email using the OpenAI LLM.
+
+        Extracts fields from the Email object and calls the underlying
+        LLMClassifier, converting the result to LLMResult.
+
+        Args:
+            email: Normalized Email model with subject, sender, body_text.
+
+        Returns:
+            LLMResult with classification or fallback on failure.
+        """
+        prediction = self.classifier.classify(
+            sender=email.sender or "",
+            subject=email.subject or "",
+            snippet=email.snippet or "",
+            body_text=email.body_text or "",
+            gmail_id=email.gmail_id or "",
+        )
+
+        if prediction is None:
+            return LLMResult(model_available=False, reasoning="LLM classification failed")
+
+        # Convert LLMPrediction to LLMResult
+        return LLMResult(
+            primary_label=prediction.label,
+            llm_confidence=prediction.confidence,
+            reasoning=prediction.rationale,
+            model_available=True,
+        )

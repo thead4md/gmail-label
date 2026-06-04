@@ -27,23 +27,18 @@ from datetime import datetime, timezone
 
 from ..storage.models import Email
 from ..taxonomy import ML_LABELS as VALID_LABELS
+from ..intelligence.patterns import (
+    UNSUBSCRIBE_RE,
+    CALENDAR_RE,
+    FINANCE_RE,
+)
 
 LOG = logging.getLogger(__name__)
 
-_UNSUBSCRIBE_FEATURE_RE = re.compile(
-    r'unsubscribe|list-unsubscribe|manage\s+subscriptions?|manage\s+your\s+subscriptions?|stop\s+receiving|click\s+here.*unsubscribe|list-id|mailing\s+list',
-    re.I
-)
-
-_CALENDAR_RE = re.compile(
-    r'invitation|invite|meeting|event|calendar|ics',
-    re.I
-)
-
-_FINANCE_RE = re.compile(
-    r'payment|invoice|receipt|transaction|bill|charge',
-    re.I
-)
+# Local aliases for backward compatibility
+_UNSUBSCRIBE_FEATURE_RE = UNSUBSCRIBE_RE
+_CALENDAR_RE = CALENDAR_RE
+_FINANCE_RE = FINANCE_RE
 
 
 @dataclass

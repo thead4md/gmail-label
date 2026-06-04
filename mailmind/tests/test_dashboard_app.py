@@ -420,3 +420,60 @@ def test_writes_are_paired_with_invalidate():
     import pathlib
     src = (pathlib.Path(__file__).parent.parent / "dashboard" / "app.py").read_text()
     assert src.count("_invalidate()") >= 4  # approve/reject/correct/toggle paths
+
+
+def test_invalidate_clears_only_queue_caches():
+    """Verify _invalidate() clears queue-affected caches but not analytics caches."""
+    from mailmind.dashboard import app as a
+
+    # Queue/decision-affected caches that SHOULD be cleared
+    queue_caches = [
+        '_c_pending',
+        '_c_queue_stats',
+        '_c_digest',
+        '_c_executed',
+        '_c_new_senders',
+        '_c_recent_predictions',
+        '_c_corrections',
+        '_c_sender_profiles',
+    ]
+
+    # Analytics caches that should NOT be cleared
+    analytics_caches = [
+        '_c_label_dist',
+        '_c_channel_dist',
+        '_c_channel_weekday',
+        '_c_top_senders',
+        '_c_decision_times',
+        '_c_model_metadata',
+        '_c_gmail_labels',
+    ]
+
+    # Mock all cache functions with .clear() methods
+    with patch.object(a, '_c_pending', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_queue_stats', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_digest', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_executed', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_new_senders', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_recent_predictions', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_corrections', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_sender_profiles', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_label_dist', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_channel_dist', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_channel_weekday', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_top_senders', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_decision_times', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_model_metadata', MagicMock(clear=MagicMock())), \
+         patch.object(a, '_c_gmail_labels', MagicMock(clear=MagicMock())):
+
+        a._invalidate()
+
+        # Verify queue caches were cleared
+        for cache_name in queue_caches:
+            cache_obj = getattr(a, cache_name)
+            cache_obj.clear.assert_called_once()
+
+        # Verify analytics caches were NOT cleared
+        for cache_name in analytics_caches:
+            cache_obj = getattr(a, cache_name)
+            cache_obj.clear.assert_not_called()

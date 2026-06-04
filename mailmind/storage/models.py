@@ -32,6 +32,8 @@ class Email:
     parsed: bool = False
     # Which mailbox this email belongs to (multi-account). None for legacy rows.
     account: Optional[str] = None
+    # Unsubscribe URL extracted from List-Unsubscribe header (https preferred over mailto).
+    unsubscribe_url: Optional[str] = None
 
     def to_db_tuple(self) -> tuple:
         # Convert lists to JSON-like strings (comma-separated). Keep this simple for now.
@@ -49,6 +51,7 @@ class Email:
             labels_s,
             int(bool(self.parsed)),
             self.account,
+            self.unsubscribe_url,
         )
 
 

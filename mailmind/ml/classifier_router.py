@@ -6,6 +6,8 @@ Tiers:
   TIER 3: LLM classifier - called only when tiers 1+2 are not confident
 
 The router is fully configurable via thresholds and a global enable flag.
+Uses the unified LLMClassifier Protocol, allowing any LLM provider
+(DeepSeek, OpenAI, etc.) to be used as tier 3.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 
 from ..storage.models import Email
-from .llm_classifier import LLMClassifier, LLMPrediction
+from ..llm.base import LLMClassifier, LLMResult
 
 if TYPE_CHECKING:
     from ..processing.rules import RulesEngine
@@ -31,7 +33,7 @@ class RoutingResult:
     source: str  # "rules" | "ml" | "llm" | "fallback"
     label: str
     confidence: float
-    llm_prediction: Optional[LLMPrediction] = None
+    llm_result: Optional[LLMResult] = None
 
 
 class ClassifierRouter:
@@ -160,23 +162,17 @@ class ClassifierRouter:
                 "ml_label=%s ml_confidence=%.4f",
                 email.gmail_id, rules_confidence, ml_label or "N/A", ml_confidence,
             )
-            llm_prediction = self.llm_classifier.classify(
-                sender=email.sender or "",
-                subject=email.subject or "",
-                snippet=email.snippet or "",
-                body_text=email.body_text or "",
-                gmail_id=email.gmail_id or "",
-            )
-            if llm_prediction is not None:
+            llm_result = self.llm_classifier.classify_email(email)
+            if llm_result.model_available:
                 LOG.info(
                     "Tier 3 (LLM) handles email %s: label=%s confidence=%.4f",
-                    email.gmail_id, llm_prediction.label, llm_prediction.confidence,
+                    email.gmail_id, llm_result.primary_label, llm_result.llm_confidence,
                 )
                 return RoutingResult(
                     source="llm",
-                    label=llm_prediction.label,
-                    confidence=llm_prediction.confidence,
-                    llm_prediction=llm_prediction,
+                    label=llm_result.primary_label,
+                    confidence=llm_result.llm_confidence,
+                    llm_result=llm_result,
                 )
 
         # --- FALLBACK: best available result ---

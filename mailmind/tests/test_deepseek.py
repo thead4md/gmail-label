@@ -79,6 +79,7 @@ class TestDeepSeekClient:
         )
 
         from mailmind.config import MailMindConfig
+        from mailmind.llm.base import LLMResult
         config = MailMindConfig(
             deepseek_api_key="sk-test-key",
             llm_enabled=True,
@@ -277,12 +278,106 @@ class TestDeepSeekClient:
         assert len(user_content) < 800  # Total prompt should be reasonable
 
 
+    @patch("mailmind.llm.deepseek.OpenAI")
+    def test_summarize_thread_success(self, mock_openai_class):
+        """Test successful thread summarization returns text."""
+        mock_instance = MagicMock()
+        mock_openai_class.return_value = mock_instance
+
+        expected_summary = "User is asking for help with email filtering."
+
+        mock_instance.chat.completions.create.return_value = FakeResponse(
+            expected_summary
+        )
+
+        from mailmind.config import MailMindConfig
+        config = MailMindConfig(deepseek_api_key="sk-test-key", llm_enabled=True)
+        client = __import__("mailmind.llm.deepseek", fromlist=["DeepSeekClient"]).DeepSeekClient(config)
+
+        result = client.summarize_thread(
+            subject="Help with filtering",
+            body_text="Hi, I need help setting up email filters. Can you assist?",
+        )
+
+        assert result == expected_summary
+        # Verify API was called with correct parameters
+        call_kwargs = mock_instance.chat.completions.create.call_args[1]
+        assert call_kwargs["temperature"] == 0.1
+        assert call_kwargs["max_tokens"] == 80
+
+    @patch("mailmind.llm.deepseek.OpenAI")
+    def test_summarize_thread_error_returns_empty(self, mock_openai_class):
+        """Test summarize_thread returns empty string on API error."""
+        from openai import APITimeoutError
+
+        mock_instance = MagicMock()
+        mock_openai_class.return_value = mock_instance
+
+        mock_instance.chat.completions.create.side_effect = APITimeoutError(
+            "Request timed out"
+        )
+
+        from mailmind.config import MailMindConfig
+        config = MailMindConfig(deepseek_api_key="sk-test-key", llm_enabled=True)
+        client = __import__("mailmind.llm.deepseek", fromlist=["DeepSeekClient"]).DeepSeekClient(config)
+
+        result = client.summarize_thread(
+            subject="Test",
+            body_text="Test body",
+        )
+
+        assert result == ""
+
+    @patch("mailmind.llm.deepseek.OpenAI")
+    def test_summarize_thread_caps_output_at_120_chars(self, mock_openai_class):
+        """Test summarize_thread caps output to 120 characters."""
+        mock_instance = MagicMock()
+        mock_openai_class.return_value = mock_instance
+
+        long_summary = "A" * 200  # 200 chars, should be capped to 120
+
+        mock_instance.chat.completions.create.return_value = FakeResponse(
+            long_summary
+        )
+
+        from mailmind.config import MailMindConfig
+        config = MailMindConfig(deepseek_api_key="sk-test-key", llm_enabled=True)
+        client = __import__("mailmind.llm.deepseek", fromlist=["DeepSeekClient"]).DeepSeekClient(config)
+
+        result = client.summarize_thread(
+            subject="Test",
+            body_text="Test body",
+        )
+
+        assert len(result) <= 120
+        assert result == "A" * 120
+
+    @patch("mailmind.llm.deepseek.OpenAI")
+    def test_summarize_thread_empty_response(self, mock_openai_class):
+        """Test summarize_thread returns empty string on empty response."""
+        mock_instance = MagicMock()
+        mock_openai_class.return_value = mock_instance
+
+        mock_instance.chat.completions.create.return_value = FakeResponse(None)
+
+        from mailmind.config import MailMindConfig
+        config = MailMindConfig(deepseek_api_key="sk-test-key", llm_enabled=True)
+        client = __import__("mailmind.llm.deepseek", fromlist=["DeepSeekClient"]).DeepSeekClient(config)
+
+        result = client.summarize_thread(
+            subject="Test",
+            body_text="Test body",
+        )
+
+        assert result == ""
+
+
 class TestLLMResult:
     """Tests for LLMResult dataclass."""
 
     def test_default_values(self):
         """Test LLMResult default constructor values."""
-        from mailmind.llm.deepseek import LLMResult
+        from mailmind.llm.base import LLMResult
 
         result = LLMResult()
         assert result.primary_label == "NOTIFICATION"
@@ -292,7 +387,7 @@ class TestLLMResult:
 
     def test_to_scoring_breakdown_entry(self):
         """Test conversion to scoring breakdown dict."""
-        from mailmind.llm.deepseek import LLMResult
+        from mailmind.llm.base import LLMResult
 
         result = LLMResult(
             primary_label="WORK",

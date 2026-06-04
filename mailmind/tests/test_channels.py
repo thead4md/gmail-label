@@ -272,7 +272,7 @@ def test_different_domain_not_team():
                           user_domain="company.com") != "team"
 
 def test_no_user_domain_skips_team():
-    ch = detect_channel("Meeting", "alice@company.hu", "Can we meet?", user_domain=None)
+    ch = detect_channel("Hello", "alice@company.hu", "Can we meet?", user_domain=None)
     assert ch in ("personal", "unknown")
 
 

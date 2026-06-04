@@ -1,16 +1,17 @@
 """LLM module for MailMind Pass 7+.
 
-Provides DeepSeek-based email classification as an optional stage
-in the processing pipeline. All LLM calls are external API calls
-and must be mocked in tests.
+Provides unified LLM-based email classification through a Protocol interface.
+Supports multiple providers (DeepSeek, OpenAI, etc.) behind a common interface.
 
-This module contains:
+Modules:
+- base.py: LLMClassifier Protocol and LLMResult dataclass
 - deepseek.py: DeepSeek API client implementation
+- llm_classifier.py: OpenAI API client implementation
 
-Future extensions: support for other LLM providers (OpenAI, Claude, etc.)
-can be added as additional modules in this package.
+All LLM calls are external API calls and must be mocked in tests.
 """
 
-__all__ = ["deepseek"]
+__all__ = ["deepseek", "base"]
 
-from mailmind.llm.deepseek import DeepSeekClient, LLMResult
+from mailmind.llm.base import LLMClassifier, LLMResult
+from mailmind.llm.deepseek import DeepSeekClient

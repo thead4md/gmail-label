@@ -66,8 +66,8 @@ class Database:
         assert self._conn is not None
         sql = (
             "INSERT OR IGNORE INTO emails"
-            " (gmail_id, thread_id, sender, recipients, subject, snippet, body_text, date_ts, labels, parsed, account)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+            " (gmail_id, thread_id, sender, recipients, subject, snippet, body_text, date_ts, labels, parsed, account, unsubscribe_url)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
         )
         with self.transaction() as cur:
             cur.execute(sql, email.to_db_tuple())

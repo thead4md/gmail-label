@@ -16,44 +16,16 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional
 
 from openai import OpenAI, APIError, APITimeoutError, APIConnectionError
 
 from ..storage.models import Email
 from ..config import MailMindConfig
 from ..taxonomy import DEEPSEEK_LABELS
+from .base import LLMResult
 
 LOG = logging.getLogger(__name__)
-
-
-@dataclass
-class LLMResult:
-    """Result of LLM inference on an email.
-
-    This is designed to be merged into the Prediction model and scoring
-    breakdown during pipeline processing, alongside MLResult (from
-    the local ML model).
-
-    Attributes:
-        primary_label: The LLM-predicted label (one of VALID_LABELS).
-        llm_confidence: Confidence score 0.0 - 1.0.
-        reasoning: Short explanation from the LLM (1-2 sentences).
-        model_available: Whether the LLM was successfully called.
-    """
-    primary_label: str = "NOTIFICATION"
-    llm_confidence: float = 0.0
-    reasoning: str = ""
-    model_available: bool = True
-
-    def to_scoring_breakdown_entry(self) -> Dict[str, Any]:
-        """Convert to a dict for appending to scoring_breakdown."""
-        return {
-            "label": self.primary_label,
-            "confidence": self.llm_confidence,
-            "reasoning": self.reasoning,
-        }
 
 
 class DeepSeekClient:
@@ -205,3 +177,63 @@ class DeepSeekClient:
                 model_available=False,
                 reasoning=f"Unexpected error: {e}",
             )
+
+    def summarize_thread(self, subject: str, body_text: str) -> str:
+        """Summarize an email thread in 1-2 sentences.
+
+        Args:
+            subject: Email subject line.
+            body_text: Email body text (will be capped at 500 chars).
+
+        Returns:
+            Plain-text summary (1-2 sentences, up to 120 chars), or "" on any error.
+        """
+        try:
+            subject_preview = (subject or "")[:200]
+            body_preview = (body_text or "")[:500]
+
+            user_prompt = (
+                f"Summarize this email in 1-2 sentences (max 120 chars):\n"
+                f"Subject: {subject_preview}\n"
+                f"Body: {body_preview}"
+            )
+
+            LOG.debug("Calling DeepSeek API to summarize thread: %s...", subject_preview[:60])
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant. Summarize emails in 1-2 sentences.",
+                    },
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=80,
+            )
+
+            content = response.choices[0].message.content
+            if not content:
+                LOG.warning("DeepSeek returned empty response for summarize_thread")
+                return ""
+
+            summary = content.strip()[:120]
+            LOG.debug("Thread summary: %s", summary)
+            return summary
+
+        except APITimeoutError:
+            LOG.warning("DeepSeek API timeout for summarize_thread")
+            return ""
+
+        except APIConnectionError as e:
+            LOG.warning("DeepSeek API connection error for summarize_thread: %s", e)
+            return ""
+
+        except APIError as e:
+            LOG.warning("DeepSeek API error for summarize_thread: %s", e)
+            return ""
+
+        except Exception as e:
+            LOG.warning("Unexpected error in summarize_thread: %s", e, exc_info=True)
+            return ""

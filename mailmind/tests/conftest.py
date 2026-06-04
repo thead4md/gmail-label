@@ -16,7 +16,7 @@ def mock_deepseek_client():
 
     Simulates a successful LLM classification with high confidence.
     """
-    from mailmind.llm.deepseek import LLMResult
+    from mailmind.llm.base import LLMResult
 
     client = MagicMock()
     client.classify_email.return_value = LLMResult(
@@ -34,7 +34,7 @@ def mock_deepseek_disabled():
 
     Simulates a failed or unavailable LLM classification.
     """
-    from mailmind.llm.deepseek import LLMResult
+    from mailmind.llm.base import LLMResult
 
     client = MagicMock()
     client.classify_email.return_value = LLMResult(

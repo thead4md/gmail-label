@@ -5992,20 +5992,24 @@ graph TD
 | `mailmind/ingestion/fetcher.py` | Gmail fetcher wrapper for MailMind. | GmailFetcher | ✅ Complete |
 | `mailmind/ingestion/parser.py` | Parser converting Gmail API message payloads into MailMind Email models. | parse_message(), GmailMessageParser | ✅ Complete |
 | `mailmind/intelligence/__init__.py` |  | — | ✅ Stable |
+| `mailmind/intelligence/brief.py` | MailMind — daily brief generation from top-priority items. | build_daily_brief() | ✅ Complete |
 | `mailmind/intelligence/channels.py` | MailMind — email channel detection. | detect_channel(), enrich_prediction_with_channel() | ✅ Complete |
 | `mailmind/intelligence/explainer.py` |  | ReasonPayload, build_reason_payload() | ✅ Complete |
 | `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction(), handle_know_sender(), handle_mute_sender(), handle_block_sender(), handle_label_email() | ✅ Complete |
 | `mailmind/intelligence/labels.py` | Decide which Gmail labels count as user 'ground truth' for learning. | truth_label_policy(), is_truth_label(), resolve_truth_labels() | ✅ Complete |
+| `mailmind/intelligence/nl_rules.py` | Parse natural language sentences into sender->label rules. | parse_rule_nl() | ✅ Complete |
+| `mailmind/intelligence/patterns.py` | Canonical detection patterns shared across features, rules, and channel detection. | — | ✅ Complete |
 | `mailmind/intelligence/sender_memory.py` |  | SenderProfileSummary, get_sender_profile(), get_sender_trust_tier(), update_from_outcome(), get_similar_sender_history() | ✅ Complete |
 | `mailmind/intelligence/thread_analyzer.py` | MailMind — thread and reply-needed intelligence. | ThreadContext, ThreadAnalyzer | ✅ Complete |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — | ✅ Stable |
-| `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | LLMResult, DeepSeekClient | ✅ Complete |
+| `mailmind/llm/base.py` | Base protocol and result types for LLM classifiers. | LLMResult, LLMClassifier | ✅ Complete |
+| `mailmind/llm/deepseek.py` | DeepSeek LLM client for MailMind email classification. | DeepSeekClient | ✅ Complete |
 | `mailmind/main.py` | MailMind — main entry point. | cli(), run(), digest(), prune(), backfill(), apply_labels(), refresh_labels(), auth(), accounts() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
 | `mailmind/ml/inference.py` | Inference orchestration for MailMind ML classification. | MLResult, predict_label() | ✅ Complete |
-| `mailmind/ml/llm_classifier.py` | Third-tier LLM classifier for MailMind using OpenAI-compatible API. | LLMPrediction, LLMClassifier | ✅ Complete |
+| `mailmind/ml/llm_classifier.py` | Third-tier LLM classifier for MailMind using OpenAI-compatible API. | LLMPrediction, LLMClassifier, OpenAIAdapter | ✅ Complete |
 | `mailmind/ml/model.py` | ML model wrapper for MailMind classification. | ModelMetadata, MLClassifier | ✅ Complete |
 | `mailmind/ml/train.py` | Training orchestration for MailMind ML classifier. | train_model_from_db(), train_model_from_data(), get_model_metadata_from_db() | ✅ Complete |
 | `mailmind/processing/__init__.py` | Processing layer for MailMind: rules, scoring, and pipeline orchestration. | — | ✅ Stable |
@@ -6072,6 +6076,7 @@ class QueueManager:
 class DeepSeekClient:
     def __init__(config: MailMindConfig)
     def classify_email(self, email: Email)
+    def summarize_thread(self, subject: str, body_text: str)
 ```
 
 ### MailMindConfig
@@ -7612,7 +7617,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 563 tests passing.
+Pass 7 complete. 633 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

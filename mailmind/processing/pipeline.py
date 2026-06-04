@@ -168,6 +168,27 @@ class Pipeline:
         try:
             thread_ctx = ThreadAnalyzer.analyze(email, self.db)
             LOG.debug("Thread analysis result: %s", thread_ctx)
+
+            # Generate LLM summary for reply-needed threads (if budget allows)
+            if (
+                thread_ctx.reply_needed
+                and self.llm_client is not None
+                and self._llm_calls_this_run < self.llm_max_calls_per_run
+            ):
+                summary = self.llm_client.summarize_thread(
+                    subject=email.subject or "",
+                    body_text=email.body_text or "",
+                )
+                if summary:
+                    thread_ctx.thread_summary = summary
+                    self._llm_calls_this_run += 1
+                    LOG.debug(
+                        "LLM thread summary generated for %s (call %d/%d)",
+                        email.gmail_id,
+                        self._llm_calls_this_run,
+                        self.llm_max_calls_per_run,
+                    )
+
             # attach thread context JSON to prediction
             prediction.thread_context_json = json.dumps(thread_ctx.__dict__)
             LOG.debug("Attached thread_context_json: %s", prediction.thread_context_json)
