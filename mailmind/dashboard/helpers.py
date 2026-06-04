@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -162,7 +163,7 @@ def label_chip_html(label: Optional[str]) -> str:
     return (
         f'<span class="mm-chip" '
         f'style="color:{color};border-color:{color}20;background:{color}18;">'
-        f'{lbl}</span>'
+        f'{html.escape(lbl)}</span>'
     )
 
 
@@ -250,7 +251,7 @@ def email_card_html(
         trunc = thread_summary[:120] + ("…" if len(thread_summary) > 120 else "")
         summary_row = (
             f'<div class="mm-snippet" style="margin-top:4px;font-style:italic;">'
-            f'"{trunc}"</div>'
+            f'"{html.escape(trunc)}"</div>'
         )
 
     sender_short = (sender or "Unknown").split("<")[0].strip()[:40]
@@ -260,8 +261,8 @@ def email_card_html(
 <div class="mm-card" style="border-left-color:{lbl_color};">
   {avatar}
   <div class="mm-card-body">
-    <div class="mm-sender">{sender_short}</div>
-    <div class="mm-subject">{subj_short}</div>
+    <div class="mm-sender">{html.escape(sender_short)}</div>
+    <div class="mm-subject">{html.escape(subj_short)}</div>
     {summary_row}
     <div class="mm-meta">
       {chips}
@@ -280,7 +281,7 @@ def action_items_html(items: Optional[list]) -> str:
     if not items:
         return ""
     lines = "".join(
-        f'<div style="font-size:12px;color:#E2E8F0;padding:2px 0;">• {i}</div>'
+        f'<div style="font-size:12px;color:#E2E8F0;padding:2px 0;">• {html.escape(str(i))}</div>'
         for i in items[:5]
     )
     return (
@@ -298,7 +299,7 @@ def deadline_pill_html(deadlines: Optional[list]) -> str:
     first = deadlines[0][:60]
     return (
         f'<span class="mm-chip" style="color:#FF4757;border-color:#FF475740;'
-        f'background:#FF475718;">⏰ {first}</span>'
+        f'background:#FF475718;">⏰ {html.escape(str(first))}</span>'
     )
 
 
@@ -360,7 +361,7 @@ def sender_table_html(profiles: List[Dict[str, Any]]) -> str:
         rows_html += (
             f"<tr>"
             f'<td style="width:44px;padding:6px 8px;">{sender_avatar_html(email)}</td>'
-            f"<td>{email}</td>"
+            f"<td>{html.escape(email)}</td>"
             f"<td>{trust_badge_html(tier)}</td>"
             f'<td style="text-align:right;color:var(--mm-text-muted);">{count}</td>'
             f"<td>{rate_cell}</td>"
@@ -399,12 +400,12 @@ def corrections_table_html(corrections: List[Dict[str, Any]]) -> str:
         rows_html += (
             f"<tr>"
             f'<td style="color:var(--mm-text-muted);white-space:nowrap;">{date_str}</td>'
-            f'<td style="color:var(--mm-text-faint);font-family:monospace;font-size:11px;">{email_id}</td>'
+            f'<td style="color:var(--mm-text-faint);font-family:monospace;font-size:11px;">{html.escape(email_id)}</td>'
             f"<td>{label_chip_html(orig)}</td>"
             f'<td style="color:var(--mm-text-muted);">→</td>'
             f"<td>{label_chip_html(corr)}</td>"
             f'<td><span class="mm-chip" style="color:var(--mm-text-muted);'
-            f'border-color:var(--mm-border);background:var(--mm-surface-2);">{source}</span></td>'
+            f'border-color:var(--mm-border);background:var(--mm-surface-2);">{html.escape(source)}</span></td>'
             f"</tr>"
         )
     return (

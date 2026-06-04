@@ -11,16 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
+from ..taxonomy import OPENAI_LABELS as VALID_LABELS, REVIEW_LABELS
+
 LOG = logging.getLogger(__name__)
-
-# Known label set — must match rules/scorer/features label sets exactly
-VALID_LABELS = frozenset({
-    "NEWSLETTER", "NOTIFICATION", "MASS_EMAIL", "PERSONAL", "FINANCE",
-    "ACTION_REQUIRED", "MEETING", "RECEIPT", "SPAM", "OTHER",
-})
-
-# Labels that require human review
-REVIEW_LABELS = frozenset({"PERSONAL", "ACTION_REQUIRED", "FINANCE", "MEETING"})
 
 
 @dataclass

@@ -23,6 +23,7 @@ from openai import OpenAI, APIError, APITimeoutError, APIConnectionError
 
 from ..storage.models import Email
 from ..config import MailMindConfig
+from ..taxonomy import DEEPSEEK_LABELS
 
 LOG = logging.getLogger(__name__)
 
@@ -67,14 +68,7 @@ class DeepSeekClient:
         client: OpenAI-compatible client instance.
     """
 
-    VALID_LABELS = {
-        "NOTIFICATION",
-        "NEWSLETTER",
-        "MASS_EMAIL",
-        "PERSONAL",
-        "FINANCE",
-        "CALENDAR",
-    }
+    VALID_LABELS = DEEPSEEK_LABELS
 
     SYSTEM_PROMPT = (
         "You are an email classifier. Classify the email into exactly one "

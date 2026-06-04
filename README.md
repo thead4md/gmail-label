@@ -146,6 +146,7 @@ The sidebar shows:
 | `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek model name |
 | `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | Max LLM calls per cycle (cost cap) |
 | `DASHBOARD_PASSWORD` | — | If set, dashboard requires this password |
+| `DASHBOARD_SECRET` | — | Random key (e.g. `openssl rand -hex 32`) used to sign the auth cookie; falls back to DASHBOARD_PASSWORD if unset |
 | `GMAIL_TOKEN` | — | Headless OAuth token for primary mailbox (Fly secret) |
 | `GMAIL_TOKEN_<SLUG>` | — | Headless token for secondary mailbox, e.g. `GMAIL_TOKEN_ALICE_SECONDARY_ORG` |
 
@@ -254,6 +255,7 @@ fly secrets set \
   MAILMIND_DATA_DIR=/data/.mailmind \
   DEEPSEEK_API_KEY=sk-... \
   DASHBOARD_PASSWORD=$(openssl rand -hex 16) \
+  DASHBOARD_SECRET=$(openssl rand -hex 32) \
   GMAIL_TOKEN="$(cat ~/.mailmind/token.json)" \
   --app mailmind-adam
 ```
@@ -292,3 +294,4 @@ fly ssh console --app mailmind-adam -C "sqlite3 /data/mailmind.db 'SELECT COUNT(
 - Auto-execute requires explicit per-sender opt-in — high confidence alone is not sufficient
 - Protected categories (`URGENT`, `FINANCE`, `PERSONAL`) cannot be auto-archived
 - Dashboard is password-protected when `DASHBOARD_PASSWORD` is set
+- The auth cookie is signed with `DASHBOARD_SECRET` (independent of the password); login attempts are rate-limited to 5 failures per 5 minutes

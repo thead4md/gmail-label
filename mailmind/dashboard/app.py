@@ -9,6 +9,7 @@ Design: dark-mode card layout (dashboard/theme.py), Altair charts for digest.
 """
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -53,8 +54,8 @@ from mailmind.intelligence.feedback import (
     handle_label_email,
 )
 from mailmind.processing.queue_manager import QueueManager
-from mailmind.processing.scorer import LABEL_BASE_SCORES
 from mailmind.storage.database import Database
+from mailmind.taxonomy import BASE_SCORES as LABEL_BASE_SCORES
 from mailmind.storage.queries import (
     analytics_channel_distribution,
     analytics_channel_weekday,
@@ -338,7 +339,7 @@ def _render_reason_panel(reason: Dict[str, Any], item: Dict[str, Any]) -> None:
     if reason.get("rule_matches"):
         rules_html = " ".join(
             f'<code style="font-size:11px;background:#1C2237;padding:1px 5px;'
-            f'border-radius:3px;">{r}</code>'
+            f'border-radius:3px;">{html.escape(str(r))}</code>'
             for r in reason["rule_matches"]
         )
         rows.append(("Rules matched", rules_html))
@@ -352,13 +353,13 @@ def _render_reason_panel(reason: Dict[str, Any], item: Dict[str, Any]) -> None:
         rows.append(("LLM confidence", confidence_bar_html(float(llm_conf))))
 
     if reason.get("thread_summary"):
-        rows.append(("Thread", f'<em style="color:#94A3B8;">{reason["thread_summary"][:150]}</em>'))
+        rows.append(("Thread", f'<em style="color:#94A3B8;">{html.escape(reason["thread_summary"][:150])}</em>'))
 
     past = reason.get("similar_past_actions") or []
     if past:
         actions_html = " ".join(
             f'<code style="font-size:11px;background:#1C2237;padding:1px 5px;border-radius:3px;">'
-            f'{e.get("action", str(e))}</code>'
+            f'{html.escape(str(e.get("action", str(e))))}</code>'
             for e in past[:5]
         )
         rows.append(("Past actions", actions_html))
@@ -394,7 +395,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
             with c_name:
                 st.markdown(
                     f'{sender_avatar_html(sender)}&nbsp;'
-                    f'<span style="font-size:13px;">{sender}</span> '
+                    f'<span style="font-size:13px;">{html.escape(sender)}</span> '
                     f'<span style="font-size:11px;color:#94A3B8;">'
                     f'{s["email_count"]} emails</span>',
                     unsafe_allow_html=True,
@@ -758,7 +759,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
             with col_info:
                 st.markdown(
                     f'{trust_badge_html(tier)}&nbsp;&nbsp;'
-                    f'<span style="font-size:13px;">{email_key}</span>',
+                    f'<span style="font-size:13px;">{html.escape(email_key)}</span>',
                     unsafe_allow_html=True,
                 )
             with col_stats:
@@ -1015,6 +1016,51 @@ def _valid_auth_token(token: str, secret: str) -> bool:
         return False
 
 
+_AUTH_MAX_FAILURES = 5
+_AUTH_LOCKOUT_SECONDS = 300
+_AUTH_STATE_KEY = "dashboard_auth_state"
+
+
+def _auth_secret(password: str) -> str:
+    """HMAC signing key for the auth cookie. Prefer a dedicated DASHBOARD_SECRET so a
+    stolen cookie can't be brute-forced against a weak password; fall back to the password
+    when unset so existing deployments keep working."""
+    import os
+    return os.environ.get("DASHBOARD_SECRET", "").strip() or password
+
+
+def _auth_lockout_remaining() -> int:
+    import json, time
+    raw = get_db().get_state(_AUTH_STATE_KEY)
+    if not raw:
+        return 0
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return 0
+    return max(0, int(data.get("locked_until", 0)) - int(time.time()))
+
+
+def _record_auth_failure() -> None:
+    import json, time
+    raw = get_db().get_state(_AUTH_STATE_KEY)
+    try:
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        data = {}
+    failures = int(data.get("failures", 0)) + 1
+    locked_until = 0
+    if failures >= _AUTH_MAX_FAILURES:
+        locked_until = int(time.time()) + _AUTH_LOCKOUT_SECONDS
+        failures = 0
+    get_db().set_state(_AUTH_STATE_KEY, json.dumps({"failures": failures, "locked_until": locked_until}))
+
+
+def _reset_auth_failures() -> None:
+    import json
+    get_db().set_state(_AUTH_STATE_KEY, json.dumps({"failures": 0, "locked_until": 0}))
+
+
 def _check_password() -> bool:
     """Return True if the user is authenticated (or no password is configured).
 
@@ -1038,7 +1084,7 @@ def _check_password() -> bool:
     controller = CookieController()
     token = controller.get(_AUTH_COOKIE)
 
-    if token and _valid_auth_token(token, required):
+    if token and _valid_auth_token(token, _auth_secret(required)):
         st.session_state["_authenticated"] = True
         return True
 
@@ -1058,13 +1104,19 @@ def _check_password() -> bool:
     with col:
         pwd = st.text_input("Password", type="password", label_visibility="collapsed",
                             placeholder="Password")
-        if st.button("Unlock", use_container_width=True):
-            if pwd == required:
-                controller.set(_AUTH_COOKIE, _make_auth_token(required),
+        locked = _auth_lockout_remaining()
+        if locked > 0:
+            st.error(f"Too many attempts. Try again in {locked}s.")
+        elif st.button("Unlock", use_container_width=True):
+            import hmac
+            if hmac.compare_digest(pwd, required):
+                controller.set(_AUTH_COOKIE, _make_auth_token(_auth_secret(required)),
                                max_age=_AUTH_DAYS * 86400)
                 st.session_state["_authenticated"] = True
+                _reset_auth_failures()
                 st.rerun()
             else:
+                _record_auth_failure()
                 st.error("Incorrect password.")
     return False
 

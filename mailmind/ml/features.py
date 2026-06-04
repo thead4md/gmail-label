@@ -26,6 +26,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 
 from ..storage.models import Email
+from ..taxonomy import ML_LABELS as VALID_LABELS
 
 LOG = logging.getLogger(__name__)
 
@@ -43,20 +44,6 @@ _FINANCE_RE = re.compile(
     r'payment|invoice|receipt|transaction|bill|charge',
     re.I
 )
-
-# Common label categories (must match PriorityScorer.LABEL_BASE_SCORES keys)
-VALID_LABELS = [
-    "URGENT",
-    "WORK",
-    "FINANCE",
-    "PERSONAL",
-    "CALENDAR",
-    "NOTIFICATION",
-    "NEWSLETTER",
-    "MASS_EMAIL",
-    "SPAMCANDIDATE",
-    "DEFER",
-]
 
 
 @dataclass

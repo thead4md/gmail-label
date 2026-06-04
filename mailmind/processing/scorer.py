@@ -21,22 +21,9 @@ from ..storage.models import Email, SenderReputation
 from .rules import RuleMatch
 from ..intelligence.sender_memory import get_sender_trust_tier
 from ..storage.database import Database
+from ..taxonomy import base_score, DEFAULT_BASE_SCORE, is_known
 
 LOG = logging.getLogger(__name__)
-
-
-# Label base scores (0-100 scale)
-LABEL_BASE_SCORES = {
-    "URGENT": 80,
-    "WORK": 60,
-    "FINANCE": 55,
-    "PERSONAL": 50,
-    "NOTIFICATION": 30,
-    "DEFER": 20,
-    "NEWSLETTER": 10,
-    "SPAMCANDIDATE": 5,
-}
-DEFAULT_BASE_SCORE = 30
 
 
 @dataclass
@@ -90,7 +77,9 @@ class PriorityScorer:
         """
         # 1. Determine primary label and base score
         primary_label = self._determine_primary_label(email, rule_matches)
-        base_score = LABEL_BASE_SCORES.get(primary_label, DEFAULT_BASE_SCORE)
+        if primary_label and not is_known(primary_label):
+            LOG.warning("Unknown label %r — scoring with default", primary_label)
+        base = base_score(primary_label)
 
         # 2. Rule contributions (sum of matched rule deltas weighted by confidence)
         rule_contribution = 0
@@ -154,18 +143,18 @@ class PriorityScorer:
         total_penalties = sum(penalties.values())
 
         # 7. Clamp to 0-100
-        score_before_clamp = base_score + rule_contribution + direct_mention_bonus + recency_bonus + sender_trust + label_priority_weight + total_penalties
+        score_before_clamp = base + rule_contribution + direct_mention_bonus + recency_bonus + sender_trust + label_priority_weight + total_penalties
         total_score = max(0, min(100, score_before_clamp))
 
         # 8. Generate breakdown text
         breakdown = self._build_breakdown_text(
-            primary_label, base_score, rule_contribution, direct_mention_bonus, recency_bonus,
+            primary_label, base, rule_contribution, direct_mention_bonus, recency_bonus,
             sender_trust, label_priority_weight, penalties, matched_rule_names, score_before_clamp, total_score
         )
 
         result = ScoreResult(
             total_score=total_score,
-            base_score=base_score,
+            base_score=base,
             rule_contribution=rule_contribution,
             direct_mention_bonus=direct_mention_bonus,
             recency_bonus=recency_bonus,
