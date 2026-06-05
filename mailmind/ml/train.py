@@ -188,7 +188,7 @@ def _collect_training_data_from_db(
             corpus = [corpus[i] for i in valid_indices]
             labels = [labels[i] for i in valid_indices]
             vectors = [vectors[i] for i in valid_indices]
-            LOG.info(f"Dropped {dropped} samples with sparse labels (< 5 examples)")
+            LOG.info(f"Dropped {dropped} samples with sparse labels (< {min_per_class} examples)")
 
         LOG.info(
             "Collected %d training samples from predictions table (labels: %s); "
