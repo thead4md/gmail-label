@@ -202,10 +202,14 @@ def detect_channel(
             if sender_domain == user_domain.lower():
                 return "team"
 
-    # ── 6. Personal — human senders not caught above ─────────────────
-    if not _TRANSACTIONAL_SENDER_RE.search(src):
+    # ── 6. Personal — a real human sender address not caught above ───
+    # (Reaching here already means no transactional/automated/etc. bucket fired,
+    # so the old `if not _TRANSACTIONAL_SENDER_RE.search(src)` was always true and
+    # `unknown` was dead. Gate on having a usable address instead.)
+    if "@" in src:
         return "personal"
 
+    # No usable sender and nothing else matched → genuinely unknown.
     return "unknown"
 
 

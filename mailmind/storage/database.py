@@ -125,7 +125,10 @@ class Database:
             "  llm_label=excluded.llm_label, llm_rationale=excluded.llm_rationale,"
             "  llm_action_hint=excluded.llm_action_hint, llm_needs_review=excluded.llm_needs_review,"
             "  classifier_source=excluded.classifier_source, llm_called_at=excluded.llm_called_at,"
-            "  created_at=excluded.created_at, account=excluded.account, channel=excluded.channel;"
+            # Preserve the original classification time on re-classification (a
+            # --reclassify run): bumping created_at would make old emails count as
+            # "just classified" in every time-windowed analytics/digest query.
+            "  account=excluded.account, channel=excluded.channel;"
         )
         with self.transaction() as cur:
             cur.execute(
