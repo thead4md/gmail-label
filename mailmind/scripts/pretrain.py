@@ -332,12 +332,16 @@ def main() -> None:
                                     continue
                                 seen.add(gid)
                                 lbl = r["primary_label"]
-                                txt = " ".join(
-                                    filter(
-                                        None,
-                                        [r["subject"] or "", r["snippet"] or "", r["sender"] or "",
-                                         (r["body_text"] or "")[:500]],
-                                    )
+                                # Build eval text the SAME way training does
+                                # (build_model_text appends the engineered feat_*
+                                # tokens). A raw join omits them, so the model is
+                                # scored on text it never saw → misleading Train-acc.
+                                from mailmind.ml.features import build_model_text
+                                txt = build_model_text(
+                                    r["subject"] or "",
+                                    r["sender"] or "",
+                                    r["snippet"] or "",
+                                    (r["body_text"] or "")[:500],
                                 ).strip()
                                 if txt and lbl:
                                     eval_corpus.append(txt)
