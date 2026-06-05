@@ -119,7 +119,10 @@ class ThreadAnalyzer:
         r"due (date|by|on)|deadline|no later than|"
         # Hungarian: határidő, péntekig, május 3-ig, ISO/dotted dates
         r"hat[aá]rid[oő]|"
-        r"\w+ig\b|"                      # -ig suffix (péntekig, holnapig)
+        # -ig suffix, constrained to real temporal stems (day names / holnap /
+        # a date number) so it no longer matches English words like big/config/rig.
+        r"(h[eé]tf[oő]|kedd|szerda|cs[uü]t[oö]rt[oö]k|p[eé]ntek|szombat|vas[aá]rnap|"
+        r"holnap|holnaput[aá]n|j[oö]v[oő] h[eé]t|\d{1,2}-?)ig\b|"
         r"\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}|"  # 2026.06.02 / 2026-06-02
         r"\d{1,2}-[aá]n|\d{1,2}-[eé]n)",     # 3-án, 5-én
         re.I | re.UNICODE,
@@ -135,7 +138,9 @@ class ThreadAnalyzer:
     def _extract_lines(body: str, pattern) -> list:
         """Return up to 5 distinct matching sentences/lines, trimmed to 140 chars."""
         out, seen = [], set()
-        for raw in re.split(r"[.\n!?]", body):
+        # Split on sentence punctuation, but NOT on a '.' between digits — that
+        # would shred dotted dates like 2026.06.02 before the deadline regex sees them.
+        for raw in re.split(r"(?<!\d)\.(?!\d)|[\n!?]", body):
             line = raw.strip()
             if line and pattern.search(line):
                 key = line.lower()[:60]

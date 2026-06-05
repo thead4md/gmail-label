@@ -405,6 +405,18 @@ class Pipeline:
                 llm_label, llm_confidence, llm_needs_review,
             )
 
+        # Thread the router's real classification confidence into the prediction.
+        # Previously rules/ML/user-rule predictions were hardcoded to 0.85 and could
+        # never clear the 0.90 auto-execute floor, so earned-autopilot never fired
+        # for any tier except the separate DeepSeek llm_client path. Pick the first
+        # confidence that actually applies (ml/llm win when present; otherwise the
+        # router's tier confidence — e.g. 1.0 for a Tier-0 user sender rule).
+        routed_conf = routing_result.confidence if routing_result is not None else None
+        effective_conf = next(
+            (c for c in (ml_confidence, llm_confidence, routed_conf) if c is not None),
+            0.85,
+        )
+
         prediction = Prediction(
             email_gmail_id=email.gmail_id,
             account=getattr(email, "account", None),
@@ -413,7 +425,7 @@ class Pipeline:
             priority_score=priority_score,
             primary_label=primary_label,
             score=priority_score,
-            confidence=0.85 if pipeline_used == "rules" else ml_confidence or llm_confidence or 0.85,
+            confidence=effective_conf,
             pipeline_used=pipeline_used,
             action_suggested=suggested_action,
             rule_matches=rule_names,
