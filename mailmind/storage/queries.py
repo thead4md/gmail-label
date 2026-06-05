@@ -720,7 +720,10 @@ def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, in
         'rejected': 0,
         'superseded': 0,
         'executed': 0,
-        'failed': 0,
+        # Key must match the actual status string used everywhere else
+        # ('execute_failed'); the old 'failed' key never matched, so failed
+        # executions were silently counted as 0.
+        'execute_failed': 0,
     }
 
     for r in rows:
@@ -951,8 +954,17 @@ def set_sender_label_rule(db: Database, sender_email: str, label: str,
     now = int(time.time())
     pat = (match_pattern or "").strip() or None
     with db.transaction() as cur:
+        # Delete-then-insert rather than INSERT OR REPLACE: SQLite treats NULLs as
+        # distinct in a UNIQUE/PK index, so OR REPLACE never matches the common
+        # account IS NULL (single-mailbox) case and would accumulate duplicate
+        # rules. `account IS ?` matches NULL, so this dedupes correctly for both.
         cur.execute(
-            "INSERT OR REPLACE INTO sender_label_rules "
+            "DELETE FROM sender_label_rules "
+            "WHERE sender_email = ? AND label = ? AND account IS ?",
+            (sender_email, label, account),
+        )
+        cur.execute(
+            "INSERT INTO sender_label_rules "
             "(sender_email, label, account, match_pattern, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (sender_email, label, account, pat, now),
