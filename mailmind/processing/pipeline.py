@@ -41,6 +41,10 @@ class Pipeline:
 
     ML_CONFIDENCE_THRESHOLD = 0.3
     LLM_CONFIDENCE_OVERRIDE = 0.90
+    # In the fallback path (no confident rules/ML label) the router only has a
+    # ~0-confidence guess, so a usable LLM content label should win even below the
+    # strict 0.90 override. Floor avoids letting a very-unsure LLM label through.
+    LLM_FALLBACK_FLOOR = 0.65
 
     def __init__(
         self,
@@ -273,11 +277,23 @@ class Pipeline:
             breakdown_dict["ml"] = ml_result.to_scoring_breakdown_entry()
             scoring_breakdown = json.dumps(breakdown_dict)
 
+        # Merge ClassifierRouter result (OpenAI LLM third-tier)
+        classifier_source = "rules"
+        llm_label = None
+        llm_rationale = None
+        llm_action_hint = None
+        llm_needs_review = False
+        llm_called_at = None
+
         llm_confidence = None
         if llm_result is not None and llm_result.model_available:
             pipeline_used = "hybrid"
             llm_confidence = llm_result.llm_confidence
-            if llm_confidence >= self.llm_confidence_override:
+            # Always record the LLM's label as a first-class field so the trainer
+            # can learn from it (this is what breaks the rules→ML echo chamber),
+            # regardless of whether it wins the live primary_label below.
+            llm_label = llm_result.primary_label
+            if llm_confidence is not None and llm_confidence >= self.llm_confidence_override:
                 primary_label = llm_result.primary_label
                 LOG.debug(
                     "LLM override: label=%s (confidence=%.2f >= %.2f threshold)",
@@ -288,27 +304,19 @@ class Pipeline:
             breakdown_dict["llm"] = llm_result.to_scoring_breakdown_entry()
             scoring_breakdown = json.dumps(breakdown_dict)
 
-        # Merge ClassifierRouter result (OpenAI LLM third-tier)
-        classifier_source = "rules"
-        llm_label = None
-        llm_rationale = None
-        llm_action_hint = None
-        llm_needs_review = False
-        llm_called_at = None
-
-        # Did DeepSeek (the content tier) classify this email confidently above?
-        llm_decided = (
+        # In the fallback path the router only has a ~0-confidence guess, so a
+        # usable LLM content label should win over the NOTIFICATION default even
+        # below the strict 0.90 override used for confident lower tiers.
+        llm_usable = (
             llm_result is not None
             and llm_result.model_available
             and llm_confidence is not None
-            and llm_confidence >= self.llm_confidence_override
+            and llm_confidence >= self.LLM_FALLBACK_FLOOR
         )
 
         if routing_result is not None:
-            if routing_result.source == "fallback" and llm_decided:
-                # The router only produced a low-confidence fallback guess, but
-                # DeepSeek classified this email confidently. Keep DeepSeek's label
-                # (already set on primary_label above) instead of discarding it.
+            if routing_result.source == "fallback" and llm_usable:
+                primary_label = llm_result.primary_label
                 classifier_source = "llm"
                 pipeline_used = "hybrid"
             else:
@@ -330,7 +338,7 @@ class Pipeline:
                     "LLM (router) result: label=%s confidence=%.4f needs_review=%s",
                     llm_label, llm_confidence, llm_needs_review,
                 )
-            elif routing_result.source == "fallback" and not llm_decided:
+            elif routing_result.source == "fallback" and not llm_usable:
                 classifier_source = "fallback"
 
         prediction = Prediction(

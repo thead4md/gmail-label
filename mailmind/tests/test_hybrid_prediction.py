@@ -142,6 +142,55 @@ class TestHybridPredictionLogic:
         assert prediction.primary_label == "NEWSLETTER"     # fallback applies
         assert prediction.classifier_source == "fallback"
 
+    def test_fallback_midconfidence_llm_beats_notification_default(self):
+        """LLM @0.85 (>= floor, < 0.90 override) wins over the fallback guess.
+
+        This is the real OpenAI case: confident-enough content label should
+        replace the NOTIFICATION default in the fallback path.
+        """
+        from mailmind.llm.deepseek import LLMResult
+        from mailmind.ml.classifier_router import RoutingResult
+
+        db = Database(":memory:")
+        pipeline = Pipeline(db, RulesEngine(), PriorityScorer())
+        email = _make_email()
+        score = _make_score(primary_label="NOTIFICATION", total_score=40)
+
+        llm_result = LLMResult(primary_label="FINANCE", llm_confidence=0.85,
+                               reasoning="invoice", model_available=True)
+        fallback = RoutingResult(source="fallback", label="NOTIFICATION", confidence=0.0)
+
+        prediction = pipeline._create_prediction(
+            email, score, ["NOTIFICATION"], [],
+            suggested_action=None, llm_result=llm_result, routing_result=fallback,
+        )
+        assert prediction.primary_label == "FINANCE"
+        assert prediction.classifier_source == "llm"
+
+    def test_llm_label_recorded_even_when_it_does_not_override(self):
+        """llm_label must be persisted for training even if it doesn't win live.
+
+        Echo-chamber breaker: the trainer reads llm_label, so it must be set
+        whenever the LLM ran — here with no routing_result and conf < override.
+        """
+        from mailmind.llm.deepseek import LLMResult
+
+        db = Database(":memory:")
+        pipeline = Pipeline(db, RulesEngine(), PriorityScorer())
+        email = _make_email()
+        score = _make_score(primary_label="NOTIFICATION", total_score=50)
+
+        llm_result = LLMResult(primary_label="PERSONAL", llm_confidence=0.72,
+                               reasoning="from a friend", model_available=True)
+        prediction = pipeline._create_prediction(
+            email, score, ["NOTIFICATION"], [],
+            suggested_action=None, llm_result=llm_result,  # no routing_result
+        )
+        # Did not override the live label (0.72 < 0.90, no fallback path)...
+        assert prediction.primary_label == "NOTIFICATION"
+        # ...but the LLM label IS recorded as training signal.
+        assert prediction.llm_label == "PERSONAL"
+
     def test_hybrid_no_override_low_confidence(self):
         """LLM confidence < 0.90 keeps rules primary_label."""
         from mailmind.llm.deepseek import LLMResult

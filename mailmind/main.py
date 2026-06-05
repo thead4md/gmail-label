@@ -720,6 +720,7 @@ def _backfill_one_account(
     account: Optional[str],
     auth_account: Optional[str],
     allow_interactive: bool,
+    max_llm_calls: int = 5000,
 ) -> int:
     """Classify-only sweep of one mailbox over the last `months` months.
 
@@ -746,6 +747,10 @@ def _backfill_one_account(
     # dry_run=True: a backfill must never mutate Gmail.
     pipeline, queue_manager = _build_components(db, dry_run=True, service=service,
                                                 llm_client=llm_client)
+    # A deliberate historical sweep must not be throttled by the live per-run LLM
+    # guard (default 10). Raise the cap so every fallback email can be labelled.
+    if llm_client is not None:
+        pipeline.llm_max_calls_per_run = max_llm_calls
 
     query = f"newer_than:{months}m"
     LOG.info("[%s] Backfill: listing INBOX message IDs for q=%r (max %d)…",
@@ -785,11 +790,13 @@ def _backfill_one_account(
               help="Max messages to fetch per mailbox (default: 2000).")
 @click.option("--account", default=None, help="Scope to a single mailbox (default: all).")
 @click.option("--with-llm", is_flag=True, default=False,
-              help="Use the DeepSeek LLM tier (costs money; off by default).")
+              help="Use the LLM tier (OpenAI/DeepSeek per LLM_PROVIDER; costs money).")
+@click.option("--max-llm-calls", default=5000, type=int,
+              help="Max LLM calls for this backfill (cost cap; default 5000).")
 @click.option("--reclassify", is_flag=True, default=False,
               help="Re-classify emails that already have a prediction.")
 def backfill(months: int, max_emails: int, account: Optional[str],
-             with_llm: bool, reclassify: bool) -> None:
+             with_llm: bool, max_llm_calls: int, reclassify: bool) -> None:
     """Classify the last N months of INBOX mail to seed categories + ML training.
 
     Classify-only: stores label + channel for every email in the window but
@@ -816,7 +823,7 @@ def backfill(months: int, max_emails: int, account: Optional[str],
         total += _backfill_one_account(
             db, months=months, max_emails=max_emails, no_llm=no_llm,
             reclassify=reclassify, account=acct, auth_account=auth_account,
-            allow_interactive=bool(is_primary),
+            allow_interactive=bool(is_primary), max_llm_calls=max_llm_calls,
         )
 
     click.echo(f"Backfill complete: {total} message(s) classified across "

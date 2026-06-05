@@ -89,6 +89,7 @@ def _collect_training_data_from_db(
         """
         SELECT p.email_gmail_id,
                p.primary_label,
+               p.llm_label,
                (
                    SELECT uc.corrected_label
                    FROM user_corrections uc
@@ -117,10 +118,22 @@ def _collect_training_data_from_db(
             continue
         seen_gmail_ids.add(gmail_id)
 
-        # Priority: explicit correction > your real Gmail label > rules guess.
+        # Priority: explicit correction > your real Gmail label > LLM content
+        # label > rules guess. The LLM label sits ABOVE the rules guess so the
+        # model learns content-derived labels instead of echoing the rules
+        # (which only ever emit NOTIFICATION/NEWSLETTER/MASS_EMAIL/CALENDAR).
         corrected = row["corrected_label"]
+        try:
+            llm_label = row["llm_label"]
+        except (IndexError, KeyError):
+            llm_label = None
         user_labels = [x for x in (row["user_labels"] or "").split(",") if x]
-        label = corrected or (user_labels[0] if user_labels else row["primary_label"])
+        label = (
+            corrected
+            or (user_labels[0] if user_labels else None)
+            or llm_label
+            or row["primary_label"]
+        )
         if corrected and corrected != row["primary_label"]:
             correction_overrides += 1
         if not label:
