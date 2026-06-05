@@ -53,6 +53,14 @@ def _evaluate_holdout(corpus, labels, test_size: float = 0.2, seed: int = 42):
         )
         preds = [lbl for lbl, _conf in probe.predict(X_te)]
         correct = sum(1 for p, t in zip(preds, y_te) if p == t)
+        # Per-class precision/recall/F1 — shows WHICH labels confuse each other,
+        # the actionable signal for pushing accuracy up (overall % alone doesn't).
+        try:
+            from sklearn.metrics import classification_report
+            report = classification_report(y_te, preds, zero_division=0)
+            LOG.info("Hold-out per-class report:\n%s", report)
+        except Exception:
+            LOG.debug("classification_report failed", exc_info=True)
         return round(correct / len(y_te), 4) if y_te else None
     except Exception as exc:
         LOG.warning("Hold-out accuracy evaluation failed: %s", exc)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
@@ -19,6 +20,35 @@ from ..storage.models import Email
 from ..llm.base import LLMResult
 
 LOG = logging.getLogger(__name__)
+
+# Approximate USD per 1M tokens (input, output). For cost visibility only —
+# verify against current provider pricing. Unknown models log tokens, cost $0.
+_PRICE_PER_1M_TOKENS: Dict[str, tuple] = {
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+    "deepseek-chat": (0.27, 1.10),
+}
+
+
+def log_llm_usage(model: str, response, elapsed_s: float, kind: str = "classify") -> None:
+    """Log token usage, approximate cost, and latency for an LLM call.
+
+    Best-effort: any failure to read usage is swallowed (never break a call over
+    telemetry). Now that an LLM is in the live path, this is the only window into
+    spend and latency.
+    """
+    try:
+        usage = getattr(response, "usage", None)
+        pt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        ct = int(getattr(usage, "completion_tokens", 0) or 0)
+        price_in, price_out = _PRICE_PER_1M_TOKENS.get(model, (0.0, 0.0))
+        cost = pt / 1_000_000 * price_in + ct / 1_000_000 * price_out
+        LOG.info(
+            "LLM %s: model=%s tokens=%d in/%d out cost~$%.5f latency=%.2fs",
+            kind, model, pt, ct, cost, elapsed_s,
+        )
+    except Exception:
+        LOG.debug("log_llm_usage failed", exc_info=True)
 
 
 @dataclass
@@ -117,6 +147,7 @@ class LLMClassifier:
 
         try:
             client = openai.OpenAI(api_key=self.api_key)
+            _t0 = time.monotonic()
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -127,6 +158,7 @@ class LLMClassifier:
                 temperature=0.0,
                 max_tokens=256,
             )
+            log_llm_usage(self.model, response, time.monotonic() - _t0, kind="classify")
         except Exception as e:
             LOG.warning(
                 "LLM API call failed for %s (model=%s): %s",
@@ -238,3 +270,40 @@ class OpenAIAdapter:
             reasoning=prediction.rationale,
             model_available=True,
         )
+
+    def summarize_thread(self, subject: str, body_text: str) -> str:
+        """Summarize an email in 1-2 sentences via OpenAI. "" on any error.
+
+        Mirrors DeepSeekClient.summarize_thread so the NOW-tab thread summaries
+        work under LLM_PROVIDER=openai (without this the pipeline's hasattr guard
+        silently skips summaries on the OpenAI path).
+        """
+        try:
+            import openai
+        except ImportError:
+            return ""
+        try:
+            subject_preview = (subject or "")[:200]
+            body_preview = (body_text or "")[:500]
+            user_prompt = (
+                f"Summarize this email in 1-2 sentences (max 120 chars):\n"
+                f"Subject: {subject_preview}\nBody: {body_preview}"
+            )
+            client = openai.OpenAI(api_key=self.classifier.api_key)
+            _t0 = time.monotonic()
+            response = client.chat.completions.create(
+                model=self.classifier.model,
+                messages=[
+                    {"role": "system",
+                     "content": "You are a helpful assistant. Summarize emails in 1-2 sentences."},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=80,
+            )
+            log_llm_usage(self.classifier.model, response,
+                          time.monotonic() - _t0, kind="summarize")
+            return (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            LOG.warning("OpenAI summarize_thread failed: %s", e)
+            return ""

@@ -269,6 +269,14 @@ MIGRATIONS: List[Tuple[str, str]] = [
         "0022_add_match_pattern_to_sender_rules",
         """-- Handled in apply_migrations: adds match_pattern column to sender_label_rules.""",
     ),
+    (
+        "0023_add_predictions_created_at_index",
+        """
+        -- Training (ORDER BY p.created_at DESC) and analytics scan predictions by
+        -- recency; index it now the table has grown to thousands of rows.
+        CREATE INDEX IF NOT EXISTS idx_predictions_created_at ON predictions(created_at);
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [

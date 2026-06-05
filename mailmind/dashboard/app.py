@@ -905,7 +905,9 @@ def render_automate_tab(account: Optional[str] = None) -> None:
     from mailmind.config import MailMindConfig
     from mailmind.llm.deepseek import DeepSeekClient
 
-    config = MailMindConfig()
+    # from_env() loads the API key (.env / secrets); the bare constructor does
+    # not, which left the NL-rule parser's LLM call keyless and always failing.
+    config = MailMindConfig.from_env()
     rule_text = st.text_input(
         "Describe a rule (e.g., 'label emails from billing@acme.com as FINANCE', "
         "or 'label emails from oe-l@cserkesz.hu about events as CALENDAR')",

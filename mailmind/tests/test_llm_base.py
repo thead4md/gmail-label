@@ -30,6 +30,44 @@ class FakeResponse:
         self.choices = [FakeChoice(content)]
 
 
+class TestOpenAISummarizeAndUsage:
+    """OpenAI thread-summary parity + cost/usage logging (regression fixes)."""
+
+    def test_openai_adapter_has_summarize_thread(self):
+        adapter = OpenAIAdapter(MagicMock(spec=OpenAIClassifier))
+        assert hasattr(adapter, "summarize_thread")
+
+    def test_summarize_thread_returns_text(self):
+        classifier = MagicMock(spec=OpenAIClassifier)
+        classifier.api_key = "sk-x"
+        classifier.model = "gpt-4o-mini"
+        adapter = OpenAIAdapter(classifier)
+        fake = FakeResponse("Approve the Q3 budget by Friday.")
+        fake.usage = MagicMock(prompt_tokens=70, completion_tokens=16)
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.chat.completions.create.return_value = fake
+            out = adapter.summarize_thread("Q3 budget", "Please approve by Friday.")
+        assert out == "Approve the Q3 budget by Friday."
+
+    def test_summarize_thread_returns_empty_on_error(self):
+        classifier = MagicMock(spec=OpenAIClassifier)
+        classifier.api_key = "sk-x"
+        classifier.model = "gpt-4o-mini"
+        adapter = OpenAIAdapter(classifier)
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.chat.completions.create.side_effect = RuntimeError("boom")
+            assert adapter.summarize_thread("s", "b") == ""
+
+    def test_log_llm_usage_never_raises(self):
+        from mailmind.ml.llm_classifier import log_llm_usage
+        resp = MagicMock()
+        resp.usage = MagicMock(prompt_tokens=100, completion_tokens=20)
+        # Known and unknown models, and a malformed response — none may raise.
+        log_llm_usage("gpt-4o-mini", resp, 1.0)
+        log_llm_usage("unknown-model", resp, 0.5)
+        log_llm_usage("gpt-4o-mini", object(), 0.1)
+
+
 class TestLLMResultType:
     """Tests for LLMResult dataclass."""
 
