@@ -227,7 +227,7 @@ mailmind/
 ├── utils/
 │   └── fingerprint.py       # SHA-256 action fingerprint (dedup)
 │
-└── tests/                   # 463 pytest tests
+└── tests/                   # 697 pytest tests
 ```
 
 ---
@@ -236,7 +236,7 @@ mailmind/
 
 ```bash
 pytest mailmind/tests/ -q
-# 463 passed
+# 697 passed
 ```
 
 Tests use in-memory SQLite — no network, no Gmail API, no LLM calls. The ActionExecutor and SafetyPolicy paths (which actually mutate Gmail in production) have dedicated test files covering dry-run, protected categories, delete-blocked, rate limit, and every supported action.
