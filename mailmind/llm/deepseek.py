@@ -117,8 +117,11 @@ class DeepSeekClient:
                     reasoning=f"Malformed JSON response: {e}",
                 )
 
-            label = data.get("label", "").strip().upper()
-            confidence = float(data.get("confidence", 0.0))
+            # `or ""` / `or 0.0` guard against an explicit JSON null value — a
+            # plain .get(key, default) only applies the default when the key is
+            # ABSENT, so {"label": null} would otherwise crash on None.strip().
+            label = (data.get("label") or "").strip().upper()
+            confidence = float(data.get("confidence") or 0.0)
             reasoning = str(data.get("reasoning", ""))[:200]  # Cap reasoning length
 
             # Validate label

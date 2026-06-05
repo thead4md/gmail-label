@@ -161,7 +161,10 @@ class ThreadAnalyzer:
             bool(getattr(email, "thread_id", None))
             or bool(cls._HU_REPLY_SUBJECT_RE.match(subj))
         )
-        thread_length = (body.count("\n>") + body.lower().count("re:") + 1) if is_thread else 1
+        # Count "re:" as a reply marker only at a word boundary, so substrings
+        # inside "therefore:", "here:", "more:" don't inflate the thread length.
+        reply_markers = len(re.findall(r"\bre:", body, re.I))
+        thread_length = (body.count("\n>") + reply_markers + 1) if is_thread else 1
 
         # ── Reply needed ────────────────────────────────────────────
         body_lc = body.lower()

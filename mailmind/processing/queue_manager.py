@@ -160,8 +160,10 @@ class QueueManager:
             )
             return "skipped"
 
-        # Compute unique fingerprint for queueing
-        fingerprint = make_action_fingerprint(email.gmail_id, suggested_action, score_result.details if hasattr(score_result, 'details') else {})
+        # Compute unique fingerprint for queueing. Use {} params (same basis as
+        # the auto-execute path above) so the same email+action dedupes to one
+        # fingerprint regardless of which path enqueued it.
+        fingerprint = make_action_fingerprint(email.gmail_id, suggested_action, {})
         LOG.debug("Computed fingerprint %s for action %s on email %s", fingerprint, suggested_action, email.gmail_id)
         # Check existing queue item
         existing = get_queue_item_by_fingerprint(db, fingerprint)
@@ -203,7 +205,7 @@ class QueueManager:
             account=getattr(email, 'account', None),
             prediction_id=getattr(prediction, 'id', None),
             action=suggested_action,
-            params=score_result.details if hasattr(score_result, 'details') else {},
+            params=score_result.to_dict(),
             action_fingerprint=fingerprint,
             status='pending',
             confidence=confidence,
