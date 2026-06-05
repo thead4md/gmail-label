@@ -225,7 +225,13 @@ class Pipeline:
 
         try:
             prediction.id = self.db.save_prediction(prediction)
-            LOG.info(f"Prediction persisted for {email.gmail_id}: score={score.total_score}, label={score.primary_label}")
+            # Log the FINAL persisted label (prediction.primary_label), not the
+            # scorer's intermediate label — they differ whenever ML/LLM/router won.
+            LOG.info(
+                "Prediction persisted for %s: score=%d, label=%s (source=%s)",
+                email.gmail_id, score.total_score,
+                prediction.primary_label, prediction.classifier_source,
+            )
         except Exception as e:
             LOG.error(f"Failed to persist prediction: {e}", exc_info=True)
 
@@ -233,7 +239,10 @@ class Pipeline:
             suggested_action = self.executor.suggest_action(email, score)
             if suggested_action:
                 LOG.debug(f"Suggested action: {suggested_action} (score: {score.total_score})")
-                executed = self.executor.execute_action(email, suggested_action, score)
+                executed = self.executor.execute_action(
+                    email, suggested_action, score,
+                    confidence=getattr(prediction, "confidence", None),
+                )
                 if executed:
                     LOG.info(f"Action '{suggested_action}' executed on {email.gmail_id}")
                 else:

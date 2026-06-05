@@ -96,9 +96,15 @@ class QueueManager:
                 else:
                     # No prediction found, skip execution
                     return 'skipped'
-            # Execute the action via executor
+            # Execute the action via executor. Pass the real classification
+            # confidence (already verified >= AUTO_EXECUTE_THRESHOLD above), NOT
+            # the priority score, so the executor's threshold gate uses the right
+            # metric and low-priority actions (e.g. archiving newsletters) are not
+            # silently deferred.
             try:
-                self.executor.execute_action(email, suggested_action, score_result)
+                self.executor.execute_action(
+                    email, suggested_action, score_result, confidence=confidence
+                )
             except Exception:
                 LOG.exception("Auto-execution failed for %s", email.gmail_id)
             # Log executed row

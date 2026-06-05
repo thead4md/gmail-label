@@ -98,18 +98,26 @@ class ActionExecutor:
         email: Email,
         action: str,
         score: ScoreResult,
+        confidence: Optional[float] = None,
     ) -> bool:
         """Execute an action on an email if safety policy permits.
 
         Args:
             email: Email to action.
             action: Action name (e.g., "label", "star", "archive").
-            score: ScoreResult containing confidence/score.
+            score: ScoreResult (its total_score is the *priority* score, 0-100).
+            confidence: Classification confidence (0-1) for the CONFIDENCE_THRESHOLDS
+                gate and safety policy. When None, falls back to score.total_score/100
+                for back-compat — but callers should pass the real confidence:
+                total_score is a PRIORITY score, not classification confidence, so
+                using it here silently defers low-priority actions (e.g. archiving a
+                newsletter, whose priority is ~0, never met the 0.85 archive gate).
 
         Returns:
             True if action was executed (or dry-run logged), False if blocked.
         """
-        confidence = score.total_score / 100.0
+        if confidence is None:
+            confidence = score.total_score / 100.0
         primary_label = score.primary_label or "NOTIFICATION"
 
         # Check safety policy

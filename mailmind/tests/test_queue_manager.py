@@ -88,9 +88,10 @@ class TestQueueManager(unittest.TestCase):
             self.mock_db, self.test_email, score, self.test_prediction,
         )
         self.assertEqual(status, "executed")
-        # Executor should have been called
+        # Executor should be called with the real classification confidence,
+        # not the priority score, so its threshold gate uses the right metric.
         self.mock_executor.execute_action.assert_called_once_with(
-            self.test_email, "star", score,
+            self.test_email, "star", score, confidence=0.95,
         )
         # Two transactions: action_queue INSERT + update_sender_profile
         self.assertEqual(self.mock_db.transaction.call_count, 2)

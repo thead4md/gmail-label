@@ -149,6 +149,34 @@ class TestExecuteActionBlocked:
         assert ok is False
         _modify_mock(service).assert_not_called()
 
+    def test_explicit_confidence_overrides_priority_for_gate(self, db: Database):
+        """A low-PRIORITY newsletter archives when classification confidence is high.
+
+        Regression: execute_action used score.total_score/100 (priority) as the
+        confidence gate, so a newsletter (priority ~0) was always deferred from
+        archiving even when the classifier was certain. Passing the real
+        confidence must let it through.
+        """
+        executor, service = _make_executor(db, dry_run=False)
+        # Newsletter with priority 0 (so total_score/100 = 0.0 << 0.85 archive gate)
+        # but high classification confidence — should now EXECUTE.
+        ok = executor.execute_action(
+            _email(), "archive", _score(total=0, primary="NEWSLETTER"),
+            confidence=0.95,
+        )
+        assert ok is True
+        _modify_mock(service).assert_called()
+
+    def test_explicit_low_confidence_still_defers(self, db: Database):
+        """Passing a genuinely low confidence still defers (gate honours it)."""
+        executor, service = _make_executor(db, dry_run=False)
+        ok = executor.execute_action(
+            _email(), "archive", _score(total=90, primary="NEWSLETTER"),
+            confidence=0.40,
+        )
+        assert ok is False
+        _modify_mock(service).assert_not_called()
+
     def test_protected_sender_blocks_archive(self, db: Database):
         executor, service = _make_executor(
             db, dry_run=False, protected_senders=["boss@x.com"],
