@@ -117,12 +117,16 @@ class QueueManager:
                 cur.execute(
                     """
                     INSERT INTO action_queue
-                        (email_gmail_id, prediction_id, action, params_json, action_fingerprint,
+                        (email_gmail_id, account, prediction_id, action, params_json, action_fingerprint,
                          status, confidence, priority_score, reason_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         email.gmail_id,
+                        # Stamp the account so per-mailbox analytics (autopilot
+                        # precision, executed counts, digest) include auto-executed
+                        # actions instead of only the account=NULL "all" view.
+                        getattr(email, 'account', None),
                         getattr(prediction, 'id', None),
                         suggested_action,
                         json.dumps({}),

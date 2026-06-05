@@ -1089,7 +1089,7 @@ def render_automate_tab(account: Optional[str] = None) -> None:
     with s3: st.metric("Rejected",   stats.get("rejected",   0))
     with s4: st.metric("Executed",   stats.get("executed",   0))
     with s5: st.metric("Superseded", stats.get("superseded", 0))
-    with s6: st.metric("Failed",     stats.get("failed",     0))
+    with s6: st.metric("Failed",     stats.get("execute_failed", 0))
 
     rn = stats.get("reply_needed_pending", 0)
     if rn:

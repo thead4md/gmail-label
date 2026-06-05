@@ -125,6 +125,20 @@ def _execute_approved_action(
     ).fetchone()
     primary_label = pred_row['primary_label'] if pred_row else None
 
+    # If the user corrected the label (e.g. changed it in NOW/REVIEW before
+    # approving), THAT — not the model's original prediction — is what must be
+    # written to Gmail. handle_correction only logs to user_corrections (so the
+    # prediction row and tier-quality analytics stay honest), so resolve the
+    # most recent non-null corrected_label here and let it win.
+    corr_row = db.execute_sql(
+        "SELECT corrected_label FROM user_corrections "
+        "WHERE email_gmail_id = ? AND corrected_label IS NOT NULL "
+        "ORDER BY created_at DESC LIMIT 1",
+        (gmail_id,),
+    ).fetchone()
+    if corr_row and corr_row['corrected_label']:
+        primary_label = corr_row['corrected_label']
+
     # Executor reads .total_score and .primary_label off ScoreResult; map the
     # queue row's normalised confidence back to a 0-100 integer for that path.
     score_total = int(round(confidence * 100)) if confidence else priority_score
