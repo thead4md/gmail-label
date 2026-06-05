@@ -71,6 +71,31 @@ def test_block_sender_rejects_pending(db):
     assert row["status"] == "rejected"
 
 
+def test_known_sender_drops_off_new_list(db):
+    """Triaging via Know must remove the sender from get_new_senders permanently.
+
+    Regression: the dashboard only masked them in ephemeral session state, so
+    they reappeared on the next dashboard open. Know sets trust_tier without any
+    approve/reject decision, so the list must honour trust_tier, not just counts.
+    """
+    _queue(db, "n6", "greeted@x.com")
+    assert "greeted@x.com" in [s["sender"] for s in get_new_senders(db)]
+    handle_know_sender(db, "greeted@x.com")
+    assert "greeted@x.com" not in [s["sender"] for s in get_new_senders(db)]
+
+
+def test_muted_sender_drops_off_new_list(db):
+    _queue(db, "n7", "noisy@x.com")
+    handle_mute_sender(db, "noisy@x.com")
+    assert "noisy@x.com" not in [s["sender"] for s in get_new_senders(db)]
+
+
+def test_blocked_sender_drops_off_new_list(db):
+    _queue(db, "n8", "evil@x.com")
+    handle_block_sender(db, "evil@x.com")
+    assert "evil@x.com" not in [s["sender"] for s in get_new_senders(db)]
+
+
 def test_set_trust_tier_rejects_invalid(db):
     with pytest.raises(ValueError):
         set_sender_trust_tier(db, "a@b.com", "bogus")

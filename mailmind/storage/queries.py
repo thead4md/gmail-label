@@ -884,11 +884,15 @@ def get_ml_model_metadata(db: Database) -> Optional[Dict[str, Any]]:
 
 
 def get_new_senders(db: Database, account: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return distinct senders with NO approve/reject history yet.
+    """Return distinct senders that have not been triaged yet.
 
     Sources from predictions (not action_queue) so emails that were classified
-    but never queued still surface here. A sender is 'new' if they have no
-    sender_profiles row with recorded decisions.
+    but never queued still surface here. A sender is 'new' only while they have
+    neither recorded approve/reject decisions NOR an explicit trust tier — the
+    Know/Mute/Block buttons all assign one via set_sender_trust_tier(). Honouring
+    trust_tier here means triaging a sender removes them from this list for good,
+    not just for the current dashboard session (which was only masking them via
+    ephemeral st.session_state["dismissed_senders"]).
     """
     account_clause = " AND p.account = ?" if account else ""
     params: tuple = (account,) if account else ()
@@ -902,7 +906,8 @@ def get_new_senders(db: Database, account: Optional[str] = None) -> List[Dict[st
         LEFT JOIN sender_profiles sp ON sp.sender_email = e.sender
         WHERE e.sender IS NOT NULL{account_clause}
           AND (sp.sender_email IS NULL
-               OR (COALESCE(sp.total_approved,0) + COALESCE(sp.total_rejected,0)) = 0)
+               OR ((COALESCE(sp.total_approved,0) + COALESCE(sp.total_rejected,0)) = 0
+                   AND COALESCE(sp.trust_tier,'neutral') = 'neutral'))
         GROUP BY e.sender
         ORDER BY last_seen DESC
         LIMIT 50
