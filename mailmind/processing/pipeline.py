@@ -385,24 +385,25 @@ class Pipeline:
             routing_label=routing_result.label if routing_result is not None else None,
         )
 
-        # Router 'llm' (OpenAI-router) path carries extra metadata — side-effects only;
-        # the label decision above already accounts for it.
+        # Router 'llm' tier path carries extra metadata — side-effects only;
+        # the label decision above already accounts for it. Reads RoutingResult.
+        # llm_result (an LLMResult), NOT a non-existent `llm_prediction` field —
+        # the old code referenced fields no LLMResult has and would AttributeError
+        # on every LLM-routed email the moment the router is wired with a client.
         if (routing_result is not None
                 and routing_result.source == "llm"
-                and routing_result.llm_prediction is not None):
-            llm_pred = routing_result.llm_prediction
-            llm_label = llm_pred.label
-            llm_confidence = llm_pred.confidence
-            llm_rationale = llm_pred.rationale
-            llm_action_hint = llm_pred.action_hint
-            llm_needs_review = llm_pred.needs_review
+                and routing_result.llm_result is not None):
+            llm_pred = routing_result.llm_result
+            llm_label = llm_pred.primary_label
+            llm_confidence = llm_pred.llm_confidence
+            llm_rationale = llm_pred.reasoning
             from datetime import datetime, timezone
             llm_called_at = datetime.now(timezone.utc).isoformat()
-            if llm_pred.label not in final_labels:
-                final_labels.append(llm_pred.label)
+            if llm_pred.primary_label and llm_pred.primary_label not in final_labels:
+                final_labels.append(llm_pred.primary_label)
             LOG.debug(
-                "LLM (router) result: label=%s confidence=%.4f needs_review=%s",
-                llm_label, llm_confidence, llm_needs_review,
+                "LLM (router) result: label=%s confidence=%.4f",
+                llm_label, llm_confidence or 0.0,
             )
 
         # Thread the router's real classification confidence into the prediction.
