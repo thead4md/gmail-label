@@ -48,7 +48,7 @@ _TRANSACTIONAL_SUBJECT_RE = re.compile(
     r"|sz[aá]ll[ií]t[aá]s" # shipping / szállítás
     r"|csomag"              # package
     r"|fizet[eé]s"          # payment / fizetés
-    r"|\[aá]tut[aá]l[aá]s" # transfer / átutalás
+    r"|[aá]tut[aá]l[aá]s" # transfer / átutalás
     r"|tranzakci[oó]"       # transaction / tranzakció
     r"|visszat[eé]r[ií]t[eé]s" # refund / visszatérítés
     r"|j[oó]v[aá][ií]r[aá]s"  # credit / jóváírás
