@@ -126,8 +126,13 @@ class Pipeline:
         #   - rules score is high enough, OR
         #   - the router already handled this email via rules or ML (cheap tiers
         #     succeeded; calling LLM would be wasted spend).
+        # "rule" = a Tier-0 user override (explicit, confidence 1.0) — honour it and
+        # never spend a paid LLM call on it. "rules"/"ml" = a cheaper tier already
+        # classified confidently. Only the low-confidence "fallback" (or no router)
+        # should reach the LLM.
         ml_or_rules_handled = (
-            routing_result is not None and routing_result.source in ("rules", "ml")
+            routing_result is not None
+            and routing_result.source in ("rule", "rules", "ml")
         )
         llm_result = None
         if (
@@ -290,10 +295,25 @@ class Pipeline:
         llm_needs_review = False
         llm_called_at = None
 
+        # Did DeepSeek (the content tier) classify this email confidently above?
+        llm_decided = (
+            llm_result is not None
+            and llm_result.model_available
+            and llm_confidence is not None
+            and llm_confidence >= self.llm_confidence_override
+        )
+
         if routing_result is not None:
-            classifier_source = routing_result.source
-            primary_label = routing_result.label
-            pipeline_used = routing_result.source
+            if routing_result.source == "fallback" and llm_decided:
+                # The router only produced a low-confidence fallback guess, but
+                # DeepSeek classified this email confidently. Keep DeepSeek's label
+                # (already set on primary_label above) instead of discarding it.
+                classifier_source = "llm"
+                pipeline_used = "hybrid"
+            else:
+                classifier_source = routing_result.source
+                primary_label = routing_result.label
+                pipeline_used = routing_result.source
             if routing_result.source == "llm" and routing_result.llm_prediction is not None:
                 llm_pred = routing_result.llm_prediction
                 llm_label = llm_pred.label
@@ -309,7 +329,7 @@ class Pipeline:
                     "LLM (router) result: label=%s confidence=%.4f needs_review=%s",
                     llm_label, llm_confidence, llm_needs_review,
                 )
-            elif routing_result.source == "fallback":
+            elif routing_result.source == "fallback" and not llm_decided:
                 classifier_source = "fallback"
 
         prediction = Prediction(

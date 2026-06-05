@@ -81,6 +81,67 @@ class TestHybridPredictionLogic:
         assert prediction.pipeline_used == "hybrid"
         assert prediction.llm_confidence == 0.95
 
+    def test_fallback_router_does_not_clobber_confident_llm_label(self):
+        """A router 'fallback' must not discard a confident DeepSeek label.
+
+        Regression: previously routing_result.label unconditionally overwrote the
+        LLM label, so Tier 3 never carried weight when rules/ML were unsure.
+        """
+        from mailmind.llm.deepseek import LLMResult
+        from mailmind.ml.classifier_router import RoutingResult
+
+        db = Database(":memory:")
+        pipeline = Pipeline(db, RulesEngine(), PriorityScorer())
+
+        email = _make_email()
+        score = _make_score(primary_label="NOTIFICATION", total_score=40)
+
+        llm_result = LLMResult(
+            primary_label="FINANCE",
+            llm_confidence=0.93,
+            reasoning="Invoice from vendor.",
+            model_available=True,
+        )
+        # Router could only produce a weak fallback guess.
+        fallback = RoutingResult(source="fallback", label="NOTIFICATION", confidence=0.2)
+
+        prediction = pipeline._create_prediction(
+            email, score, ["NOTIFICATION"], [],
+            suggested_action=None,
+            llm_result=llm_result,
+            routing_result=fallback,
+        )
+
+        assert prediction.primary_label == "FINANCE"        # DeepSeek wins, not fallback
+        assert prediction.classifier_source == "llm"
+        assert prediction.pipeline_used == "hybrid"
+        assert prediction.llm_confidence == 0.93
+
+    def test_fallback_router_used_when_llm_not_confident(self):
+        """When DeepSeek is NOT confident, the router fallback label still applies."""
+        from mailmind.llm.deepseek import LLMResult
+        from mailmind.ml.classifier_router import RoutingResult
+
+        db = Database(":memory:")
+        pipeline = Pipeline(db, RulesEngine(), PriorityScorer())
+
+        email = _make_email()
+        score = _make_score(primary_label="NOTIFICATION", total_score=40)
+
+        llm_result = LLMResult(
+            primary_label="FINANCE", llm_confidence=0.50,   # below 0.90 override
+            reasoning="unsure", model_available=True,
+        )
+        fallback = RoutingResult(source="fallback", label="NEWSLETTER", confidence=0.2)
+
+        prediction = pipeline._create_prediction(
+            email, score, ["NOTIFICATION"], [],
+            suggested_action=None, llm_result=llm_result, routing_result=fallback,
+        )
+
+        assert prediction.primary_label == "NEWSLETTER"     # fallback applies
+        assert prediction.classifier_source == "fallback"
+
     def test_hybrid_no_override_low_confidence(self):
         """LLM confidence < 0.90 keeps rules primary_label."""
         from mailmind.llm.deepseek import LLMResult
