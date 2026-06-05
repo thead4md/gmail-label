@@ -56,8 +56,13 @@ class QueueManager:
         score_result: "ScoreResult",
         prediction: "Prediction",
         force: bool = False,
-    ) -> Optional[QueueItem]:
-        """Idempotently enqueue or execute based on prediction. Returns QueueItem or None."""
+    ) -> Optional[str]:
+        """Idempotently enqueue or execute based on a prediction.
+
+        Returns a status string — "executed" | "queued" | "skipped" — or None
+        (no-op, e.g. an already-executed/rejected item without force). It does
+        NOT return a QueueItem; callers branch on the status string.
+        """
         # Use the LLM/ML classification confidence (0-1), NOT total_score/100.
         # total_score is the *priority* score — intentionally 0 for newsletters —
         # and has nothing to do with how certain the classifier is.
@@ -130,12 +135,18 @@ class QueueManager:
                         int(time.time()),
                     ),
                 )
-            # Update sender trust so autopilot actions count toward profile stats.
+            # Record the autopilot action as 'seen' (volume), NOT 'approved'.
+            # 'approved' is reserved for HUMAN approvals — counting the system's
+            # own auto-executions there would inflate approval_rate / the
+            # "trusted" badge with the system's own decisions.
             try:
                 from mailmind.storage.queries import update_sender_profile
-                update_sender_profile(db, email.sender, 'approved')
+                update_sender_profile(db, email.sender, 'seen')
             except Exception:
-                LOG.debug("update_sender_profile failed for auto-executed %s", email.gmail_id)
+                LOG.warning(
+                    "update_sender_profile failed for auto-executed %s",
+                    email.gmail_id, exc_info=True,
+                )
             return "executed"
 
         # Tier 3: Low confidence - skip

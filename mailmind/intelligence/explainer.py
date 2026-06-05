@@ -64,6 +64,11 @@ def build_reason_payload(db: Database, prediction, thread_context: Optional[dict
                     trust_tier = sp.trust_tier
                     similar = get_similar_sender_history(db, sender, limit=5)
         except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Sender context lookup failed for %s; defaulting trust_tier=neutral",
+                getattr(prediction, 'email_gmail_id', '?'), exc_info=True,
+            )
             trust_tier = 'neutral'
             similar = []
             unsubscribe_url = None

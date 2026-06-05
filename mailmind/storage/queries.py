@@ -484,6 +484,11 @@ def get_pending_queue_enriched(
         try:
             reason = json.loads(reason_json_raw) if isinstance(reason_json_raw, str) else reason_json_raw
         except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Corrupt reason_json for queue row %s; review context will be empty",
+                r['id'] if 'id' in r.keys() else '?', exc_info=True,
+            )
             reason = {}
 
         result.append({
@@ -569,6 +574,11 @@ def get_executed_queue_enriched(
         try:
             reason = json.loads(reason_json_raw) if isinstance(reason_json_raw, str) else reason_json_raw
         except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Corrupt reason_json for queue row %s; review context will be empty",
+                r['id'] if 'id' in r.keys() else '?', exc_info=True,
+            )
             reason = {}
         result.append({
             'id': r['id'],

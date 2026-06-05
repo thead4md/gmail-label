@@ -183,10 +183,13 @@ def _load_ml_classifier_cached() -> Optional["MLClassifier"]:
 
 
 # Minimum measured hold-out accuracy before the local ML model is trusted to
-# classify at inference. The current model echoes the rules (4 labels, accuracy
-# never measured); an unvalidated model must not intercept mail that should reach
-# the LLM. Phase 2 retrains + measures accuracy and re-enables the tier.
-ML_MIN_ACCURACY = 0.70
+# classify at inference. An unvalidated model (accuracy=None) is never used.
+# Set to 0.65 for the (now ~9-class) content taxonomy: well above the majority
+# baseline (~0.25), and the per-prediction ml_threshold (0.65) plus the LLM
+# fallback still catch low-confidence ML predictions, so a 0.65-accurate model
+# is a safe, free first tier rather than the rules echo. Rises naturally as
+# corrections accumulate.
+ML_MIN_ACCURACY = 0.65
 
 
 def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
@@ -780,7 +783,16 @@ def _backfill_one_account(
         if i % 100 == 0:
             LOG.info("[%s] Backfill progress: %d/%d", label, i, len(todo))
 
-    LOG.info("[%s] Backfill complete: %d processed.", label, processed)
+    # Surface silent truncation: if the LLM cap was reached, some fallback
+    # emails were classified WITHOUT the LLM and won't carry an llm_label.
+    if llm_client is not None and getattr(pipeline, "_llm_calls_this_run", 0) >= max_llm_calls:
+        LOG.warning(
+            "[%s] LLM call cap (%d) reached during backfill — some fallback "
+            "emails were not LLM-labelled. Re-run with a higher --max-llm-calls "
+            "to cover the rest.", label, max_llm_calls,
+        )
+    LOG.info("[%s] Backfill complete: %d processed (%d LLM calls).",
+             label, processed, getattr(pipeline, "_llm_calls_this_run", 0))
     return processed
 
 
