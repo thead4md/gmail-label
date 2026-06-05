@@ -6009,7 +6009,7 @@ graph TD
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
 | `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, build_model_text(), extract_features(), feature_vector_to_dict() | ✅ Complete |
 | `mailmind/ml/inference.py` | Inference orchestration for MailMind ML classification. | MLResult, predict_label() | ✅ Complete |
-| `mailmind/ml/llm_classifier.py` | Third-tier LLM classifier for MailMind using OpenAI-compatible API. | log_llm_usage(), LLMPrediction, LLMClassifier, OpenAIAdapter | ✅ Complete |
+| `mailmind/ml/llm_classifier.py` | Third-tier LLM classifier for MailMind using OpenAI-compatible API. | drain_pending_usage(), log_llm_usage(), LLMPrediction, LLMClassifier, OpenAIAdapter | ✅ Complete |
 | `mailmind/ml/model.py` | ML model wrapper for MailMind classification. | ModelMetadata, MLClassifier | ✅ Complete |
 | `mailmind/ml/train.py` | Training orchestration for MailMind ML classifier. | train_model_from_db(), train_model_from_data(), get_model_metadata_from_db() | ✅ Complete |
 | `mailmind/processing/__init__.py` | Processing layer for MailMind: rules, scoring, and pipeline orchestration. | — | ✅ Stable |
@@ -6023,7 +6023,7 @@ graph TD
 | `mailmind/storage/database.py` | Database abstraction for MailMind using SQLite. | Database, open_database_from_config_path() | ✅ Complete |
 | `mailmind/storage/migrations.py` | Migration definitions and application helpers for MailMind SQLite schema. | apply_migrations() | ✅ Complete |
 | `mailmind/storage/models.py` | Data models for MailMind storage layer. | now_ts(), Email, Prediction, ActionApplied, Feedback, SenderReputation, SystemState, QueueItem | ✅ Complete |
-| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_executed_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata(), get_new_senders(), set_sender_trust_tier(), set_sender_label_rule(), set_thread_label_rule(), get_sender_label(), get_sender_rules(), resolve_sender_label(), get_thread_label(), get_gmail_labels(), analytics_label_distribution(), analytics_channel_distribution(), analytics_top_senders(), analytics_decision_times(), analytics_channel_weekday(), get_labeled_predictions() | ✅ Complete |
+| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), get_pending_queue(), get_recent_corrections(), get_recent_predictions_with_emails(), approve_queue_item(), reject_queue_item(), log_correction(), update_sender_profile(), get_pending_queue_enriched(), get_executed_queue_enriched(), get_sender_profiles(), toggle_sender_auto_action(), is_sender_auto_action_eligible(), get_queue_stats(), build_digest(), get_ml_model_metadata(), get_new_senders(), set_sender_trust_tier(), set_sender_label_rule(), set_thread_label_rule(), get_sender_label(), get_sender_rules(), resolve_sender_label(), get_thread_label(), get_gmail_labels(), record_llm_usage(), analytics_llm_cost(), analytics_tier_quality(), analytics_autopilot_precision(), analytics_label_distribution(), analytics_channel_distribution(), analytics_top_senders(), analytics_decision_times(), analytics_channel_weekday(), get_labeled_predictions() | ✅ Complete |
 | `mailmind/taxonomy.py` | Canonical email-label taxonomy — the single source of truth for MailMind. | base_score(), is_known() | ✅ Complete |
 | `mailmind/utils/__init__.py` |  | — | ✅ Stable |
 | `mailmind/utils/fingerprint.py` |  | make_action_fingerprint() | ✅ Complete |
@@ -7619,7 +7619,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 674 tests passing.
+Pass 7 complete. 681 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

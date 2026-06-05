@@ -277,6 +277,24 @@ MIGRATIONS: List[Tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_predictions_created_at ON predictions(created_at);
         """,
     ),
+    (
+        "0024_create_llm_usage",
+        """
+        -- Per-call LLM token usage + approximate cost + latency, so spend is
+        -- visible over time (Track B) rather than only in transient logs.
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER,
+            model TEXT,
+            kind TEXT,
+            prompt_tokens INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            cost_usd REAL DEFAULT 0.0,
+            latency_ms INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts);
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [

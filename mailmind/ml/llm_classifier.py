@@ -30,12 +30,24 @@ _PRICE_PER_1M_TOKENS: Dict[str, tuple] = {
 }
 
 
-def log_llm_usage(model: str, response, elapsed_s: float, kind: str = "classify") -> None:
-    """Log token usage, approximate cost, and latency for an LLM call.
+# Process-local buffer of usage records awaiting persistence. The classifier has
+# no DB handle, so it appends here and the pipeline drains+persists per email
+# (drain_pending_usage). Soft-capped so a long non-draining process can't leak.
+_PENDING_USAGE: list = []
+_PENDING_USAGE_CAP = 10_000
 
-    Best-effort: any failure to read usage is swallowed (never break a call over
-    telemetry). Now that an LLM is in the live path, this is the only window into
-    spend and latency.
+
+def drain_pending_usage() -> list:
+    """Return and clear the buffered LLM usage records (dicts)."""
+    global _PENDING_USAGE
+    records, _PENDING_USAGE = _PENDING_USAGE, []
+    return records
+
+
+def log_llm_usage(model: str, response, elapsed_s: float, kind: str = "classify") -> None:
+    """Log token usage + approximate cost + latency, and buffer a record for the
+    DB (drained by the pipeline). Best-effort: any failure is swallowed — never
+    break an LLM call over telemetry.
     """
     try:
         usage = getattr(response, "usage", None)
@@ -47,6 +59,16 @@ def log_llm_usage(model: str, response, elapsed_s: float, kind: str = "classify"
             "LLM %s: model=%s tokens=%d in/%d out cost~$%.5f latency=%.2fs",
             kind, model, pt, ct, cost, elapsed_s,
         )
+        if len(_PENDING_USAGE) < _PENDING_USAGE_CAP:
+            _PENDING_USAGE.append({
+                "ts": int(time.time()),
+                "model": model,
+                "kind": kind,
+                "prompt_tokens": pt,
+                "completion_tokens": ct,
+                "cost_usd": round(cost, 6),
+                "latency_ms": int(elapsed_s * 1000),
+            })
     except Exception:
         LOG.debug("log_llm_usage failed", exc_info=True)
 

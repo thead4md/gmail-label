@@ -292,6 +292,15 @@ class Pipeline:
         except Exception as e:
             LOG.error(f"Failed to persist prediction: {e}", exc_info=True)
 
+        # Persist any LLM token/cost usage buffered during this email's processing
+        # (the classifier has no DB handle; it buffers, the pipeline drains).
+        try:
+            from ..ml.llm_classifier import drain_pending_usage
+            from ..storage.queries import record_llm_usage
+            record_llm_usage(self.db, drain_pending_usage())
+        except Exception:
+            LOG.debug("LLM usage persistence failed", exc_info=True)
+
         if auto_action and self.executor:
             suggested_action = self.executor.suggest_action(email, score)
             if suggested_action:

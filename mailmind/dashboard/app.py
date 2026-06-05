@@ -62,6 +62,9 @@ from mailmind.storage.queries import (
     analytics_decision_times,
     analytics_label_distribution,
     analytics_top_senders,
+    analytics_tier_quality,
+    analytics_autopilot_precision,
+    analytics_llm_cost,
     build_digest,
     get_executed_queue_enriched,
     get_gmail_labels,
@@ -163,6 +166,61 @@ def _c_top_senders(since, account):
 @st.cache_data(ttl=300)
 def _c_decision_times(since, account):
     return analytics_decision_times(get_db(), since, account)
+
+@st.cache_data(ttl=300)
+def _c_tier_quality(since, account):
+    try:
+        rows = analytics_tier_quality(get_db(), since, account)
+        cleaned = []
+        for row in rows or []:
+            total = int(row.get("total") or 0)
+            corrections = int(row.get("corrections") or 0)
+            rate = row.get("correction_rate")
+            rate = float(rate) if isinstance(rate, (int, float)) else (corrections / total if total else 0.0)
+            cleaned.append({
+                "source": str(row.get("source") or "rules"),
+                "total": total,
+                "corrections": corrections,
+                "correction_rate": rate,
+            })
+        return cleaned
+    except Exception:
+        return []
+
+@st.cache_data(ttl=300)
+def _c_autopilot_precision(since, account):
+    try:
+        result = analytics_autopilot_precision(get_db(), since, account) or {}
+        precision = result.get("precision")
+        return {
+            "auto_executed": int(result.get("auto_executed") or 0),
+            "later_corrected": int(result.get("later_corrected") or 0),
+            "precision": float(precision) if isinstance(precision, (int, float)) else None,
+        }
+    except Exception:
+        return {"auto_executed": 0, "later_corrected": 0, "precision": None}
+
+@st.cache_data(ttl=300)
+def _c_llm_cost(since):
+    try:
+        result = analytics_llm_cost(get_db(), since) or {}
+        by_kind = []
+        for row in result.get("by_kind") or []:
+            by_kind.append({
+                "model": str(row.get("model") or ""),
+                "kind": str(row.get("kind") or ""),
+                "calls": int(row.get("calls") or 0),
+                "cost_usd": float(row.get("cost_usd") or 0.0),
+            })
+        return {
+            "calls": int(result.get("calls") or 0),
+            "cost_usd": float(result.get("cost_usd") or 0.0),
+            "tokens": int(result.get("tokens") or 0),
+            "avg_latency_ms": int(result.get("avg_latency_ms") or 0),
+            "by_kind": by_kind,
+        }
+    except Exception:
+        return {"calls": 0, "cost_usd": 0.0, "tokens": 0, "avg_latency_ms": 0, "by_kind": []}
 
 @st.cache_data(ttl=3600)
 def _c_daily_brief(account):
@@ -1152,6 +1210,53 @@ def render_insights_tab(account: Optional[str] = None) -> None:
     _chart_or_info(
         charts.decision_time_chart(_c_decision_times(since, account)),
         "No reviewed items yet.")
+
+    # ── Classification quality: per-tier correction rate (lower = better) ──
+    _section("🎯", "Classification quality by tier")
+    tiers = _c_tier_quality(since, account)
+    autopilot = _c_autopilot_precision(since, account)
+    if tiers:
+        import pandas as _pd
+        df = _pd.DataFrame(tiers)
+        df["correction_rate"] = (df["correction_rate"] * 100).round(1).astype(str) + "%"
+        df = df.rename(columns={
+            "source": "Tier", "total": "Predictions",
+            "corrections": "Corrected", "correction_rate": "Correction rate",
+        })
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.caption(
+            "Correction rate = share of each tier's predictions you later changed. "
+            "Lower is better; it should fall as the model learns from your corrections."
+        )
+        if autopilot.get("precision") is not None:
+            st.metric(
+                "Autopilot precision",
+                f"{autopilot['precision'] * 100:.0f}%",
+                help=(f"{autopilot['auto_executed']} auto-executed, "
+                      f"{autopilot['later_corrected']} later corrected."),
+            )
+    else:
+        st.info("No predictions in this window yet.")
+
+    # ── LLM spend ──────────────────────────────────────────────────────
+    _section("💰", "LLM spend")
+    cost = _c_llm_cost(since)
+    if cost.get("calls"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Cost (window)", f"${cost['cost_usd']:.4f}")
+        c2.metric("Calls", f"{cost['calls']:,}")
+        c3.metric("Avg latency", f"{cost['avg_latency_ms']} ms")
+        if cost.get("by_kind"):
+            import pandas as _pd
+            st.dataframe(
+                _pd.DataFrame(cost["by_kind"]).rename(columns={
+                    "model": "Model", "kind": "Kind",
+                    "calls": "Calls", "cost_usd": "Cost ($)"}),
+                use_container_width=True, hide_index=True,
+            )
+        st.caption("Cost is approximate (per-1M-token price map); verify against your provider bill.")
+    else:
+        st.info("No LLM calls recorded in this window yet.")
 
 
 # ---------------------------------------------------------------------------

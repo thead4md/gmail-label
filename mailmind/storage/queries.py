@@ -1070,6 +1070,126 @@ def get_gmail_labels(db: Database, account: Optional[str] = None) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
+def record_llm_usage(db: Database, records: List[Dict[str, Any]]) -> None:
+    """Persist buffered LLM usage records (from llm_classifier.drain_pending_usage)."""
+    if not records:
+        return
+    with db.transaction() as cur:
+        cur.executemany(
+            "INSERT INTO llm_usage "
+            "(ts, model, kind, prompt_tokens, completion_tokens, cost_usd, latency_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (r.get("ts"), r.get("model"), r.get("kind"),
+                 r.get("prompt_tokens", 0), r.get("completion_tokens", 0),
+                 r.get("cost_usd", 0.0), r.get("latency_ms", 0))
+                for r in records
+            ],
+        )
+
+
+def analytics_llm_cost(db: Database, since_ts: int = 0) -> Dict[str, Any]:
+    """Aggregate LLM spend since since_ts: totals + a per-model/kind breakdown.
+
+    Global (single-user); the llm_usage table has no account dimension.
+    """
+    total = db.execute_sql(
+        "SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost, "
+        "COALESCE(SUM(prompt_tokens+completion_tokens),0) AS tokens, "
+        "COALESCE(AVG(latency_ms),0) AS avg_latency_ms "
+        "FROM llm_usage WHERE ts >= ?",
+        (since_ts,),
+    ).fetchone()
+    by_kind = db.execute_sql(
+        "SELECT model, kind, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost "
+        "FROM llm_usage WHERE ts >= ? GROUP BY model, kind ORDER BY cost DESC",
+        (since_ts,),
+    ).fetchall()
+    return {
+        "calls": total["calls"] or 0,
+        "cost_usd": round(total["cost"] or 0.0, 6),
+        "tokens": total["tokens"] or 0,
+        "avg_latency_ms": int(total["avg_latency_ms"] or 0),
+        "by_kind": [
+            {"model": r["model"], "kind": r["kind"],
+             "calls": r["calls"], "cost_usd": round(r["cost"] or 0.0, 6)}
+            for r in by_kind
+        ],
+    }
+
+
+def analytics_tier_quality(db: Database, since_ts: int = 0,
+                           account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Per-classifier-source correction rate.
+
+    For predictions from each tier (rules/ml/llm/fallback/rule), how many did the
+    user later correct (corrected_label != the predicted primary_label)? A proxy
+    for how often each tier is wrong — the live signal that classification is
+    (or isn't) improving. Counts each prediction once (EXISTS avoids join fan-out).
+    """
+    acc = " AND p.account = ?" if account else ""
+    params = (since_ts, account) if account else (since_ts,)
+    rows = db.execute_sql(
+        f"""
+        SELECT source, COUNT(*) AS total, SUM(was_corrected) AS corrected
+        FROM (
+            SELECT COALESCE(p.classifier_source, 'rules') AS source,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM user_corrections uc
+                       WHERE uc.email_gmail_id = p.email_gmail_id
+                         AND uc.corrected_label IS NOT NULL
+                         AND uc.corrected_label != p.primary_label
+                   ) THEN 1 ELSE 0 END AS was_corrected
+            FROM predictions p
+            WHERE p.created_at >= ?{acc}
+        ) GROUP BY source ORDER BY total DESC
+        """,
+        params,
+    ).fetchall()
+    out = []
+    for r in rows:
+        total = r["total"] or 0
+        corrected = r["corrected"] or 0
+        out.append({
+            "source": r["source"],
+            "total": total,
+            "corrections": corrected,
+            "correction_rate": round(corrected / total, 3) if total else 0.0,
+        })
+    return out
+
+
+def analytics_autopilot_precision(db: Database, since_ts: int = 0,
+                                  account: Optional[str] = None) -> Dict[str, Any]:
+    """Of auto-executed actions, how many were later corrected by the user.
+
+    precision = 1 - corrected/executed. None when there are no auto-executions.
+    """
+    acc = " AND aq.account = ?" if account else ""
+    params = (since_ts, account) if account else (since_ts,)
+    row = db.execute_sql(
+        f"""
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN EXISTS (
+                   SELECT 1 FROM user_corrections uc
+                   WHERE uc.email_gmail_id = aq.email_gmail_id
+               ) THEN 1 ELSE 0 END) AS later_corrected
+        FROM action_queue aq
+        WHERE aq.status = 'executed'
+          AND aq.reason_json LIKE '%auto-executed%'
+          AND aq.created_at >= ?{acc}
+        """,
+        params,
+    ).fetchone()
+    total = row["total"] or 0
+    corrected = row["later_corrected"] or 0
+    return {
+        "auto_executed": total,
+        "later_corrected": corrected,
+        "precision": round(1 - corrected / total, 3) if total else None,
+    }
+
+
 def analytics_label_distribution(db: Database, since_ts: int,
                                   account: Optional[str] = None) -> List[Dict[str, Any]]:
     acc = " AND account = ?" if account else ""
