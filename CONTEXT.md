@@ -3475,38 +3475,6 @@ graph TD
 | `mailmind/.venv/lib/python3.13/site-packages/proto/utils.py` |  | has_upb(), cached_property() | ✅ Complete |
 | `mailmind/.venv/lib/python3.13/site-packages/proto/version.py` |  | — | ✅ Complete |
 | `mailmind/.venv/lib/python3.13/site-packages/py.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/__init__.py` | PyArrow is the python implementation of Apache Arrow. | show_versions(), show_info(), get_include(), get_libraries(), create_library_symlinks(), get_library_dirs() | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/_compute_docstrings.py` | Custom documentation additions for compute functions. | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/_generated_version.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/acero.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/benchmark.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/cffi.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/compute.py` |  | cast(), index(), take(), fill_null(), top_k_unstable(), bottom_k_unstable(), random(), field(), scalar() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/csv.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/cuda.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/dataset.py` | Dataset is currently unstable. APIs subject to change without notice. | partitioning(), parquet_dataset(), dataset(), write_dataset() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/feather.py` |  | FeatherDataset, check_chunked_overflow(), write_feather(), read_feather(), read_table() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/flight.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/fs.py` | FileSystem abstraction to interact with various local and remote filesystems. | copy_files(), FSSpecHandler | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/interchange/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/interchange/buffer.py` |  | DlpackDeviceType, _PyArrowBuffer | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/interchange/column.py` |  | DtypeKind, ColumnNullType, ColumnBuffers, CategoricalDescription, Endianness, NoBufferPresent, _PyArrowColumn | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/interchange/dataframe.py` |  | _PyArrowDataFrame | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/interchange/from_dataframe.py` |  | from_dataframe(), protocol_df_chunk_to_pyarrow(), column_to_array(), bool_column_to_array(), categorical_column_to_dictionary(), parse_datetime_format_str(), map_date_type(), buffers_to_array(), validity_buffer_from_mask(), validity_buffer_nan_sentinel() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/ipc.py` |  | RecordBatchStreamReader, RecordBatchStreamWriter, RecordBatchFileReader, RecordBatchFileWriter, new_stream(), open_stream(), new_file(), open_file(), serialize_pandas(), deserialize_pandas() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/json.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/jvm.py` | Functions to interact with Arrow memory allocated by Arrow Java. | _JvmBufferNanny, jvm_buffer(), field(), schema(), array(), record_batch() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/orc.py` |  | ORCFile, ORCWriter, read_table(), write_table() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/pandas_compat.py` |  | get_logical_type_map(), get_logical_type(), get_numpy_logical_type_map(), get_logical_type_from_numpy(), get_extension_dtype_info(), get_column_metadata(), construct_metadata(), dataframe_to_types(), dataframe_to_arrays(), get_datetimetz_type(), make_datetimetz(), table_to_dataframe(), get_pandas_logical_type_map(), make_tz_aware() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/parquet/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/parquet/core.py` |  | filters_to_expression(), ParquetFile, ParquetWriter, ParquetDataset, read_table(), read_pandas(), write_table(), write_to_dataset(), write_metadata(), read_metadata(), read_schema() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/parquet/encryption.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/substrait.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/types.py` |  | TypesEnum, is_null(), is_boolean(), is_integer(), is_signed_integer(), is_unsigned_integer(), is_int8(), is_int16(), is_int32(), is_int64(), is_uint8(), is_uint16(), is_uint32(), is_uint64(), is_floating(), is_float16(), is_float32(), is_float64(), is_list(), is_large_list(), is_fixed_size_list(), is_list_view(), is_large_list_view(), is_struct(), is_union(), is_nested(), is_run_end_encoded(), is_temporal(), is_timestamp(), is_duration(), is_time(), is_time32(), is_time64(), is_binary(), is_large_binary(), is_unicode(), is_string(), is_large_unicode(), is_large_string(), is_fixed_size_binary(), is_binary_view(), is_string_view(), is_date(), is_date32(), is_date64(), is_map(), is_decimal(), is_decimal32(), is_decimal64(), is_decimal128(), is_decimal256(), is_dictionary(), is_interval(), is_primitive() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/util.py` |  | doc(), product(), get_contiguous_span(), find_free_port(), guid(), download_tzdata_on_windows() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/vendored/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/vendored/docscrape.py` | Extract reference documentation from the NumPy source tree. | strip_blank_lines(), Reader, ParseError, NumpyDocString, dedent_lines(), FunctionDoc, ObjDoc, ClassDoc, get_doc_object() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pyarrow/vendored/version.py` |  | InfinityType, NegativeInfinityType, parse(), InvalidVersion, _BaseVersion, LegacyVersion, Version | ✅ Complete |
 | `mailmind/.venv/lib/python3.13/site-packages/pyasn1/__init__.py` |  | — | ✅ Stable |
 | `mailmind/.venv/lib/python3.13/site-packages/pyasn1/codec/__init__.py` |  | — | ✅ Stable |
 | `mailmind/.venv/lib/python3.13/site-packages/pyasn1/codec/ber/__init__.py` |  | — | ✅ Stable |
@@ -3785,39 +3753,6 @@ graph TD
 | `mailmind/.venv/lib/python3.13/site-packages/pydantic/warnings.py` | Pydantic-specific warnings. | PydanticDeprecationWarning, PydanticDeprecatedSince20, PydanticDeprecatedSince26, PydanticDeprecatedSince29, PydanticDeprecatedSince210, PydanticDeprecatedSince211, PydanticDeprecatedSince212, GenericBeforeBaseModelWarning, PydanticExperimentalWarning, CoreSchemaGenerationWarning, ArbitraryTypeWarning, UnsupportedFieldAttributeWarning, TypedDictExtraConfigWarning | ✅ Complete |
 | `mailmind/.venv/lib/python3.13/site-packages/pydantic_core/__init__.py` |  | ErrorDetails, InitErrorDetails, ErrorTypeInfo, MultiHostHost | ✅ Stable |
 | `mailmind/.venv/lib/python3.13/site-packages/pydantic_core/core_schema.py` | This module contains definitions to build schemas which `pydantic_core` can | CoreConfig, SerializationInfo, FieldSerializationInfo, ValidationInfo, SimpleSerSchema, simple_ser_schema(), PlainSerializerFunctionSerSchema, plain_serializer_function_ser_schema(), SerializerFunctionWrapHandler, WrapSerializerFunctionSerSchema, wrap_serializer_function_ser_schema(), FormatSerSchema, format_ser_schema(), ToStringSerSchema, to_string_ser_schema(), ModelSerSchema, model_ser_schema(), InvalidSchema, invalid_schema(), ComputedField, computed_field(), AnySchema, any_schema(), NoneSchema, none_schema(), BoolSchema, bool_schema(), IntSchema, int_schema(), FloatSchema, float_schema(), DecimalSchema, decimal_schema(), ComplexSchema, complex_schema(), StringSchema, str_schema(), BytesSchema, bytes_schema(), DateSchema, date_schema(), TimeSchema, time_schema(), DatetimeSchema, datetime_schema(), TimedeltaSchema, timedelta_schema(), LiteralSchema, literal_schema(), EnumSchema, enum_schema(), MissingSentinelSchema, missing_sentinel_schema(), IsInstanceSchema, is_instance_schema(), IsSubclassSchema, is_subclass_schema(), CallableSchema, callable_schema(), UuidSchema, uuid_schema(), IncExSeqSerSchema, filter_seq_schema(), ListSchema, list_schema(), tuple_positional_schema(), tuple_variable_schema(), TupleSchema, tuple_schema(), SetSchema, set_schema(), FrozenSetSchema, frozenset_schema(), GeneratorSchema, generator_schema(), IncExDictSerSchema, filter_dict_schema(), DictSchema, dict_schema(), NoInfoValidatorFunctionSchema, WithInfoValidatorFunctionSchema, _ValidatorFunctionSchema, BeforeValidatorFunctionSchema, no_info_before_validator_function(), with_info_before_validator_function(), AfterValidatorFunctionSchema, no_info_after_validator_function(), with_info_after_validator_function(), ValidatorFunctionWrapHandler, NoInfoWrapValidatorFunctionSchema, WithInfoWrapValidatorFunctionSchema, WrapValidatorFunctionSchema, no_info_wrap_validator_function(), with_info_wrap_validator_function(), PlainValidatorFunctionSchema, no_info_plain_validator_function(), with_info_plain_validator_function(), WithDefaultSchema, with_default_schema(), NullableSchema, nullable_schema(), UnionSchema, union_schema(), TaggedUnionSchema, tagged_union_schema(), ChainSchema, chain_schema(), LaxOrStrictSchema, lax_or_strict_schema(), JsonOrPythonSchema, json_or_python_schema(), TypedDictField, typed_dict_field(), TypedDictSchema, typed_dict_schema(), ModelField, model_field(), ModelFieldsSchema, model_fields_schema(), ModelSchema, model_schema(), DataclassField, dataclass_field(), DataclassArgsSchema, dataclass_args_schema(), DataclassSchema, dataclass_schema(), ArgumentsParameter, arguments_parameter(), ArgumentsSchema, arguments_schema(), ArgumentsV3Parameter, arguments_v3_parameter(), ArgumentsV3Schema, arguments_v3_schema(), CallSchema, call_schema(), CustomErrorSchema, custom_error_schema(), JsonSchema, json_schema(), UrlSchema, url_schema(), MultiHostUrlSchema, multi_host_url_schema(), DefinitionsSchema, definitions_schema(), DefinitionReferenceSchema, definition_reference_schema(), iter_union_choices(), field_before_validator_function(), general_before_validator_function(), field_after_validator_function(), general_after_validator_function(), field_wrap_validator_function(), general_wrap_validator_function(), field_plain_validator_function(), general_plain_validator_function() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/_version.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/base_map_provider.py` |  | BaseMapProvider | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/deck.py` |  | has_jupyter_extra(), Deck | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/json_tools.py` | Support serializing objects into JSON | to_camel_case(), lower_first_letter(), camel_and_lower(), lower_camel_case_keys(), default_serialize(), serialize(), JSONMixin | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/layer.py` |  | Layer | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/light_settings.py` |  | LightSettings | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/map_styles.py` |  | get_from_map_identifier(), get_default_map_identifier() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/view.py` |  | View | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/view_state.py` |  | ViewState | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/widget.py` |  | Widget | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/data_utils/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/data_utils/binary_transfer.py` |  | array_to_binary(), serialize_columns() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/data_utils/color_scales.py` |  | get_random_rgb(), assign_random_colors() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/data_utils/type_checking.py` |  | is_pandas_df(), has_geo_interface(), records_from_geo_interface() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/data_utils/viewport_helpers.py` | Functions that make it easier to provide a default centering | euclidean(), geometric_mean(), get_bbox(), k_nearest_neighbors(), get_n_pct(), bbox_to_zoom_level(), compute_view() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/exceptions/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/exceptions/exceptions.py` |  | PydeckException, BinaryTransportException | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/frontend_semver.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/io/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/io/html.py` |  | in_jupyter(), convert_js_bool(), cdn_picker(), render_json_to_html(), display_html(), iframe_with_srcdoc(), render_for_colab(), deck_to_html() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/nbextension/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/settings.py` |  | Settings | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/types/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/types/base.py` |  | PydeckType | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/types/function.py` |  | Function | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/types/image.py` |  | get_encoding(), Image | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/types/string.py` |  | String | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/widget/__init__.py` |  | — | ✅ Stable |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/widget/_frontend.py` |  | — | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/widget/debounce.py` |  | Timer, debounce() | ✅ Complete |
-| `mailmind/.venv/lib/python3.13/site-packages/pydeck/widget/widget.py` |  | store_selection(), DeckGLWidget | ✅ Complete |
 | `mailmind/.venv/lib/python3.13/site-packages/pygments/__init__.py` | Pygments | lex(), format(), highlight() | ✅ Stable |
 | `mailmind/.venv/lib/python3.13/site-packages/pygments/__main__.py` | pygments.__main__ | — | ✅ Complete |
 | `mailmind/.venv/lib/python3.13/site-packages/pygments/cmdline.py` | pygments.cmdline | main_inner(), HelpFormatter, main() | ✅ Complete |
@@ -6100,8 +6035,6 @@ class MailMindConfig:
 <!-- AUTO:START:env_vars -->
 | Variable | Default | Required | Purpose |
 |---|---|---|---|
-| `ARROW_PRE_0_15_IPC_FORMAT` | `0` | No | — |
-| `ARROW_PRE_1_0_METADATA_VERSION` | `0` | No | — |
 | `COLORTERM` | `""` (empty) | No | — |
 | `DASHBOARD_PASSWORD` | `""` (empty) | No | — |
 | `DASHBOARD_SECRET` | `""` (empty) | No | — |
@@ -6143,7 +6076,6 @@ class MailMindConfig:
 | `PIP_CONSTRAINT` | `""` (empty) | No | — |
 | `PIP_EXISTS_ACTION` | `""` (empty) | No | — |
 | `PIP_NO_COLOR` | `no` | No | — |
-| `PKG_CONFIG` | `pkg-config` | No | — |
 | `PROCESSOR_ARCHITECTURE` | `""` (empty) | No | — |
 | `PROCESSOR_ARCHITEW6432` | `""` (empty) | No | — |
 | `PYTEST_ADDOPTS` | `""` (empty) | No | — |
@@ -7021,14 +6953,6 @@ class MailMindConfig:
 - `[mailmind/.venv/lib/python3.13/site-packages/pluggy/_hooks.py:421]` # TODO: Document, or make private.
 - `[mailmind/.venv/lib/python3.13/site-packages/proto/_package_info.py:40]` # TODO: Revert to empty string as a package value after protobuf fix.
 - `[mailmind/.venv/lib/python3.13/site-packages/proto/enums.py:58]` # TODO: Use _ignore_ attribute to ignore _pb_options (Issue #16911)
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/__init__.py:293]` # TODO: Deprecate these somehow in the pyarrow namespace
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/__init__.py:424]` # TODO(wesm): Is this necessary, or does setuptools within a conda
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/cffi.py:79]` # TODO use out-of-line mode for faster import and avoid C parsing
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/feather.py:105]` # TODO(wesm): Not sure when else this might be reached
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/fs.py:402]` # TODO can we read/pass metadata (e.g. Content-Type) in the methods below?
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/jvm.py:244]` # TODO: The following JVM types are not implemented:
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/parquet/core.py:743]` # TODO: This will not handle prohibited characters in nested field names
-- `[mailmind/.venv/lib/python3.13/site-packages/pyarrow/util.py:248]` # TODO(GH-48593): Remove when libc++ supports std::chrono timezone
 - `[mailmind/.venv/lib/python3.13/site-packages/pyasn1/codec/ber/decoder.py:56]` # TODO: Seems more like an NotImplementedError?
 - `[mailmind/.venv/lib/python3.13/site-packages/pyasn1/codec/ber/decoder.py:66]` # TODO: Seems more like an NotImplementedError?
 - `[mailmind/.venv/lib/python3.13/site-packages/pyasn1/codec/ber/decoder.py:1372]` # TODO: Seems not to be tested
@@ -7110,9 +7034,6 @@ class MailMindConfig:
 - `[mailmind/.venv/lib/python3.13/site-packages/pydantic/type_adapter.py:291]` # TODO: we don't go through the rebuild logic here directly because we don't want
 - `[mailmind/.venv/lib/python3.13/site-packages/pydantic/v1/networks.py:535]` # TODO: Needed to generic "Parts" for "Replica Set", "Sharded Cluster", and other mongodb deployment modes
 - `[mailmind/.venv/lib/python3.13/site-packages/pydantic/v1/utils.py:270]` # TODO: replace annotation with actual expected types once #1055 solved
-- `[mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/deck.py:181]` # TODO: Jupyter-specific features not currently supported in pydeck v0.9.
-- `[mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/deck.py:197]` # TODO: Jupyter-specific features not currently supported in pydeck v0.9.
-- `[mailmind/.venv/lib/python3.13/site-packages/pydeck/bindings/layer.py:89]` # TODO given that data here is usually a list of records,
 - `[mailmind/.venv/lib/python3.13/site-packages/pygments/formatters/img.py:548]` # TODO: make sure tab expansion happens earlier in the chain.  It
 - `[mailmind/.venv/lib/python3.13/site-packages/pygments/formatters/latex.py:334]` # TODO: add support for background colors
 - `[mailmind/.venv/lib/python3.13/site-packages/pygments/formatters/terminal256.py:17]` # TODO:
