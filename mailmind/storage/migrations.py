@@ -295,6 +295,10 @@ MIGRATIONS: List[Tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts);
         """,
     ),
+    (
+        "0025_add_tier_source_to_sender_profiles",
+        """-- Handled in apply_migrations: adds tier_source column to sender_profiles.""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -337,6 +341,11 @@ UNSUBSCRIBE_URL_COLUMN: List[Tuple[str, str]] = [("unsubscribe_url", "TEXT")]
 # fires when the regex matches the subject — lets one listserv sender map to several
 # labels by content. See queries.resolve_sender_label.
 SENDER_RULE_PATTERN_COLUMN: List[Tuple[str, str]] = [("match_pattern", "TEXT")]
+
+# Marks how a sender's trust_tier was set: 'auto' (recomputed from approval/
+# rejection stats) or 'manual' (forced via Know/Mute). A manual tier must not be
+# silently overwritten by the next auto-recompute. Existing rows default to 'auto'.
+SENDER_TIER_SOURCE_COLUMN: List[Tuple[str, str]] = [("tier_source", "TEXT DEFAULT 'auto'")]
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -448,6 +457,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             _ensure_columns(conn, "emails", UNSUBSCRIBE_URL_COLUMN)
         elif name == "0022_add_match_pattern_to_sender_rules":
             _ensure_columns(conn, "sender_label_rules", SENDER_RULE_PATTERN_COLUMN)
+        elif name == "0025_add_tier_source_to_sender_profiles":
+            _ensure_columns(conn, "sender_profiles", SENDER_TIER_SOURCE_COLUMN)
         else:
             cur.executescript(sql)
         cur.execute(

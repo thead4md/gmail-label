@@ -382,7 +382,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
         with col_sel:
             chosen_label = st.selectbox(
                 "Label", options=gmail_labels, index=default_idx,
-                key=f"now_label_{idx}_{item_id}", label_visibility="collapsed",
+                key=f"now_label_{item_id}", label_visibility="collapsed",
             )
         with col_approve:
             st.markdown('<div class="mm-btn-approve">', unsafe_allow_html=True)
@@ -451,11 +451,17 @@ def _render_reason_panel(reason: Dict[str, Any], item: Dict[str, Any]) -> None:
         )
         rows.append(("Rules matched", rules_html))
 
-    ml_conf = reason.get("ml_confidence") or item.get("ml_confidence")
+    # Use explicit None checks, not `or`: a legitimate confidence of exactly 0.0
+    # is falsy and would otherwise be replaced by the item-level fallback value.
+    ml_conf = reason.get("ml_confidence")
+    if ml_conf is None:
+        ml_conf = item.get("ml_confidence")
     if ml_conf is not None:
         rows.append(("ML confidence", confidence_bar_html(float(ml_conf))))
 
-    llm_conf = reason.get("llm_confidence") or item.get("llm_confidence")
+    llm_conf = reason.get("llm_confidence")
+    if llm_conf is None:
+        llm_conf = item.get("llm_confidence")
     if llm_conf is not None:
         rows.append(("LLM confidence", confidence_bar_html(float(llm_conf))))
 
@@ -1040,10 +1046,12 @@ def render_automate_tab(account: Optional[str] = None) -> None:
         FROM emails e
         WHERE e.unsubscribe_url IS NOT NULL
           AND e.sender IS NOT NULL
+          AND (e.account = ? OR ? IS NULL)
         GROUP BY e.sender, e.unsubscribe_url
         ORDER BY email_count DESC
         LIMIT 20
-        """
+        """,
+        (account, account),
     ).fetchall()
 
     if newsletters_with_unsub:

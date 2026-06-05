@@ -107,7 +107,9 @@ def test_tier_quality_dedupes_multiple_corrections(db):
 # --- Autopilot precision --------------------------------------------------
 
 def test_autopilot_precision(db):
-    # Two auto-executed actions; one later corrected -> precision 0.5
+    # Two auto-executed actions; one later corrected to a DIFFERENT label -> 0.5
+    _email(db, "a1"); _prediction(db, "a1", "ml", "X")
+    _email(db, "a2"); _prediction(db, "a2", "ml", "Z")
     with db.transaction() as cur:
         cur.execute(
             "INSERT INTO action_queue (email_gmail_id, action, status, reason_json, created_at) "
@@ -119,11 +121,27 @@ def test_autopilot_precision(db):
             "VALUES (?, ?, 'executed', ?, ?)",
             ("a2", "archive", json.dumps({"reason": "auto-executed"}), 1000),
         )
-    _correction(db, "a1", "X", "Y")
+    _correction(db, "a1", "X", "Y")   # Y != predicted X -> a real disagreement
     res = analytics_autopilot_precision(db, 0)
     assert res["auto_executed"] == 2
     assert res["later_corrected"] == 1
     assert res["precision"] == 0.5
+
+
+def test_autopilot_precision_ignores_confirming_correction(db):
+    # A correction whose label MATCHES the prediction is not a miss -> precision 1.0
+    _email(db, "a1"); _prediction(db, "a1", "ml", "WORK")
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO action_queue (email_gmail_id, action, status, reason_json, created_at) "
+            "VALUES (?, ?, 'executed', ?, ?)",
+            ("a1", "archive", json.dumps({"reason": "auto-executed"}), 1000),
+        )
+    _correction(db, "a1", "WORK", "WORK")   # confirms the prediction
+    res = analytics_autopilot_precision(db, 0)
+    assert res["auto_executed"] == 1
+    assert res["later_corrected"] == 0
+    assert res["precision"] == 1.0
 
 
 def test_autopilot_precision_none_when_no_autoexec(db):

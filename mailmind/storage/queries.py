@@ -399,10 +399,14 @@ def update_sender_profile(
 
     # Recompute trust_tier outside the write transaction (read after commit)
     row = db.execute_sql(
-        "SELECT total_seen, total_approved, total_rejected FROM sender_profiles WHERE sender_email = ?",
+        "SELECT total_seen, total_approved, total_rejected, tier_source "
+        "FROM sender_profiles WHERE sender_email = ?",
         (sender_email,),
     ).fetchone()
-    if row:
+    # A manually-set tier (Know/Mute) is sticky — never clobber it with the
+    # auto-recompute, otherwise an explicit user trust decision silently reverts
+    # to 'neutral' on the very next approve/reject (total_seen still < 5).
+    if row and (row["tier_source"] or "auto") != "manual":
         total_seen = row["total_seen"] or 0
         total_approved = row["total_approved"] or 0
         total_rejected = row["total_rejected"] or 0
@@ -924,12 +928,15 @@ def set_sender_trust_tier(db: Database, sender_email: str, tier: str) -> None:
     with db.transaction() as cur:
         cur.execute(
             "INSERT OR IGNORE INTO sender_profiles "
-            "(sender_email, total_seen, total_approved, total_rejected, last_action_ts, trust_tier) "
-            "VALUES (?, 0, 0, 0, ?, ?)",
+            "(sender_email, total_seen, total_approved, total_rejected, last_action_ts, trust_tier, tier_source) "
+            "VALUES (?, 0, 0, 0, ?, ?, 'manual')",
             (sender_email, now, tier),
         )
+        # tier_source='manual' so the next approve/reject recompute in
+        # update_sender_profile won't silently revert this explicit user choice.
         cur.execute(
-            "UPDATE sender_profiles SET trust_tier = ?, last_action_ts = ? WHERE sender_email = ?",
+            "UPDATE sender_profiles SET trust_tier = ?, tier_source = 'manual', last_action_ts = ? "
+            "WHERE sender_email = ?",
             (tier, now, sender_email),
         )
 
@@ -1184,7 +1191,10 @@ def analytics_autopilot_precision(db: Database, since_ts: int = 0,
         SELECT COUNT(*) AS total,
                SUM(CASE WHEN EXISTS (
                    SELECT 1 FROM user_corrections uc
+                   JOIN predictions p ON p.email_gmail_id = aq.email_gmail_id
                    WHERE uc.email_gmail_id = aq.email_gmail_id
+                     AND uc.corrected_label IS NOT NULL
+                     AND uc.corrected_label != p.primary_label
                ) THEN 1 ELSE 0 END) AS later_corrected
         FROM action_queue aq
         WHERE aq.status = 'executed'

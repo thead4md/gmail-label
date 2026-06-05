@@ -9,11 +9,18 @@ Covers:
 """
 from __future__ import annotations
 
+import base64
 from unittest.mock import MagicMock
 
 import pytest
 
-from mailmind.intelligence.feedback import handle_approve, handle_correction
+from mailmind.ingestion.parser import parse_message
+from mailmind.intelligence.feedback import (
+    handle_approve,
+    handle_correction,
+    handle_know_sender,
+    handle_mute_sender,
+)
 from mailmind.processing.queue_manager import QueueManager
 from mailmind.processing.scorer import ScoreResult
 from mailmind.storage.database import Database
@@ -24,6 +31,27 @@ from mailmind.storage.queries import (
     update_sender_profile,
     toggle_sender_auto_action,
 )
+
+
+def _trust_tier(db: Database, sender: str):
+    row = db.execute_sql(
+        "SELECT trust_tier FROM sender_profiles WHERE sender_email = ?", (sender,)
+    ).fetchone()
+    return row["trust_tier"] if row else None
+
+
+def _msg(headers, *, internal_date=None, parts=None, body=None, mime="text/plain"):
+    """Build a minimal Gmail message resource for parse_message."""
+    payload = {"mimeType": "multipart/mixed" if parts else mime,
+               "headers": [{"name": k, "value": v} for k, v in headers.items()]}
+    if parts is not None:
+        payload["parts"] = parts
+    elif body is not None:
+        payload["body"] = {"data": body}
+    res = {"id": "m1", "threadId": "t1", "snippet": "s", "labelIds": [], "payload": payload}
+    if internal_date is not None:
+        res["internalDate"] = internal_date
+    return res
 
 
 @pytest.fixture
@@ -163,3 +191,68 @@ class TestAutoExecuteStampsAccount:
             "AND status = 'executed'",
         ).fetchone()
         assert row["account"] == "me@example.com"
+
+
+# ── C2: manual trust tier is sticky ──────────────────────────────────────────
+class TestManualTrustTierSticky:
+    def test_known_sender_survives_approve_recompute(self, db: Database):
+        handle_know_sender(db, "vip@x.com")
+        assert _trust_tier(db, "vip@x.com") == "trusted"
+        # An approve would normally recompute the tier (total_seen < 5 -> neutral).
+        update_sender_profile(db, "vip@x.com", "approved")
+        assert _trust_tier(db, "vip@x.com") == "trusted"   # not reverted
+
+    def test_muted_sender_survives_reject_recompute(self, db: Database):
+        handle_mute_sender(db, "spam@x.com")
+        assert _trust_tier(db, "spam@x.com") == "watchlist"
+        update_sender_profile(db, "spam@x.com", "rejected")
+        assert _trust_tier(db, "spam@x.com") == "watchlist"
+
+    def test_auto_tier_still_recomputes(self, db: Database):
+        # A sender that was never manually set should still auto-promote.
+        for _ in range(6):
+            update_sender_profile(db, "auto@x.com", "approved")
+        assert _trust_tier(db, "auto@x.com") == "trusted"
+
+
+# ── Parser fixes ─────────────────────────────────────────────────────────────
+class TestParserFixes:
+    def test_recipients_with_comma_display_name(self):
+        # I1: "Last, First" must not shatter into bogus addresses.
+        email = parse_message(_msg({
+            "From": "a@x.com",
+            "To": '"Doe, John" <john@x.com>, jane@y.com',
+            "Subject": "hi",
+        }))
+        assert email.recipients == ["john@x.com", "jane@y.com"]
+
+    def test_internal_date_preferred_and_in_seconds(self):
+        # I2: internalDate is epoch ms; date_ts must be the //1000 seconds value.
+        email = parse_message(_msg({"From": "a@x.com", "Subject": "hi"},
+                                   internal_date="1700000000000"))
+        assert email.date_ts == 1700000000
+
+    def test_naive_date_header_coerced_utc(self):
+        # I2 fallback: a timezone-less Date header is read as UTC, not server-local.
+        email = parse_message(_msg({
+            "From": "a@x.com", "Subject": "hi",
+            "Date": "Mon, 01 Jan 2024 00:00:00",
+        }))
+        assert email.date_ts == 1704067200  # 2024-01-01T00:00:00Z
+
+    def test_stub_plain_falls_back_to_html(self):
+        # I3: empty text/plain stub must not suppress the real HTML body.
+        b64 = lambda s: base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
+        email = parse_message(_msg({"From": "a@x.com", "Subject": "hi"}, parts=[
+            {"mimeType": "text/plain", "body": {"data": b64("   ")}},
+            {"mimeType": "text/html", "body": {"data": b64("<p>Real body</p>")}},
+        ]))
+        assert email.body_text == "Real body"
+
+    def test_rfc2047_subject_decoded(self):
+        # I5: encoded-word subject decodes instead of storing mojibake.
+        email = parse_message(_msg({
+            "From": "a@x.com", "To": "b@x.com",
+            "Subject": "=?UTF-8?B?SGVsbG8gV29ybGQ=?=",
+        }))
+        assert email.subject == "Hello World"

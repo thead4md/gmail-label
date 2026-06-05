@@ -10,12 +10,28 @@ import base64
 import logging
 import re
 from typing import Dict, Any, List, Optional
-from email.utils import parsedate_to_datetime, parseaddr
+from datetime import timezone
+from email.utils import parsedate_to_datetime, parseaddr, getaddresses
+from email.header import decode_header, make_header
 import html
 
 from ..storage.models import Email
 
 LOG = logging.getLogger(__name__)
+
+
+def _decode_mime_words(value: Optional[str]) -> Optional[str]:
+    """Decode RFC 2047 encoded-words (e.g. =?UTF-8?B?..?=) to a plain string.
+
+    Returns the input unchanged on any decode error or when there's nothing to
+    decode, so a malformed header can never crash parsing.
+    """
+    if not value:
+        return value
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:
+        return value
 
 
 def _b64url_decode(data: str) -> bytes:
@@ -103,37 +119,39 @@ def parse_message(resource: Dict[str, Any]) -> Email:
     # From
     from_raw = hdrs.get("from", [""])[0]
     sender_name, sender_email = parseaddr(from_raw)
+    sender_name = _decode_mime_words(sender_name)  # RFC 2047 (accented names etc.)
     sender_domain = None
     if "@" in sender_email:
         sender_domain = sender_email.split("@", 1)[1].lower()
 
-    # To / Cc
-    to_addrs = []
-    for v in hdrs.get("to", []):
-        # split on comma
-        for part in v.split(","):
-            name, addr = parseaddr(part)
-            if addr:
-                to_addrs.append(addr)
-    cc_addrs = []
-    for v in hdrs.get("cc", []):
-        for part in v.split(","):
-            name, addr = parseaddr(part)
-            if addr:
-                cc_addrs.append(addr)
+    # To / Cc — getaddresses is comma- AND quote-aware, so a display name
+    # containing a comma ("Doe, John" <j@x>) no longer shatters into junk addrs.
+    to_addrs = [addr for _name, addr in getaddresses(hdrs.get("to", [])) if addr]
+    cc_addrs = [addr for _name, addr in getaddresses(hdrs.get("cc", [])) if addr]
 
-    # Subject
-    subject = hdrs.get("subject", [None])[0]
+    # Subject (decode RFC 2047 encoded-words to avoid mojibake)
+    subject = _decode_mime_words(hdrs.get("subject", [None])[0])
 
-    # Date
+    # Date — prefer Gmail's authoritative internalDate (epoch MILLISECONDS) over
+    # the Date header. The header path is a fallback and coerces naive datetimes
+    # to UTC, since int(naive.timestamp()) would otherwise assume server-local time.
     received_at = None
-    date_hdr = hdrs.get("date", [None])[0]
-    if date_hdr:
+    internal = resource.get("internalDate")
+    if internal is not None:
         try:
-            dt = parsedate_to_datetime(date_hdr)
-            received_at = int(dt.timestamp())
-        except Exception:
-            LOG.debug("Failed to parse Date header: %s", date_hdr)
+            received_at = int(internal) // 1000
+        except (TypeError, ValueError):
+            received_at = None
+    if received_at is None:
+        date_hdr = hdrs.get("date", [None])[0]
+        if date_hdr:
+            try:
+                dt = parsedate_to_datetime(date_hdr)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                received_at = int(dt.timestamp())
+            except Exception:
+                LOG.debug("Failed to parse Date header: %s", date_hdr)
 
     # Collect body parts
     plain_parts: List[str] = []
@@ -141,9 +159,14 @@ def parse_message(resource: Dict[str, Any]) -> Email:
     mime_types: List[str] = []
     _collect_parts(payload, plain_parts, html_parts, mime_types)
 
+    # Choose body by CONTENT, not list presence: many multipart/alternative
+    # messages carry an empty/whitespace text/plain stub alongside the real HTML.
+    # Triggering on `if plain_parts:` would then yield an empty body and discard
+    # the HTML, so fall back to HTML whenever the joined plain text is empty.
     body_text: Optional[str] = None
-    if plain_parts:
-        body_text = "\n\n".join(plain_parts).strip()
+    joined_plain = "\n\n".join(plain_parts).strip()
+    if joined_plain:
+        body_text = joined_plain
     elif html_parts:
         body_text = _html_to_text(html_parts[0])
 
