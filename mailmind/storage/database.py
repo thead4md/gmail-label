@@ -71,8 +71,12 @@ class Database:
         )
         with self.transaction() as cur:
             cur.execute(sql, email.to_db_tuple())
-            # If row was ignored, try to fetch existing id
-            if cur.lastrowid:
+            # Branch on rowcount, NOT lastrowid: on an ignored INSERT OR IGNORE,
+            # SQLite leaves lastrowid at the connection's previous successful
+            # rowid (this is a long-lived shared connection), so trusting it would
+            # return some *other* email's id for an already-present email. rowcount
+            # is 1 only when a row was actually inserted.
+            if cur.rowcount == 1:
                 return int(cur.lastrowid)
             cur.execute("SELECT id FROM emails WHERE gmail_id = ?", (email.gmail_id,))
             row = cur.fetchone()
