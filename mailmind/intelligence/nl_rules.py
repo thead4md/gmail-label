@@ -21,12 +21,15 @@ def parse_rule_nl(text: str, client: DeepSeekClient) -> dict:
 
     Args:
         text: User input, e.g. "label anything from billing@acme.com as FINANCE"
+              or "label emails from oe-l@cserkesz.hu about events as CALENDAR"
         client: DeepSeekClient instance for LLM parsing
 
     Returns:
         dict with keys:
         - sender_email: str|None (extracted email)
         - label: str|None (extracted label name, uppercase)
+        - match_pattern: str|None (subject regex when the rule is topic-scoped;
+          None for a catch-all rule — only present on the success path)
         - unsupported: bool (True if clause type not yet storable)
         - error: str|None (error message if parsing failed)
     """
@@ -43,7 +46,13 @@ def parse_rule_nl(text: str, client: DeepSeekClient) -> dict:
         system_prompt = (
             "You are a rule parser. Extract sender email and label from natural language.\n"
             "Return JSON with: sender_email (str or null), label (str or null), "
-            "unsupported (bool), unsupported_reason (str or null).\n"
+            "match_pattern (str or null), unsupported (bool), unsupported_reason (str or null).\n"
+            "match_pattern: when the rule is scoped to a TOPIC or subject condition "
+            "(e.g. 'emails about events', 'messages with invoice', 'meeting invites'), "
+            "return a case-insensitive regex alternation of the relevant keywords "
+            "(e.g. 'invoice|receipt|payment'); otherwise null for a catch-all rule "
+            "that applies to every message from the sender. Include the user's language "
+            "synonyms if they wrote in another language.\n"
             "unsupported=true if the sentence describes actions we can't store yet "
             "(e.g., 'never archive', 'auto-delete', 'priority inbox'). "
             "These clauses are unsupported, but don't fail parsing."
@@ -59,7 +68,7 @@ def parse_rule_nl(text: str, client: DeepSeekClient) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=100,
+            max_tokens=150,
         )
 
         content = response.choices[0].message.content
@@ -74,6 +83,9 @@ def parse_rule_nl(text: str, client: DeepSeekClient) -> dict:
         parsed = json.loads(content)
         sender_email = parsed.get("sender_email")
         label = parsed.get("label")
+        match_pattern = parsed.get("match_pattern") or None
+        if isinstance(match_pattern, str):
+            match_pattern = match_pattern.strip() or None
         unsupported = parsed.get("unsupported", False)
         unsupported_reason = parsed.get("unsupported_reason")
 
@@ -120,6 +132,7 @@ def parse_rule_nl(text: str, client: DeepSeekClient) -> dict:
         return {
             "sender_email": sender_email,
             "label": label,
+            "match_pattern": match_pattern,
             "unsupported": False,
             "error": None,
         }

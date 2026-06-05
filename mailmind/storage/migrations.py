@@ -265,6 +265,10 @@ MIGRATIONS: List[Tuple[str, str]] = [
         "0021_add_unsubscribe_url_to_emails",
         """-- Handled in apply_migrations: adds unsubscribe_url column to emails table.""",
     ),
+    (
+        "0022_add_match_pattern_to_sender_rules",
+        """-- Handled in apply_migrations: adds match_pattern column to sender_label_rules.""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -301,6 +305,12 @@ THREAD_CONTEXT_COLUMN: List[Tuple[str, str]] = [("thread_context_json", "TEXT")]
 CHANNEL_COLUMN: List[Tuple[str, str]] = [("channel", "TEXT")]
 
 UNSUBSCRIBE_URL_COLUMN: List[Tuple[str, str]] = [("unsubscribe_url", "TEXT")]
+
+# Optional subject-regex qualifier for a sender label rule. NULL = catch-all rule
+# (applies to every message from the sender); non-NULL = conditional rule that only
+# fires when the regex matches the subject — lets one listserv sender map to several
+# labels by content. See queries.resolve_sender_label.
+SENDER_RULE_PATTERN_COLUMN: List[Tuple[str, str]] = [("match_pattern", "TEXT")]
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -410,6 +420,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             )
         elif name == "0021_add_unsubscribe_url_to_emails":
             _ensure_columns(conn, "emails", UNSUBSCRIBE_URL_COLUMN)
+        elif name == "0022_add_match_pattern_to_sender_rules":
+            _ensure_columns(conn, "sender_label_rules", SENDER_RULE_PATTERN_COLUMN)
         else:
             cur.executescript(sql)
         cur.execute(

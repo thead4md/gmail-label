@@ -927,15 +927,25 @@ def set_sender_trust_tier(db: Database, sender_email: str, tier: str) -> None:
 
 
 def set_sender_label_rule(db: Database, sender_email: str, label: str,
-                          account: Optional[str] = None) -> None:
-    """Create or replace a rule: always label mail from sender_email with label."""
+                          account: Optional[str] = None,
+                          match_pattern: Optional[str] = None) -> None:
+    """Create or replace a sender label rule.
+
+    ``match_pattern`` is an optional regex tested (case-insensitive) against the
+    subject. When None the rule is a catch-all that labels every message from the
+    sender; when set the rule only fires for matching subjects, letting one
+    sender (e.g. a listserv) map to several labels by content. The composite PK
+    (sender_email, label, account) means each distinct label is its own row, so a
+    sender can carry many conditional rules plus an optional catch-all.
+    """
     now = int(time.time())
+    pat = (match_pattern or "").strip() or None
     with db.transaction() as cur:
         cur.execute(
             "INSERT OR REPLACE INTO sender_label_rules "
-            "(sender_email, label, account, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (sender_email, label, account, now),
+            "(sender_email, label, account, match_pattern, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sender_email, label, account, pat, now),
         )
 
 
@@ -952,7 +962,11 @@ def set_thread_label_rule(db: Database, thread_id: str, label: str) -> None:
 
 
 def get_sender_label(db: Database, sender_email: str, account: Optional[str] = None) -> Optional[str]:
-    """Return the label rule for sender_email, or None if no rule exists."""
+    """Return the most-recent label rule for sender_email, or None.
+
+    Back-compat helper: ignores match_pattern and returns the newest rule's label.
+    Use resolve_sender_label() for content-aware resolution in the pipeline.
+    """
     row = db.execute_sql(
         "SELECT label FROM sender_label_rules "
         "WHERE sender_email = ? AND account IS ? "
@@ -960,6 +974,59 @@ def get_sender_label(db: Database, sender_email: str, account: Optional[str] = N
         (sender_email, account),
     ).fetchone()
     return row["label"] if row else None
+
+
+def get_sender_rules(db: Database, sender_email: str,
+                     account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return all label rules for a sender as dicts {label, match_pattern}.
+
+    Ordered so conditional (pattern) rules come before the catch-all (NULL
+    pattern), newest first within each group — the evaluation order used by
+    resolve_sender_label.
+    """
+    rows = db.execute_sql(
+        "SELECT label, match_pattern FROM sender_label_rules "
+        "WHERE sender_email = ? AND account IS ? "
+        "ORDER BY (match_pattern IS NULL), created_at DESC",
+        (sender_email, account),
+    ).fetchall()
+    return [{"label": r["label"], "match_pattern": r["match_pattern"]} for r in rows]
+
+
+def resolve_sender_label(db: Database, sender_email: str, subject: Optional[str],
+                         account: Optional[str] = None) -> Optional[str]:
+    """Resolve a sender's rules against a specific subject.
+
+    Conditional (pattern) rules are tested first, case-insensitive, in recency
+    order — the first whose regex matches the subject wins. If none match, the
+    catch-all rule's label is returned (if any). Returns None when the sender has
+    no rule or only conditional rules and none match, so the caller falls through
+    to normal content classification. A malformed user regex is skipped, never
+    raised — a bad rule must not crash the pipeline.
+    """
+    import re
+    import logging
+
+    rules = get_sender_rules(db, sender_email, account)
+    if not rules:
+        return None
+    text = subject or ""
+    catch_all: Optional[str] = None
+    for rule in rules:
+        pattern = rule.get("match_pattern")
+        if not pattern:
+            if catch_all is None:
+                catch_all = rule["label"]
+            continue
+        try:
+            if re.search(pattern, text, re.IGNORECASE | re.UNICODE):
+                return rule["label"]
+        except re.error:
+            logging.getLogger(__name__).warning(
+                "Invalid sender rule pattern %r for %s; skipping", pattern, sender_email
+            )
+            continue
+    return catch_all
 
 
 def get_thread_label(db: Database, thread_id: str) -> Optional[str]:

@@ -81,7 +81,7 @@ class ClassifierRouter:
         """
         # --- TIER 0: User-defined label rules (sender + thread) ---
         if db is not None:
-            from ..storage.queries import get_sender_label, get_thread_label
+            from ..storage.queries import resolve_sender_label, get_thread_label
 
             # Check thread rule first (more specific)
             if email.thread_id:
@@ -97,9 +97,13 @@ class ClassifierRouter:
                         confidence=1.0,
                     )
 
-            # Check sender rule
+            # Check sender rules (conditional subject-pattern rules are evaluated
+            # against the subject; a non-matching conditional rule returns None so
+            # the email falls through to content classification below).
             if email.sender:
-                sender_label = get_sender_label(db, email.sender, account=account)
+                sender_label = resolve_sender_label(
+                    db, email.sender, email.subject, account=account
+                )
                 if sender_label:
                     LOG.debug(
                         "Tier 0 (sender rule) handles email %s: label=%s",

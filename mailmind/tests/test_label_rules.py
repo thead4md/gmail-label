@@ -12,6 +12,7 @@ from mailmind.storage.models import Email
 from mailmind.storage.queries import (
     set_sender_label_rule, set_thread_label_rule,
     get_sender_label, get_thread_label,
+    get_sender_rules, resolve_sender_label,
     log_correction, get_recent_corrections,
 )
 from mailmind.intelligence.feedback import handle_label_email
@@ -159,6 +160,103 @@ def test_router_prefers_thread_rule_over_sender_rule(temp_db):
 
     # Thread rule should win
     assert result.label == "ARCHIVE"
+
+
+# ---------------------------------------------------------------------------
+# Conditional (subject-pattern) sender rules — listserv support
+# ---------------------------------------------------------------------------
+
+def test_conditional_rules_resolve_by_subject(temp_db):
+    """One sender, multiple subject-pattern rules → label depends on content."""
+    sender = "oe-l@cserkesz.hu"
+    acct = "primary"
+    set_sender_label_rule(temp_db, sender, "CALENDAR", account=acct,
+                          match_pattern="meeting|invite|event")
+    set_sender_label_rule(temp_db, sender, "FINANCE", account=acct,
+                          match_pattern="invoice|payment")
+
+    assert resolve_sender_label(temp_db, sender, "Board meeting next week", acct) == "CALENDAR"
+    assert resolve_sender_label(temp_db, sender, "Your invoice is ready", acct) == "FINANCE"
+    # No pattern matches and no catch-all → None (falls through to classification)
+    assert resolve_sender_label(temp_db, sender, "Weekly chit-chat", acct) is None
+
+
+def test_catch_all_rule_applies_when_no_pattern_matches(temp_db):
+    """A NULL-pattern rule is the fallback when no conditional rule matches."""
+    sender = "list@example.com"
+    set_sender_label_rule(temp_db, sender, "CALENDAR", account=None,
+                          match_pattern="event")
+    set_sender_label_rule(temp_db, sender, "NEWSLETTER", account=None)  # catch-all
+
+    assert resolve_sender_label(temp_db, sender, "Upcoming event", None) == "CALENDAR"
+    assert resolve_sender_label(temp_db, sender, "Random update", None) == "NEWSLETTER"
+
+
+def test_pattern_rule_takes_precedence_over_catch_all(temp_db):
+    """Conditional rules are evaluated before the catch-all."""
+    sender = "mixed@example.com"
+    set_sender_label_rule(temp_db, sender, "NEWSLETTER", account=None)  # catch-all
+    set_sender_label_rule(temp_db, sender, "FINANCE", account=None,
+                          match_pattern="invoice")
+
+    assert resolve_sender_label(temp_db, sender, "Invoice #42", None) == "FINANCE"
+
+
+def test_resolve_sender_label_no_rules_returns_none(temp_db):
+    """No rule for the sender → None (fall through to classification)."""
+    assert resolve_sender_label(temp_db, "stranger@example.com", "Hello", None) is None
+
+
+def test_invalid_regex_pattern_is_skipped(temp_db):
+    """A malformed user regex must be skipped, never raise."""
+    sender = "buggy@example.com"
+    set_sender_label_rule(temp_db, sender, "FINANCE", account=None,
+                          match_pattern="invoice(")  # unbalanced paren
+    set_sender_label_rule(temp_db, sender, "NEWSLETTER", account=None)  # catch-all
+    # Bad pattern skipped; catch-all still applies
+    assert resolve_sender_label(temp_db, sender, "anything", None) == "NEWSLETTER"
+
+
+def test_get_sender_rules_orders_patterns_before_catch_all(temp_db):
+    """get_sender_rules returns conditional rules before the catch-all."""
+    sender = "ordered@example.com"
+    set_sender_label_rule(temp_db, sender, "NEWSLETTER", account=None)  # catch-all
+    set_sender_label_rule(temp_db, sender, "FINANCE", account=None, match_pattern="invoice")
+    rules = get_sender_rules(temp_db, sender, None)
+    assert rules[0]["match_pattern"] is not None      # pattern rule first
+    assert rules[-1]["match_pattern"] is None          # catch-all last
+
+
+def test_get_sender_label_backcompat(temp_db):
+    """get_sender_label still returns the most recent rule's label."""
+    sender = "compat@example.com"
+    set_sender_label_rule(temp_db, sender, "WORK", account=None)
+    assert get_sender_label(temp_db, sender, None) == "WORK"
+
+
+def test_router_conditional_rule_matches_and_falls_through(temp_db):
+    """Router uses resolve_sender_label: matching subject → rule; else falls through."""
+    rules_engine = MagicMock(spec=RulesEngine)
+    rules_engine.evaluate.return_value = []  # no Tier-1 match
+
+    router = ClassifierRouter(rules_engine=rules_engine, rules_threshold=0.90)
+
+    sender = "oe-l@cserkesz.hu"
+    acct = "primary"
+    set_sender_label_rule(temp_db, sender, "CALENDAR", account=acct,
+                          match_pattern="meeting|invite")
+
+    # Matching subject → Tier 0 rule fires
+    hit = Email(gmail_id="m1", sender=sender, thread_id="t1", subject="Team meeting invite")
+    res_hit = router.route(hit, rule_matches=[], db=temp_db, account=acct)
+    assert res_hit.source == "rule"
+    assert res_hit.label == "CALENDAR"
+    assert res_hit.confidence == 1.0
+
+    # Non-matching subject → NOT a rule (falls through past Tier 0)
+    miss = Email(gmail_id="m2", sender=sender, thread_id="t2", subject="Casual hello")
+    res_miss = router.route(miss, rule_matches=[], db=temp_db, account=acct)
+    assert res_miss.source != "rule"
 
 
 def test_handle_label_email_sender_scope(temp_db):

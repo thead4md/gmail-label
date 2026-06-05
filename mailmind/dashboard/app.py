@@ -907,7 +907,8 @@ def render_automate_tab(account: Optional[str] = None) -> None:
 
     config = MailMindConfig()
     rule_text = st.text_input(
-        "Describe a rule (e.g., 'label emails from billing@acme.com as FINANCE')",
+        "Describe a rule (e.g., 'label emails from billing@acme.com as FINANCE', "
+        "or 'label emails from oe-l@cserkesz.hu about events as CALENDAR')",
         placeholder="e.g., label anything from newsletter@example.com as NEWSLETTER",
         key="nl_rule_input",
     )
@@ -927,12 +928,20 @@ def render_automate_tab(account: Optional[str] = None) -> None:
                 else:
                     sender = result.get("sender_email")
                     label = result.get("label")
+                    match_pattern = result.get("match_pattern")
                     if sender and label:
                         from mailmind.storage.queries import set_sender_label_rule
-                        set_sender_label_rule(db, sender, label, account=account)
+                        set_sender_label_rule(
+                            db, sender, label, account=account,
+                            match_pattern=match_pattern,
+                        )
                         _invalidate()
+                        scope_note = (
+                            f" when subject matches /{match_pattern}/"
+                            if match_pattern else " (all messages)"
+                        )
                         st.toast(
-                            f"✅ Rule created: {sender} → {label}",
+                            f"✅ Rule created: {sender} → {label}{scope_note}",
                             icon="✨",
                         )
                     else:

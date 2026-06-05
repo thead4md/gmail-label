@@ -56,6 +56,47 @@ def test_parse_rule_nl_valid_sentence(mock_client):
     assert result["unsupported"] is False
 
 
+def test_parse_rule_nl_topic_scoped(mock_client):
+    """A topic-scoped rule returns a match_pattern for subject filtering."""
+    mock_client.client.chat.completions.create.return_value = FakeResponse(
+        json.dumps({
+            "sender_email": "oe-l@cserkesz.hu",
+            "label": "CALENDAR",
+            "match_pattern": "esemény|meghívó|event|invite",
+            "unsupported": False,
+            "unsupported_reason": None,
+        })
+    )
+
+    result = parse_rule_nl(
+        "label emails from oe-l@cserkesz.hu about events as CALENDAR",
+        mock_client
+    )
+
+    assert result["error"] is None
+    assert result["sender_email"] == "oe-l@cserkesz.hu"
+    assert result["label"] == "CALENDAR"
+    assert result["match_pattern"] == "esemény|meghívó|event|invite"
+
+
+def test_parse_rule_nl_catch_all_pattern_is_none(mock_client):
+    """A catch-all rule (no topic) has match_pattern None on the success path."""
+    mock_client.client.chat.completions.create.return_value = FakeResponse(
+        json.dumps({
+            "sender_email": "billing@acme.com",
+            "label": "FINANCE",
+            "match_pattern": None,
+            "unsupported": False,
+            "unsupported_reason": None,
+        })
+    )
+
+    result = parse_rule_nl("label billing@acme.com as FINANCE", mock_client)
+
+    assert result["error"] is None
+    assert result["match_pattern"] is None
+
+
 def test_parse_rule_nl_unknown_label(mock_client):
     """Test that unknown labels are rejected."""
     mock_client.client.chat.completions.create.return_value = FakeResponse(
