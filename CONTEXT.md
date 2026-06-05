@@ -6007,7 +6007,7 @@ graph TD
 | `mailmind/main.py` | MailMind — main entry point. | cli(), run(), digest(), prune(), backfill(), apply_labels(), refresh_labels(), auth(), accounts() | ✅ Complete |
 | `mailmind/ml/__init__.py` | ML module for MailMind Pass 4. | — | ✅ Stable |
 | `mailmind/ml/classifier_router.py` | Routing logic that decides which tier handles each email. | RoutingResult, ClassifierRouter | ✅ Complete |
-| `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, extract_features(), feature_vector_to_dict() | ✅ Complete |
+| `mailmind/ml/features.py` | Feature extraction for MailMind ML classification. | FeatureVector, build_model_text(), extract_features(), feature_vector_to_dict() | ✅ Complete |
 | `mailmind/ml/inference.py` | Inference orchestration for MailMind ML classification. | MLResult, predict_label() | ✅ Complete |
 | `mailmind/ml/llm_classifier.py` | Third-tier LLM classifier for MailMind using OpenAI-compatible API. | log_llm_usage(), LLMPrediction, LLMClassifier, OpenAIAdapter | ✅ Complete |
 | `mailmind/ml/model.py` | ML model wrapper for MailMind classification. | ModelMetadata, MLClassifier | ✅ Complete |
@@ -7619,7 +7619,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 669 tests passing.
+Pass 7 complete. 674 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

@@ -50,7 +50,7 @@ def test_user_labels_override_rules_guess():
             db.save_prediction(pred)
 
         # Collect training data
-        corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=5)
+        corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=5, min_per_class=1)
 
         # Assert all user truth labels were selected, not the rules guess
         assert len(labels) == 5, f"Expected 5 samples, got {len(labels)}"
@@ -103,7 +103,7 @@ def test_correction_overrides_user_labels():
             db._conn.commit()
 
         # Collect training data
-        corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=5)
+        corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=5, min_per_class=1)
 
         # Assert the corrections were selected (not user_labels, not primary_label)
         assert len(labels) == 5

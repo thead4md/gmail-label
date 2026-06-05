@@ -71,9 +71,17 @@ def predict_label(
         )
 
     try:
-        # Extract text features for classification
-        fv = extract_features(email)
-        text_corpus = fv.to_text_corpus()
+        # Build the SAME text the trainer used (subject+snippet+sender+body +
+        # engineered feature tokens). Using build_model_text here keeps train and
+        # inference in lockstep — previously inference omitted the body the model
+        # was trained on.
+        from .features import build_model_text
+        text_corpus = build_model_text(
+            subject=getattr(email, "subject", None),
+            sender=getattr(email, "sender", None),
+            snippet=getattr(email, "snippet", None),
+            body_text=getattr(email, "body_text", None),
+        )
 
         if not text_corpus.strip():
             LOG.debug("Empty text corpus for ML inference, returning fallback")

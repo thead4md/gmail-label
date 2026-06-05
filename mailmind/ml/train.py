@@ -17,7 +17,7 @@ from typing import List, Tuple, Optional
 
 from ..storage.database import Database
 from ..storage.models import Email  # noqa: F401 - used for type hints
-from .features import extract_features, FeatureVector, VALID_LABELS
+from .features import extract_features, FeatureVector, VALID_LABELS, build_model_text
 from .model import MLClassifier, ModelMetadata
 
 LOG = logging.getLogger(__name__)
@@ -25,8 +25,11 @@ LOG = logging.getLogger(__name__)
 # Minimum samples needed to train a useful model
 MIN_TRAINING_SAMPLES = 10
 
-# Minimum samples per class to consider (otherwise classes may be ignored)
-MIN_SAMPLES_PER_CLASS = 1
+# Minimum training examples a label needs to be learnable by the local model.
+# Classes below this are dropped from ML training (the LLM tier still labels them
+# live) — e.g. RECEIPT with ~11 examples just added noise and 0.00 F1. Rises are
+# cheap as data accrues; new labels graduate into the model once they clear it.
+MIN_SAMPLES_PER_CLASS = 15
 
 
 def _evaluate_holdout(corpus, labels, test_size: float = 0.2, seed: int = 42):
@@ -70,6 +73,7 @@ def _evaluate_holdout(corpus, labels, test_size: float = 0.2, seed: int = 42):
 def _collect_training_data_from_db(
     db: Database,
     min_samples: int = MIN_TRAINING_SAMPLES,
+    min_per_class: int = MIN_SAMPLES_PER_CLASS,
 ) -> Tuple[List[str], List[str], List[FeatureVector]]:
     """Collect labeled training data from the database.
 
@@ -153,7 +157,7 @@ def _collect_training_data_from_db(
         snippet = row["snippet"] or ""
         body = row["body_text"] or ""
         sender = row["sender"] or ""
-        text = f"{subject} {snippet} {sender} {body[:500]}".strip()
+        text = build_model_text(subject, sender, snippet, body)
 
         if not text:
             continue
@@ -172,10 +176,11 @@ def _collect_training_data_from_db(
         ))
 
     if len(corpus) >= min_samples:
-        # Drop sparse labels (< 5 examples) to avoid poisoning the model
+        # Drop classes with too few examples to be learnable (see MIN_SAMPLES_PER_CLASS).
         from collections import Counter
         label_counts = Counter(labels)
-        valid_indices = [i for i, lbl in enumerate(labels) if label_counts[lbl] >= 5]
+        valid_indices = [i for i, lbl in enumerate(labels)
+                         if label_counts[lbl] >= min_per_class]
 
         original_count = len(corpus)
         if len(valid_indices) < len(labels):
@@ -241,7 +246,7 @@ def _collect_training_data_from_db(
         snippet = row["snippet"] or ""
         body = row["body_text"] or ""
         sender = row["sender"] or ""
-        text = f"{subject} {snippet} {sender} {body[:500]}".strip()
+        text = build_model_text(subject, sender, snippet, body)
 
         if not text:
             continue

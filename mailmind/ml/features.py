@@ -100,6 +100,42 @@ def _detect_finance(text: str) -> bool:
     return bool(_FINANCE_RE.search(text.lower()))
 
 
+def build_model_text(subject, sender, snippet="", body_text="") -> str:
+    """Canonical TF-IDF input — the SINGLE source of model text for BOTH training
+    and inference.
+
+    They previously diverged (training included body[:500]; inference's
+    to_text_corpus did not), so the model trained on body features it never saw at
+    inference. This unifies them and additionally appends engineered feature
+    tokens, turning structured signals (unsubscribe / calendar / finance / sender
+    domain / reply) into first-class TF-IDF features the classifier can weight.
+    """
+    subject = (subject or "").strip()
+    snippet = (snippet or "").strip()
+    sender = (sender or "").strip()
+    body = (body_text or "")[:500]
+    base = f"{subject} {snippet} {sender} {body}".strip()
+
+    blob = f"{subject} {snippet} {body}".lower()
+    tokens: List[str] = []
+    if _UNSUBSCRIBE_FEATURE_RE.search(blob):
+        tokens.append("feat_unsub")
+    if _CALENDAR_RE.search(blob):
+        tokens.append("feat_calendar")
+    if _FINANCE_RE.search(blob):
+        tokens.append("feat_finance")
+    low_sender = sender.lower()
+    if "@" in low_sender:
+        domain = low_sender.split("@", 1)[1].strip(" <>")
+        domain = re.sub(r"[^a-z0-9]+", "_", domain).strip("_")
+        if domain:
+            tokens.append(f"feat_domain_{domain}")
+    if subject.lower().startswith(("re:", "re ", "fwd:", "fw:", "aw:")):
+        tokens.append("feat_reply")
+
+    return (f"{base} " + " ".join(tokens)).strip() if tokens else base
+
+
 def extract_features(email: Email, true_label: Optional[str] = None) -> FeatureVector:
     """Extract a FeatureVector from an Email model.
 

@@ -117,6 +117,11 @@ class MLClassifier:
                 max_iter=1000,
                 random_state=42,
                 C=1.0,  # moderate regularization
+                # Counter class imbalance: the bulk classes (NEWSLETTER/
+                # NOTIFICATION/MASS_EMAIL ~72% of data) otherwise dominate and
+                # crush recall on the content labels (ACTION_REQUIRED, MEETING,
+                # PERSONAL). 'balanced' weights classes inversely to frequency.
+                class_weight="balanced",
             )),
         ])
 

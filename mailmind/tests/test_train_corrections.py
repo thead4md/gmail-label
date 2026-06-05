@@ -72,7 +72,7 @@ class TestCorrectionOverridesPrimaryLabel:
         db.save_prediction(_pred("target", "NEWSLETTER"))
         _log_correction(db, "target", "WORK", ts=1000)
 
-        corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=10)
+        corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=10, min_per_class=1)
 
         # Find the row our target email contributed.
         idx = next(i for i, v in enumerate(vectors) if v.email_gmail_id == "target")
@@ -88,7 +88,7 @@ class TestCorrectionOverridesPrimaryLabel:
         _log_correction(db, "target", "MASS_EMAIL", ts=1000)
         _log_correction(db, "target", "WORK", ts=2000)
 
-        _corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=10)
+        _corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=10, min_per_class=1)
         idx = next(i for i, v in enumerate(vectors) if v.email_gmail_id == "target")
         assert labels[idx] == "WORK"
 
@@ -98,6 +98,6 @@ class TestCorrectionOverridesPrimaryLabel:
         db.save_prediction(_pred("untouched", "NEWSLETTER"))
         # No user_corrections row for this email.
 
-        _corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=10)
+        _corpus, labels, vectors = _collect_training_data_from_db(db, min_samples=10, min_per_class=1)
         idx = next(i for i, v in enumerate(vectors) if v.email_gmail_id == "untouched")
         assert labels[idx] == "NEWSLETTER"
