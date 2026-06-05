@@ -29,6 +29,63 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 
+def resolve_label_precedence(
+    base_label: str,
+    *,
+    ml_confident: bool,
+    llm_present: bool,
+    llm_label: Optional[str],
+    llm_confidence: Optional[float],
+    llm_override_floor: float,
+    llm_fallback_floor: float,
+    routing_source: Optional[str],
+    routing_label: Optional[str],
+) -> tuple:
+    """Single source of truth for (primary_label, classifier_source, pipeline_used).
+
+    This is where the rules→ML→LLM→router label precedence lives — historically
+    the spot where "silent override" bugs kept appearing, so it is now one pure,
+    independently-tested function. Precedence, highest first:
+
+      1. Router classified via a real tier ('rule'/'rules'/'ml'/'llm') → that label.
+      2. Router 'fallback' AND a usable LLM label (conf ≥ fallback floor) → LLM label.
+      3. Router 'fallback' AND no usable LLM → the router's fallback label.
+      4. No router AND a confident LLM (conf ≥ override floor) → LLM label.
+      5. Otherwise → the rules-score base label.
+
+    pipeline_used becomes 'hybrid' whenever ML or LLM contributed; classifier_source
+    defaults to 'rules' until the router assigns a tier.
+    """
+    primary = base_label
+    source = "rules"
+    pipeline = "rules"
+
+    if ml_confident:
+        pipeline = "hybrid"
+
+    if llm_present:
+        pipeline = "hybrid"
+        if llm_confidence is not None and llm_confidence >= llm_override_floor:
+            primary = llm_label  # case 4
+
+    llm_usable = (
+        llm_present and llm_confidence is not None
+        and llm_confidence >= llm_fallback_floor
+    )
+
+    if routing_source is not None:
+        if routing_source == "fallback" and llm_usable:
+            primary = llm_label              # case 2
+            source = "llm"
+            pipeline = "hybrid"
+        else:
+            source = routing_source          # cases 1 & 3
+            primary = routing_label
+            pipeline = routing_source
+
+    return primary, source, pipeline
+
+
 class Pipeline:
     """Deterministic MVP processing pipeline.
 
@@ -272,83 +329,72 @@ class Pipeline:
         scoring_breakdown = json.dumps(breakdown_dict)
         rule_names = [m.rule_name for m in matched_rules]
         final_labels = list(labels)
-        pipeline_used = "rules"
         ml_confidence = None
-        primary_label = score.primary_label
         priority_score = score.total_score
 
+        # --- Gather per-tier signals + their breakdown/label side-effects. The
+        # actual label precedence is decided once, below, by
+        # resolve_label_precedence (no primary_label mutation scattered here). ---
+        ml_confident = False
         if ml_result and ml_result.model_available and ml_result.primary_label is not None:
             ml_confidence = ml_result.ml_confidence
-            if ml_confidence is not None and ml_confidence >= self.ML_CONFIDENCE_THRESHOLD:
-                pipeline_used = "hybrid"
-                if ml_result.primary_label not in final_labels:
-                    final_labels.append(ml_result.primary_label)
+            ml_confident = (
+                ml_confidence is not None and ml_confidence >= self.ML_CONFIDENCE_THRESHOLD
+            )
+            if ml_confident and ml_result.primary_label not in final_labels:
+                final_labels.append(ml_result.primary_label)
             breakdown_dict["ml"] = ml_result.to_scoring_breakdown_entry()
             scoring_breakdown = json.dumps(breakdown_dict)
 
-        # Merge ClassifierRouter result (OpenAI LLM third-tier)
-        classifier_source = "rules"
         llm_label = None
+        llm_confidence = None
         llm_rationale = None
         llm_action_hint = None
         llm_needs_review = False
         llm_called_at = None
-
-        llm_confidence = None
-        if llm_result is not None and llm_result.model_available:
-            pipeline_used = "hybrid"
+        llm_present = bool(llm_result is not None and llm_result.model_available)
+        if llm_present:
             llm_confidence = llm_result.llm_confidence
-            # Always record the LLM's label as a first-class field so the trainer
-            # can learn from it (this is what breaks the rules→ML echo chamber),
-            # regardless of whether it wins the live primary_label below.
+            # Record the LLM label regardless of whether it wins live — the trainer
+            # learns from it (this is what breaks the rules→ML echo chamber).
             llm_label = llm_result.primary_label
-            if llm_confidence is not None and llm_confidence >= self.llm_confidence_override:
-                primary_label = llm_result.primary_label
-                LOG.debug(
-                    "LLM override: label=%s (confidence=%.2f >= %.2f threshold)",
-                    primary_label, llm_confidence, self.llm_confidence_override,
-                )
             if llm_result.primary_label not in final_labels:
                 final_labels.append(llm_result.primary_label)
             breakdown_dict["llm"] = llm_result.to_scoring_breakdown_entry()
             scoring_breakdown = json.dumps(breakdown_dict)
 
-        # In the fallback path the router only has a ~0-confidence guess, so a
-        # usable LLM content label should win over the NOTIFICATION default even
-        # below the strict 0.90 override used for confident lower tiers.
-        llm_usable = (
-            llm_result is not None
-            and llm_result.model_available
-            and llm_confidence is not None
-            and llm_confidence >= self.LLM_FALLBACK_FLOOR
+        # --- Single source of truth for label precedence ---
+        primary_label, classifier_source, pipeline_used = resolve_label_precedence(
+            base_label=score.primary_label,
+            ml_confident=ml_confident,
+            llm_present=llm_present,
+            llm_label=llm_label,
+            llm_confidence=llm_confidence,
+            llm_override_floor=self.llm_confidence_override,
+            llm_fallback_floor=self.LLM_FALLBACK_FLOOR,
+            routing_source=routing_result.source if routing_result is not None else None,
+            routing_label=routing_result.label if routing_result is not None else None,
         )
 
-        if routing_result is not None:
-            if routing_result.source == "fallback" and llm_usable:
-                primary_label = llm_result.primary_label
-                classifier_source = "llm"
-                pipeline_used = "hybrid"
-            else:
-                classifier_source = routing_result.source
-                primary_label = routing_result.label
-                pipeline_used = routing_result.source
-            if routing_result.source == "llm" and routing_result.llm_prediction is not None:
-                llm_pred = routing_result.llm_prediction
-                llm_label = llm_pred.label
-                llm_confidence = llm_pred.confidence
-                llm_rationale = llm_pred.rationale
-                llm_action_hint = llm_pred.action_hint
-                llm_needs_review = llm_pred.needs_review
-                from datetime import datetime, timezone
-                llm_called_at = datetime.now(timezone.utc).isoformat()
-                if llm_pred.label not in final_labels:
-                    final_labels.append(llm_pred.label)
-                LOG.debug(
-                    "LLM (router) result: label=%s confidence=%.4f needs_review=%s",
-                    llm_label, llm_confidence, llm_needs_review,
-                )
-            elif routing_result.source == "fallback" and not llm_usable:
-                classifier_source = "fallback"
+        # Router 'llm' (OpenAI-router) path carries extra metadata — side-effects only;
+        # the label decision above already accounts for it.
+        if (routing_result is not None
+                and routing_result.source == "llm"
+                and routing_result.llm_prediction is not None):
+            llm_pred = routing_result.llm_prediction
+            llm_label = llm_pred.label
+            llm_confidence = llm_pred.confidence
+            llm_rationale = llm_pred.rationale
+            llm_action_hint = llm_pred.action_hint
+            llm_needs_review = llm_pred.needs_review
+            from datetime import datetime, timezone
+            llm_called_at = datetime.now(timezone.utc).isoformat()
+            if llm_pred.label not in final_labels:
+                final_labels.append(llm_pred.label)
+            LOG.debug(
+                "LLM (router) result: label=%s confidence=%.4f needs_review=%s",
+                llm_label, llm_confidence, llm_needs_review,
+            )
 
         prediction = Prediction(
             email_gmail_id=email.gmail_id,
