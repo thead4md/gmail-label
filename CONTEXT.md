@@ -5981,7 +5981,7 @@ graph TD
 | `mailmind/actions/__init__.py` | Actions layer for MailMind: safe Gmail action execution. | — | ✅ Stable |
 | `mailmind/actions/executor.py` | Safe Gmail action executor for MailMind. | ActionExecutor | ✅ Complete |
 | `mailmind/actions/safety.py` | Safety policy checks for MailMind action execution. | SafetyDecision, SafetyPolicy | ✅ Complete |
-| `mailmind/config.py` | Configuration management for MailMind Pass 7+. | MailMindConfig | ✅ Complete |
+| `mailmind/config.py` | Configuration management for MailMind Pass 7+. | load_env_file(), MailMindConfig | ✅ Complete |
 | `mailmind/dashboard/__init__.py` |  | — | ✅ Stable |
 | `mailmind/dashboard/app.py` | MailMind Dashboard — Streamlit web UI. | get_db(), get_accounts(), get_action_executor(), render_now_tab(), render_review_tab(), render_history_tab(), render_automate_tab(), render_insights_tab(), main() | ✅ Complete |
 | `mailmind/dashboard/charts.py` | Altair chart builders for the INSIGHTS tab. Dark-theme styled. | label_distribution_chart(), channel_distribution_chart(), top_senders_chart(), decision_time_chart(), channel_weekday_heatmap() | ✅ Complete |
@@ -6122,6 +6122,7 @@ class MailMindConfig:
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | No | — |
 | `MAILMIND_DB_PATH` | `~/.mailmind/mailmind.db` | No | SQLite database path |
 | `MAILMIND_DRY_RUN` | `0` | No | Set to "1" to skip real Gmail label writes |
+| `MAILMIND_ENV_FILE` | `""` (empty) | No | — |
 | `MAILMIND_FETCH_MAX` | `50` | No | Max emails per fetch run |
 | `MAILMIND_POLL_SECONDS` | `120` | No | Poll interval in seconds (--watch mode) |
 | `MAILMIND_RETENTION_DAYS` | `90` | No | — |

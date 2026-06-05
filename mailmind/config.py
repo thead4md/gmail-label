@@ -11,12 +11,60 @@ from __future__ import annotations
 import os
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
 LOG = logging.getLogger(__name__)
+
+_DOTENV_LOADED = False
+
+
+def load_env_file() -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ (zero-dependency).
+
+    Search order (first existing wins): $MAILMIND_ENV_FILE, ./.env, the package's
+    own mailmind/.env, then ~/.mailmind/.env. Existing environment variables are
+    NEVER overwritten — real env (e.g. Fly secrets) always takes precedence over
+    the file. Idempotent: only runs once per process. Lines starting with '#' and
+    blank lines are ignored; surrounding quotes on values are stripped.
+    """
+    global _DOTENV_LOADED
+    # Never load a real .env during tests — it would clobber monkeypatched env
+    # and break isolation. Opt-out also available via MAILMIND_SKIP_DOTENV.
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MAILMIND_SKIP_DOTENV"):
+        return
+    if _DOTENV_LOADED:
+        return
+    _DOTENV_LOADED = True
+    candidates = [
+        os.environ.get("MAILMIND_ENV_FILE", "").strip(),
+        str(Path.cwd() / ".env"),
+        str(Path(__file__).resolve().parent / ".env"),   # mailmind/.env
+        os.path.expanduser("~/.mailmind/.env"),
+    ]
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    if line.lower().startswith("export "):
+                        line = line[len("export "):].lstrip()
+                    key, _, val = line.partition("=")
+                    key = key.strip()
+                    val = val.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+            LOG.info("Loaded environment from %s", path)
+        except Exception as exc:
+            LOG.warning("Failed to read env file %s: %s", path, exc)
+        return  # only the first existing file is loaded
 
 
 @dataclass
@@ -106,6 +154,7 @@ class MailMindConfig:
         Returns:
             MailMindConfig with values populated from environment.
         """
+        load_env_file()  # pick up a local .env (no-op on Fly where secrets are set)
         deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         openai_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
         llm_enabled = bool(deepseek_api_key)

@@ -524,16 +524,24 @@ def _maybe_retrain(
             trigger, age, new_corrections,
         )
         from mailmind.ml.train import train_model_from_db
-        classifier = train_model_from_db(db)
+        classifier = train_model_from_db(db, min_accuracy=ML_MIN_ACCURACY)
         if classifier is None:
-            LOG.info("Auto-retrain skipped (insufficient training data).")
+            # No promotion: either insufficient data (cold start — retry next
+            # cycle, state left unset) or the model didn't clear the accuracy
+            # floor. The previous live model stays in place.
+            LOG.info(
+                "Auto-retrain produced no promoted model "
+                "(insufficient data or hold-out accuracy < %.2f floor).",
+                ML_MIN_ACCURACY,
+            )
             return
 
         db.set_state("last_train_ts", str(now))
         db.set_state("last_train_corrections_count", str(total_corrections))
         LOG.info(
-            "Auto-retrain complete (samples=%d).",
+            "Auto-retrain complete and promoted (samples=%d, accuracy=%s).",
             classifier.metadata.num_samples if classifier.metadata else -1,
+            classifier.metadata.accuracy if classifier.metadata else None,
         )
     except Exception as exc:
         LOG.error("Auto-retrain failed: %s", exc, exc_info=True)

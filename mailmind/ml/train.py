@@ -29,6 +29,36 @@ MIN_TRAINING_SAMPLES = 10
 MIN_SAMPLES_PER_CLASS = 1
 
 
+def _evaluate_holdout(corpus, labels, test_size: float = 0.2, seed: int = 42):
+    """Measure classifier accuracy on a stratified hold-out split.
+
+    Returns a float in [0, 1] (rounded), or None when the data is too small /
+    too imbalanced to split reliably (in which case the caller should treat the
+    model as unvalidated). Trains a throwaway model on the train split only —
+    the caller refits on the full corpus for the deployed model.
+    """
+    from collections import Counter
+    counts = Counter(labels)
+    if len(counts) < 2 or min(counts.values()) < 2 or len(corpus) < 10:
+        return None
+    try:
+        from sklearn.model_selection import train_test_split
+        X_tr, X_te, y_tr, y_te = train_test_split(
+            corpus, labels, test_size=test_size, random_state=seed, stratify=labels,
+        )
+        probe = MLClassifier()
+        probe.train(
+            X_tr, y_tr,
+            metadata=ModelMetadata(class_names=sorted(set(y_tr)), num_samples=len(X_tr)),
+        )
+        preds = [lbl for lbl, _conf in probe.predict(X_te)]
+        correct = sum(1 for p, t in zip(preds, y_te) if p == t)
+        return round(correct / len(y_te), 4) if y_te else None
+    except Exception as exc:
+        LOG.warning("Hold-out accuracy evaluation failed: %s", exc)
+        return None
+
+
 def _collect_training_data_from_db(
     db: Database,
     min_samples: int = MIN_TRAINING_SAMPLES,
@@ -224,6 +254,7 @@ def train_model_from_db(
     db: Database,
     model_name: str = "pass4_baseline.joblib",
     min_samples: int = MIN_TRAINING_SAMPLES,
+    min_accuracy: Optional[float] = None,
 ) -> Optional[MLClassifier]:
     """Train the ML model using historical data from the database.
 
@@ -289,13 +320,28 @@ def train_model_from_db(
             "Ensure emails have non-empty subject, snippet, or body text."
         )
 
-    # Train
+    # Measure hold-out accuracy and gate promotion. An unvalidated or
+    # below-floor model is NOT saved, so the previous (live) model stays in
+    # place and the inference gate in main._build_classifier_router keeps the
+    # ML tier off rather than shipping a regression.
+    metadata.accuracy = _evaluate_holdout(corpus, labels)
+    LOG.info("Hold-out accuracy: %s", metadata.accuracy)
+    if min_accuracy is not None and (
+        metadata.accuracy is None or metadata.accuracy < min_accuracy
+    ):
+        LOG.warning(
+            "Retrain NOT promoted: accuracy=%s < floor %.2f — keeping previous model.",
+            metadata.accuracy, min_accuracy,
+        )
+        return None
+
+    # Train the deployed model on the FULL corpus (hold-out was only for scoring).
     classifier = MLClassifier()
     classifier.train(corpus, labels, metadata=metadata)
 
     # Save
     saved_path = classifier.save(model_name)
-    LOG.info(f"Model saved to {saved_path}")
+    LOG.info(f"Model saved to {saved_path} (accuracy={metadata.accuracy})")
 
     # Store model metadata in database
     try:
