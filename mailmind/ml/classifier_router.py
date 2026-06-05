@@ -204,14 +204,20 @@ class ClassifierRouter:
     def _extract_rules_result(
         self, matched_rules: list, email: Email,
     ) -> tuple[str, float]:
-        """Extract label and confidence from matched rules."""
+        """Extract label and confidence from matched rules.
+
+        Only rules that actually *assign a label* may drive the Tier-1
+        short-circuit confidence. Label-free rules (e.g. ``directly_addressed``,
+        which fires at 0.95 whenever the user is in To:) are priority-*score*
+        signals, not classifications — counting their confidence here would let
+        a content-free signal pre-empt the ML/LLM content tiers and default the
+        email to NOTIFICATION. Their score contribution is unchanged (it happens
+        in the scorer); they simply no longer gate classification.
+        """
         from ..processing.scorer import PriorityScorer
         primary_label = PriorityScorer._determine_primary_label(email, matched_rules)
-        confidence = 0.0
-        for match in matched_rules:
-            if match.matched and match.confidence > confidence:
-                confidence = match.confidence
+        labeling_matches = [m for m in matched_rules if m.matched and m.labels]
+        confidence = max((m.confidence for m in labeling_matches), default=0.0)
         if not matched_rules:
-            confidence = 0.0
             primary_label = "NOTIFICATION"
         return primary_label, min(confidence, 0.95)

@@ -182,19 +182,80 @@ def _load_ml_classifier_cached() -> Optional["MLClassifier"]:
     return clf
 
 
+# Minimum measured hold-out accuracy before the local ML model is trusted to
+# classify at inference. The current model echoes the rules (4 labels, accuracy
+# never measured); an unvalidated model must not intercept mail that should reach
+# the LLM. Phase 2 retrains + measures accuracy and re-enables the tier.
+ML_MIN_ACCURACY = 0.70
+
+
+def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
+    """Build the content-classification LLM client, honouring the chosen provider.
+
+    Provider is selected by the LLM_PROVIDER env var (openai | deepseek | auto):
+      - "openai"   → OpenAI (requires OPENAI_API_KEY); raises if key missing.
+      - "deepseek" → DeepSeek (requires DEEPSEEK_API_KEY).
+      - "auto" (default) → OpenAI when OPENAI_API_KEY is set, else DeepSeek.
+
+    Returns a client exposing classify_email(email) -> LLMResult (the unified
+    Protocol), or None when no provider is available / no_llm is set. Both
+    DeepSeekClient and the OpenAI adapter conform to the same interface, so the
+    Pipeline does not care which one it gets.
+    """
+    if no_llm:
+        return None
+    provider = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
+    has_openai = bool(config.openai_api_key)
+    use_openai = provider == "openai" or (provider == "auto" and has_openai)
+
+    if use_openai:
+        if not has_openai:
+            LOG.warning("LLM_PROVIDER=openai but OPENAI_API_KEY is unset — LLM disabled.")
+            return None
+        from mailmind.ml.llm_classifier import LLMClassifier, OpenAIAdapter
+        client = OpenAIAdapter(LLMClassifier(
+            api_key=config.openai_api_key, model=config.openai_model,
+        ))
+        LOG.info("LLM stage: enabled via OpenAI (%s)", config.openai_model)
+        return client
+
+    if config.llm_enabled:
+        LOG.info("LLM stage: enabled via DeepSeek (%s)", config.deepseek_model)
+        return DeepSeekClient(config)
+
+    LOG.info("LLM stage: disabled (no provider configured)")
+    return None
+
+
 def _build_classifier_router(rules_engine: RulesEngine) -> Optional["ClassifierRouter"]:
     """Build the router with the (mtime-cached) ML classifier.
 
     Returns a router even when the model isn't loaded so the rules tier
-    still runs; the pipeline degrades gracefully (rules + DeepSeek only).
-    LLM is disabled on the router itself — DeepSeek is wired separately on
+    still runs; the pipeline degrades gracefully (rules + LLM only).
+    LLM is disabled on the router itself — the LLM client is wired separately on
     the Pipeline; we don't want two LLM paths firing in parallel.
+
+    The ML tier is only attached when the loaded model has a measured accuracy
+    >= ML_MIN_ACCURACY. An unvalidated model (accuracy=None) is loaded for
+    metadata/visibility but not used for inference, so ambiguous mail flows past
+    it to the LLM rather than being intercepted by a rules-echoing model.
     """
     from mailmind.ml.classifier_router import ClassifierRouter
     classifier = _load_ml_classifier_cached()
+    ml_model = classifier
+    if classifier is not None:
+        meta = getattr(classifier, "_metadata", None)
+        acc = getattr(meta, "accuracy", None) if meta else None
+        if acc is None or acc < ML_MIN_ACCURACY:
+            LOG.info(
+                "ML tier disabled for inference: model accuracy=%s < %.2f "
+                "(unvalidated). Routing ambiguous mail to the LLM instead.",
+                acc, ML_MIN_ACCURACY,
+            )
+            ml_model = None
     return ClassifierRouter(
         rules_engine=rules_engine,
-        ml_model=classifier,
+        ml_model=ml_model,
         llm_classifier=None,
         llm_enabled=False,
     )
@@ -357,14 +418,9 @@ def _run_once(
     service = build_gmail_service(creds)
     fetcher = GmailFetcher(service)
 
-    # Initialize LLM client (Pass 7+)
+    # Initialize LLM client (Pass 7+) — provider selected by LLM_PROVIDER.
     config = MailMindConfig.from_env()
-    llm_client = None
-    if config.llm_enabled and not no_llm:
-        llm_client = DeepSeekClient(config)
-        LOG.info("LLM stage: enabled (%s)", config.deepseek_model)
-    else:
-        LOG.info("LLM stage: disabled")
+    llm_client = _build_llm_client(config, no_llm=no_llm)
 
     pipeline, queue_manager = _build_components(db, dry_run, service, llm_client=llm_client)
 
@@ -675,12 +731,9 @@ def _backfill_one_account(
     fetcher = GmailFetcher(service)
 
     config = MailMindConfig.from_env()
-    llm_client = None
-    if config.llm_enabled and not no_llm:
-        llm_client = DeepSeekClient(config)
-        LOG.info("[%s] Backfill LLM stage: enabled (%s)", label, config.deepseek_model)
-    else:
-        LOG.info("[%s] Backfill LLM stage: disabled (cost control)", label)
+    llm_client = _build_llm_client(config, no_llm=no_llm)
+    LOG.info("[%s] Backfill LLM stage: %s", label,
+             "enabled" if llm_client else "disabled (cost control)")
 
     # dry_run=True: a backfill must never mutate Gmail.
     pipeline, queue_manager = _build_components(db, dry_run=True, service=service,

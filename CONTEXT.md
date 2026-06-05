@@ -6116,6 +6116,7 @@ class MailMindConfig:
 | `LLM_ENABLED` | `false` | No | — |
 | `LLM_MAX_BODY_CHARS` | `1500` | No | — |
 | `LLM_ML_THRESHOLD` | `0.65` | No | — |
+| `LLM_PROVIDER` | `auto` | No | — |
 | `LLM_RULES_THRESHOLD` | `0.90` | No | — |
 | `MAILMIND_ACCOUNTS` | `""` (empty) | No | — |
 | `MAILMIND_DATA_DIR` | `~/.mailmind` | No | — |
@@ -7617,7 +7618,7 @@ class MailMindConfig:
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 7 complete. 645 tests passing.
+Pass 7 complete. 652 tests passing.
 datetime.utcnow() deprecation warnings pending cleanup.
 Next: Pass 8 — TBD (sender reputation / watch mode / deployment)
 <!-- AUTO:END:current_pass_notes -->

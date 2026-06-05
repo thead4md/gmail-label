@@ -178,6 +178,7 @@ class Pipeline:
             if (
                 thread_ctx.reply_needed
                 and self.llm_client is not None
+                and hasattr(self.llm_client, "summarize_thread")
                 and self._llm_calls_this_run < self.llm_max_calls_per_run
             ):
                 summary = self.llm_client.summarize_thread(
