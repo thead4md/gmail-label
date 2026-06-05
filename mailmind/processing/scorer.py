@@ -220,8 +220,8 @@ class PriorityScorer:
         if not sender_rep:
             return 0
         # If sender has high trust, boost (clamped 0-10)
-        if hasattr(sender_rep, 'trust_score') and sender_rep.trust_score:
-            return min(10, max(0, int(sender_rep.trust_score)))
+        if sender_rep.score:
+            return min(10, max(0, int(sender_rep.score)))
         return 0
 
     @staticmethod
