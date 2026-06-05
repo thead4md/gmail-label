@@ -10,6 +10,7 @@ MailMind is a Gmail classification and labelling tool that combines deterministi
 
 - **2026-06-01 — Earned autopilot per sender (P2B).** The blanket "auto-execute at confidence ≥ 0.90 regardless of sender" rule (`QueueManager.AUTO_EXECUTE_THRESHOLD = 0.90`) is **superseded** by an opt-in, per-sender authorisation: an action auto-executes only when the sender's `sender_profiles.auto_action_eligible = 1` AND the existing 0.90 confidence floor is met. Every other email queues for human review. Approved by the user via AskUserQuestion (option "Earned autopilot"). The 0.90 confidence floor itself is unchanged — this only narrows when it fires. SafetyPolicy invariants (no delete, protected categories, dry-run default) remain in force.
 - **2026-06-04 — Unified label taxonomy.** Consolidated four divergent label sets (ml/features.py, llm/deepseek.py, ml/llm_classifier.py, processing/scorer.py) into mailmind/taxonomy.py as the single source of truth. Re-scored two labels that previously had no LABEL_BASE_SCORES entry and silently defaulted to 30: CALENDAR 30→55 (calendar invites are time-sensitive), MASS_EMAIL 30→10 (bulk mail should rank low). scorer.compute_score now logs a warning on any unknown label instead of failing silently. QueueManager thresholds (0.90/0.65) unchanged.
+- **2026-06-05 — Full-suite bug-hunt & hardening.** A correctness sweep fixed real bugs without touching any frozen invariant (thresholds 0.90/0.65 and SafetyPolicy unchanged). Behaviourally significant items: (1) **earned autopilot was inert** — `Pipeline._create_prediction` hardcoded `prediction.confidence` to 0.85, below the 0.90 floor, so the 2026-06-01 decision *never actually fired* for any rules/ML/Tier-0 prediction; the router's real classification confidence is now threaded through, so an eligible sender at ≥0.90 auto-executes as designed. (2) **Manual trust is now sticky** — Know/Mute (`set_sender_trust_tier`) set `sender_profiles.tier_source='manual'` (migration 0025) and `update_sender_profile` no longer overwrites a manual tier on the next approve/reject. (3) **Corrected labels apply on approve** — `_execute_approved_action` now writes the user's most-recent `user_corrections.corrected_label` to Gmail instead of the model's stale prediction. Plus parser fixes (RFC 2047 decode, internalDate, comma-in-display-name recipients, stub-text/plain→HTML), NULL-account sender-rule dedupe, and account-stamped auto-exec rows. Test suite 681→697.
 
 ## Architecture
 ```mermaid
@@ -201,10 +202,11 @@ class MailMindConfig:
 | Pass 5 | Live Gmail ingestion | ✅ | `ingestion/auth.py`, `ingestion/fetcher.py`, `ingestion/parser.py` |
 | Pass 6 | Human-in-the-loop review | ✅ | `review_dashboard.py`, `processing/queue_manager.py`, `storage/queries.py` |
 | Pass 7 | DeepSeek LLM stage | ✅ | `llm/deepseek.py`, `config.py` (extended), `pipeline.py` (LLM stage) |
-| Pass 8 | TBD | 🔲 | — |
+| Pass 8 | Full-suite bug-hunt & hardening | ✅ | `pipeline.py`, `parser.py`, `queries.py`, `feedback.py`, `queue_manager.py`, `migrations.py` (0025), `dashboard/app.py` |
+| Pass 9 | TBD | 🔲 | — |
 
 ## Current State
-- Test count: 138
+- Test count: 697
 - Python version: 3.x
 - Key dependencies: `click>=8.0`, `google-api-python-client>=2.70.0`, `google-auth>=2.20.0`, `google-auth-oauthlib>=1.0.0`, `streamlit>=1.35.0`, `scikit-learn>=1.2.0`, `openai` (for DeepSeek), `cryptography>=41.0`, `keyring>=23.0`
 - LLM: deepseek-chat (optional, skips if no `DEEPSEEK_API_KEY`)
