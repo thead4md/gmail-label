@@ -1,29 +1,51 @@
 """Gmail fetcher wrapper for MailMind.
 
 Provides small, testable wrappers around Gmail API calls: listing message ids,
-fetching messages, and polling for changes using historyId.
+fetching messages in batches, and applying labels.
 """
 from __future__ import annotations
 
 import logging
+import socket
+import ssl
 import time
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any
 
 from googleapiclient.errors import HttpError
+
+try:  # google-auth ships a transport-level transient error; optional at import
+    from google.auth.exceptions import TransportError as _GoogleTransportError
+    _OPTIONAL_TRANSIENT: tuple = (_GoogleTransportError,)
+except Exception:  # pragma: no cover - defensive
+    _OPTIONAL_TRANSIENT = ()
+
+# Transient failures worth retrying: Gmail HTTP errors plus low-level transport
+# hiccups (reset connections, SSL blips, timeouts) that are NOT HttpError and
+# would otherwise abort a whole fetch cycle on the first attempt.
+_TRANSIENT_ERRORS: tuple = (
+    HttpError, ConnectionError, TimeoutError, socket.timeout, ssl.SSLError,
+) + _OPTIONAL_TRANSIENT
 
 LOG = logging.getLogger(__name__)
 
 
-def _retry(func, retries=3, backoff=1.0, allowed=(HttpError,)):
-    """Simple retry helper for HTTP-bound operations."""
+def _retry(func, retries=3, backoff=1.0, allowed=_TRANSIENT_ERRORS):
+    """Retry helper for HTTP/transport-bound operations.
+
+    Retries on transient failures (Gmail HttpError plus connection/SSL/timeout
+    errors), so a dropped connection mid-cycle is retried rather than bubbling up
+    and aborting the fetch. Re-raises the last error once retries are exhausted.
+    """
     for attempt in range(1, retries + 1):
         try:
             return func()
         except allowed as e:
-            LOG.debug("HTTP error on attempt %s: %s", attempt, e)
+            LOG.debug("Transient error on attempt %s: %s", attempt, e)
             if attempt == retries:
                 raise
             time.sleep(backoff * attempt)
+    # Only reachable if retries < 1 — never silently return None.
+    raise RuntimeError("_retry called with retries < 1")
 
 
 class GmailFetcher:
@@ -176,54 +198,4 @@ class GmailFetcher:
             submitted += len(chunk)
             time.sleep(self.rate_limit_seconds)
         return submitted
-
-    def get_history(self, start_history_id: int, history_types: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Retrieve history records since `start_history_id`.
-
-        Returns the raw history response which may include added messages and labels.
-        """
-        def call():
-            return (
-                self.service.users()
-                .history()
-                .list(userId=self.user_id, startHistoryId=str(start_history_id), historyTypes=history_types or ["messageAdded", "labelsAdded"]).execute()
-            )
-
-        return _retry(call)
-
-    def poll_new_messages(self, start_history_id: int, handler: Callable[[Dict[str, Any]], None], poll_interval: int = 120):
-        """Poll the Gmail history API and call `handler` for each new message item.
-
-        This is a simple blocking poller intended for CLI/daemon use in MVP.
-        It yields nothing and runs until interrupted.
-        """
-        current_history_id = start_history_id
-        LOG.info("Starting history poller from historyId=%s", start_history_id)
-        try:
-            while True:
-                try:
-                    resp = self.get_history(current_history_id)
-                except HttpError as e:
-                    LOG.warning("History fetch failed: %s", e)
-                    time.sleep(poll_interval)
-                    continue
-
-                if not resp:
-                    time.sleep(poll_interval)
-                    continue
-
-                history = resp.get("history", [])
-                for item in history:
-                    # items can contain messageAdded entries
-                    handler(item)
-                # Update history id to the latest if provided
-                if "historyId" in resp:
-                    try:
-                        current_history_id = int(resp["historyId"]) + 1
-                    except Exception:
-                        pass
-
-                time.sleep(poll_interval)
-        except KeyboardInterrupt:
-            LOG.info("Poller interrupted by user")
 
