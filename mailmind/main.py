@@ -623,6 +623,47 @@ def _maybe_refresh_labels(db: Database, interval_seconds: int = 86400) -> None:
         LOG.warning("label refresh skipped: %s", exc)
 
 
+def _maybe_suggest_labels(
+    db: Database,
+    interval_seconds: int = 45 * 86400,
+    no_llm: bool = False,
+) -> None:
+    """Periodically mine the recent email window for NEW label suggestions.
+
+    Runs at most once per interval (~1.5 months). Clusters generic/low-confidence
+    mail, names coherent themes (LLM when available), and stores them as 'pending'
+    label_suggestions for review in the dashboard. Review-only — nothing is applied.
+    Failures never take down the watch loop.
+    """
+    try:
+        last = db.get_state("last_label_suggest_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+        from mailmind.intelligence.label_discovery import suggest_labels
+
+        llm_client = None
+        if not no_llm:
+            try:
+                config = MailMindConfig.from_env()
+                llm_client = _build_llm_client(config, no_llm=False)
+            except Exception as exc:
+                LOG.debug("Label discovery: no LLM client (%s); using keyword names.", exc)
+
+        accounts = MailMindConfig.load_accounts() or [None]
+        total = 0
+        for acct in accounts:
+            try:
+                added = suggest_labels(db, account=acct, llm_client=llm_client)
+                total += len(added)
+            except Exception as exc:
+                LOG.warning("Label discovery failed for %s: %s", acct or "primary", exc)
+        db.set_state("last_label_suggest_ts", str(now))
+        LOG.info("Label discovery complete: %d new suggestion(s).", total)
+    except Exception as exc:
+        LOG.warning("Label discovery skipped: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -672,6 +713,7 @@ def run(
                 _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
                 _maybe_refresh_labels(db)
+                _maybe_suggest_labels(db, no_llm=no_llm)
                 _record_heartbeat(db)
             except KeyboardInterrupt:
                 raise
@@ -1050,6 +1092,47 @@ def accounts() -> None:
         tag = "primary" if i == 0 else "secondary"
         status = "connected" if connected else "NOT connected"
         click.echo(f"  - {acct}  [{tag}]  {status}")
+
+
+@cli.command(name="suggest-labels")
+@click.option("--window-days", default=60, type=int,
+              help="Recent email window to mine (default: 60).")
+@click.option("--account", default=None, help="Scope to a single mailbox (default: all).")
+@click.option("--max-suggestions", default=5, type=int, help="Max suggestions per account.")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Name clusters from keywords only (no LLM call).")
+@click.option("--force", is_flag=True, default=False,
+              help="Ignore the ~45-day cadence and run now.")
+def suggest_labels_cmd(window_days: int, account: Optional[str],
+                       max_suggestions: int, no_llm: bool, force: bool) -> None:
+    """Mine the recent email window for NEW label suggestions (review-only).
+
+    Clusters generic/low-confidence mail, names coherent themes (LLM when
+    available), and stores 'pending' suggestions for review in the dashboard.
+    """
+    from mailmind.intelligence.label_discovery import suggest_labels as _suggest
+    db = _get_db()
+    if force:
+        db.set_state("last_label_suggest_ts", "0")
+
+    llm_client = None
+    if not no_llm:
+        try:
+            llm_client = _build_llm_client(MailMindConfig.from_env(), no_llm=False)
+        except Exception as exc:
+            LOG.warning("No LLM client (%s); naming from keywords.", exc)
+
+    targets = [account] if account else (MailMindConfig.load_accounts() or [None])
+    total = 0
+    for acct in targets:
+        added = _suggest(db, window_days=window_days, account=acct,
+                         max_suggestions=max_suggestions, llm_client=llm_client)
+        for s in added:
+            click.echo(f"  + {s['label']}  ({s['size']} emails)  — {s['rationale']}")
+        total += len(added)
+    db.set_state("last_label_suggest_ts", str(int(time.time())))
+    click.echo(f"Label discovery complete: {total} new suggestion(s) across "
+               f"{len(targets)} mailbox(es). Review them in the dashboard.")
 
 
 if __name__ == "__main__":

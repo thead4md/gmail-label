@@ -1017,6 +1017,49 @@ def render_automate_tab(account: Optional[str] = None) -> None:
         else:
             st.warning("Please enter a rule description.")
 
+    # ── Suggested labels (discovery loop) ───────────────────────────
+    _section("🏷️", "Suggested labels")
+    from mailmind.storage.queries import (
+        get_label_suggestions, set_label_suggestion_status,
+    )
+    suggestions = get_label_suggestions(db, status="pending")
+    if not suggestions:
+        st.caption(
+            "No pending suggestions. The discovery loop mines your recent mail "
+            "for recurring themes you have no label for, about every 1–2 months."
+        )
+    else:
+        st.caption(
+            f"{len(suggestions)} new label idea(s) from your recent mail — "
+            "adopt one to start sorting that theme, or dismiss it."
+        )
+        for s in suggestions:
+            sid = s["id"]
+            title = f"🏷️ {s['suggested_label']}  ·  {s.get('email_count', 0)} emails"
+            with st.expander(title, expanded=False):
+                if s.get("rationale"):
+                    st.markdown(f"**Why:** {html.escape(str(s['rationale']))}")
+                if s.get("cluster_terms"):
+                    st.caption("Keywords: " + html.escape(str(s["cluster_terms"])))
+                c_adopt, c_dismiss = st.columns(2)
+                with c_adopt:
+                    if st.button("✅ Adopt", key=f"sugg_adopt_{sid}",
+                                 use_container_width=True):
+                        set_label_suggestion_status(db, sid, "accepted")
+                        _invalidate()
+                        st.toast(
+                            f"Adopted '{s['suggested_label']}'. Create a rule or "
+                            "correct a few emails to start applying it.", icon="✅",
+                        )
+                        st.rerun()
+                with c_dismiss:
+                    if st.button("🗑️ Dismiss", key=f"sugg_dismiss_{sid}",
+                                 use_container_width=True):
+                        set_label_suggestion_status(db, sid, "dismissed")
+                        _invalidate()
+                        st.toast("Suggestion dismissed.", icon="🗑️")
+                        st.rerun()
+
     # ── Model health ────────────────────────────────────────────────
     _section("🤖", "Model health")
     model_meta = _c_model_metadata()

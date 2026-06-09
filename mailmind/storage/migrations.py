@@ -299,6 +299,33 @@ MIGRATIONS: List[Tuple[str, str]] = [
         "0025_add_tier_source_to_sender_profiles",
         """-- Handled in apply_migrations: adds tier_source column to sender_profiles.""",
     ),
+    (
+        "0026_create_label_suggestions",
+        """
+        -- Periodic label-discovery output. The watch loop clusters the recent
+        -- email content window and proposes NEW labels the user doesn't have yet.
+        -- Review-only: rows start 'pending' and the user accepts/dismisses in the
+        -- dashboard. A UNIQUE(suggested_label) keeps re-runs idempotent — the same
+        -- theme is not proposed twice.
+        CREATE TABLE IF NOT EXISTS label_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suggested_label TEXT NOT NULL,
+            rationale TEXT,
+            cluster_terms TEXT,
+            example_gmail_ids TEXT,
+            email_count INTEGER DEFAULT 0,
+            score REAL,
+            account TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            reviewed_at INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_label_suggestions_label
+            ON label_suggestions(suggested_label);
+        CREATE INDEX IF NOT EXISTS idx_label_suggestions_status
+            ON label_suggestions(status);
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
