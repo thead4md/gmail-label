@@ -1,11 +1,42 @@
 from __future__ import annotations
 
+import functools
+import hashlib
 import html
 import json
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from mailmind.processing.queue_manager import QueueManager
+
+
+# ---------------------------------------------------------------------------
+# HTML memoization
+# ---------------------------------------------------------------------------
+
+def _memoize_by_data(maxsize: int = 16):
+    """Cache a pure HTML builder by a stable hash of its (single) list-of-dicts
+    argument, so identical data across reruns reuses the assembled string instead
+    of rebuilding hundreds of <tr>. The cache is bounded; oldest entries drop."""
+    def decorator(fn):
+        cache: "dict[str, str]" = {}
+
+        @functools.wraps(fn)
+        def wrapper(data):
+            try:
+                key = hashlib.md5(
+                    json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+            except (TypeError, ValueError):
+                return fn(data)  # unhashable payload — skip the cache
+            if key not in cache:
+                if len(cache) >= maxsize:
+                    cache.pop(next(iter(cache)))
+                cache[key] = fn(data)
+            return cache[key]
+
+        return wrapper
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +376,7 @@ def email_preview_html(snippet: Optional[str]) -> str:
     return f'<div class="mm-preview-box">{safe}</div>'
 
 
+@_memoize_by_data()
 def sender_table_html(profiles: List[Dict[str, Any]]) -> str:
     """Styled HTML table for sender profiles (replaces st.dataframe)."""
     if not profiles:
@@ -386,6 +418,7 @@ def history_badge_html(was_auto: bool) -> str:
     )
 
 
+@_memoize_by_data()
 def corrections_table_html(corrections: List[Dict[str, Any]]) -> str:
     """Styled .mm-table for correction history."""
     if not corrections:
