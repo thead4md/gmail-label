@@ -39,6 +39,52 @@ GENERIC_LABELS = {"NEWSLETTER", "NOTIFICATION", "MASS_EMAIL", "OTHER", "UNKNOWN"
 
 _TOKEN_RE = re.compile(r"[a-z][a-z0-9]{2,}")
 
+# This mailbox is largely Hungarian; sklearn only ships English stopwords, so
+# without these the clusters get named by Hungarian filler/greeting words
+# ("hogy", "kedves", "sziasztok"…) instead of by topic.
+_HUNGARIAN_STOPWORDS = {
+    "hogy", "nem", "egy", "isten", "szia", "sziasztok", "kedves", "tisztelt",
+    "üdv", "udv", "udvozlettel", "üdvözlettel", "köszönöm", "koszonom", "koszi",
+    "köszi", "ezt", "azt", "ami", "mint", "csak", "még", "meg", "már", "mar",
+    "vagy", "lesz", "volt", "lenne", "kell", "lehet", "lehetne", "ezek", "azok",
+    "ehhez", "ahhoz", "minden", "illetve", "valamint", "tehát", "tehat", "ill",
+    "stb", "pedig", "azonban", "amely", "amelyek", "akik", "aki", "ezzel",
+    "ezért", "ezert", "miatt", "után", "utan", "előtt", "elott", "során", "soran",
+    "felé", "fele", "részére", "reszere", "számára", "szamara", "esetén", "eseten",
+    "com", "www", "http", "https", "gmail", "email", "mail", "from", "subject",
+}
+
+
+def _stop_words() -> list:
+    """English + Hungarian stopwords as a list for TfidfVectorizer."""
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+    return sorted(set(ENGLISH_STOP_WORDS) | _HUNGARIAN_STOPWORDS)
+
+
+def _chat_complete(llm_client, system: str, user: str, max_tokens: int = 60) -> str:
+    """Single chat completion that works for both LLM client shapes.
+
+    - DeepSeekClient exposes `.client` (an OpenAI-compatible client) + `.model`.
+    - OpenAIAdapter wraps an LLMClassifier (`.classifier.api_key` / `.model`) and
+      constructs the OpenAI client on demand, with no persistent `.client`.
+    """
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    client = getattr(llm_client, "client", None)
+    model = getattr(llm_client, "model", None)
+    if client is not None and model:
+        resp = client.chat.completions.create(
+            model=model, messages=messages, temperature=0.2, max_tokens=max_tokens)
+        return resp.choices[0].message.content or ""
+    inner = getattr(llm_client, "classifier", None)
+    if inner is not None and getattr(inner, "api_key", None):
+        import openai
+        oc = openai.OpenAI(api_key=inner.api_key)
+        resp = oc.chat.completions.create(
+            model=getattr(inner, "model", "gpt-4o-mini"),
+            messages=messages, temperature=0.2, max_tokens=max_tokens)
+        return resp.choices[0].message.content or ""
+    raise RuntimeError("no usable LLM chat interface on client")
+
 
 def _fetch_window(db: Database, window_days: int, account: Optional[str]) -> List[Dict[str, Any]]:
     """Recent emails on a generic/empty label, joined to their content."""
@@ -80,23 +126,21 @@ def _llm_name(llm_client, terms: List[str], subjects: List[str]) -> Optional[Dic
         sample = "\n".join(f"- {s}" for s in subjects[:6] if s)
         kw = ", ".join(terms[:10])
         prompt = (
-            "These emails form one recurring theme that the user has no label for.\n"
+            "These emails (mostly Hungarian) form one recurring theme the user has "
+            "no label for.\n"
             f"Top keywords: {kw}\n"
             f"Example subjects:\n{sample}\n\n"
-            "Propose ONE short label (1-2 words, Title_Case, no spaces — use _) and a "
-            "one-line rationale (max 90 chars). Respond EXACTLY as:\n"
+            "Propose ONE short, meaningful English label (1-2 words, Title_Case, no "
+            "spaces — use _) describing the TOPIC (ignore greetings/filler words), "
+            "plus a one-line rationale (max 90 chars). Respond EXACTLY as:\n"
             "LABEL: <label>\nWHY: <rationale>"
         )
-        resp = llm_client.client.chat.completions.create(
-            model=llm_client.model,
-            messages=[
-                {"role": "system", "content": "You name email categories concisely."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
+        content = _chat_complete(
+            llm_client,
+            "You name email categories concisely by topic.",
+            prompt,
             max_tokens=60,
-        )
-        content = (resp.choices[0].message.content or "").strip()
+        ).strip()
         label, why = "", ""
         for line in content.splitlines():
             if line.upper().startswith("LABEL:"):
@@ -139,7 +183,7 @@ def suggest_labels(
     from sklearn.cluster import KMeans
     import numpy as np
 
-    vec = TfidfVectorizer(max_features=2000, stop_words="english",
+    vec = TfidfVectorizer(max_features=2000, stop_words=_stop_words(),
                           token_pattern=r"(?u)[a-z][a-z0-9]{2,}", lowercase=True)
     try:
         X = vec.fit_transform(corpus)
