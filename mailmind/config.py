@@ -111,6 +111,14 @@ class MailMindConfig:
     sender_weight: float = 0.20
     sender_prior_min_count: int = 3
 
+    # Fold content rules INTO the content channel instead of letting the rules
+    # engine hard-short-circuit at Tier 1. When True, a confident content rule no
+    # longer pre-empts the ML/blend; instead it contributes a weighted vote to the
+    # content distribution (content_rule_weight) and the 80/20 content/sender blend
+    # decides the label. Default False preserves the legacy rules-first cascade.
+    fold_rules_into_content: bool = False
+    content_rule_weight: float = 0.30
+
     # Data directory
     data_dir: str = field(
         default_factory=lambda: os.path.expanduser(
@@ -174,12 +182,19 @@ class MailMindConfig:
             LOG.warning("Invalid DEEPSEEK_MAX_CALLS_PER_RUN, using default 10")
 
         blend_enabled = os.environ.get("BLEND_ENABLED", "true").lower() != "false"
+        fold_rules_into_content = (
+            os.environ.get("FOLD_RULES_INTO_CONTENT", "false").lower() == "true"
+        )
         try:
             content_weight = float(os.environ.get("CONTENT_WEIGHT", "0.80"))
             sender_weight = float(os.environ.get("SENDER_WEIGHT", "0.20"))
             sender_prior_min_count = int(os.environ.get("SENDER_PRIOR_MIN_COUNT", "3"))
         except (ValueError, TypeError):
             content_weight, sender_weight, sender_prior_min_count = 0.80, 0.20, 3
+        try:
+            content_rule_weight = float(os.environ.get("CONTENT_RULE_WEIGHT", "0.30"))
+        except (ValueError, TypeError):
+            content_rule_weight = 0.30
 
         config = cls(
             deepseek_api_key=deepseek_api_key,
@@ -211,6 +226,8 @@ class MailMindConfig:
             content_weight=content_weight,
             sender_weight=sender_weight,
             sender_prior_min_count=sender_prior_min_count,
+            fold_rules_into_content=fold_rules_into_content,
+            content_rule_weight=content_rule_weight,
         )
 
         LOG.debug(

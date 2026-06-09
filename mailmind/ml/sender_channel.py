@@ -75,6 +75,65 @@ def build_sender_distribution(
     return {}
 
 
+def build_content_distribution(
+    ml_proba: dict,
+    rules_label: Optional[str],
+    rules_confidence: float,
+    rule_weight: float = 0.30,
+) -> dict:
+    """Compose the CONTENT-channel distribution from the ML model + content rules.
+
+    This replaces the old "rules hard-short-circuit at Tier 1" behaviour: instead
+    of a confident content rule pre-empting the ML/blend, the rule contributes a
+    weighted vote to the content distribution and the downstream 80/20
+    content/sender blend decides the final label.
+
+    Combination logic:
+      * No ML proba and no rule    → {} (abstain; caller falls back).
+      * ML proba only              → ML proba unchanged.
+      * Rule only (ML abstained)   → a single-label distribution for the rule.
+      * Both                       → normalise( (1-rule_weight)*ML + rule_weight*rule_vote ).
+
+    The rule is modelled as a single-label vote {rules_label: rules_confidence};
+    its mass is mixed in at `rule_weight` so the learned content model stays in
+    the lead while a strong, reliable rule (e.g. NEWSLETTER bulk detection) still
+    pulls the distribution toward its label.
+
+    Args:
+        ml_proba: ML label probabilities {label: prob} (already ~normalised), or {}.
+        rules_label: The content-rule label, or None when no labeling rule matched.
+        rules_confidence: Confidence of the content rule in [0, 1].
+        rule_weight: Weight of the rule vote within the content channel (default 0.30).
+
+    Returns:
+        Normalised content distribution {label: prob}, or {} to abstain.
+    """
+    ml_proba = ml_proba or {}
+    has_rule = bool(rules_label) and rules_confidence > 0.0
+    p_rule = {rules_label: min(rules_confidence, 1.0)} if has_rule else {}
+
+    if not ml_proba and not p_rule:
+        return {}
+    if not p_rule:
+        return dict(ml_proba)
+    if not ml_proba:
+        # Rule-only: normalise the single-label vote to a proper distribution.
+        total = sum(p_rule.values())
+        return {lbl: v / total for lbl, v in p_rule.items()} if total > 0 else {}
+
+    rule_weight = min(max(rule_weight, 0.0), 1.0)
+    ml_weight = 1.0 - rule_weight
+    all_labels = set(ml_proba) | set(p_rule)
+    mixed = {
+        lbl: ml_weight * ml_proba.get(lbl, 0.0) + rule_weight * p_rule.get(lbl, 0.0)
+        for lbl in all_labels
+    }
+    total = sum(mixed.values())
+    if total <= 0:
+        return dict(ml_proba)
+    return {lbl: v / total for lbl, v in mixed.items()}
+
+
 def blend_distributions(
     p_content: dict,
     p_sender: dict,

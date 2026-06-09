@@ -62,6 +62,8 @@ class ClassifierRouter:
         content_weight: float = 0.80,
         sender_weight: float = 0.20,
         sender_prior_min_count: int = 3,
+        fold_rules_into_content: bool = False,
+        content_rule_weight: float = 0.30,
     ):
         self.rules_engine = rules_engine
         self.ml_model = ml_model
@@ -73,6 +75,8 @@ class ClassifierRouter:
         self.content_weight = content_weight
         self.sender_weight = sender_weight
         self.sender_prior_min_count = sender_prior_min_count
+        self.fold_rules_into_content = fold_rules_into_content
+        self.content_rule_weight = content_rule_weight
 
     def route(
         self,
@@ -133,7 +137,10 @@ class ClassifierRouter:
         matched_rules = [m for m in rule_matches if m.matched]
         rules_label, rules_confidence = self._extract_rules_result(matched_rules, email)
 
-        if rules_confidence >= self.rules_threshold:
+        # Tier-1 hard short-circuit. Disabled when fold_rules_into_content is on:
+        # in that mode a confident content rule no longer pre-empts the blend; it
+        # instead contributes a weighted vote to the content distribution below.
+        if not self.fold_rules_into_content and rules_confidence >= self.rules_threshold:
             LOG.debug(
                 "Tier 1 (rules) handles email %s: label=%s confidence=%.4f",
                 email.gmail_id, rules_label, rules_confidence,
@@ -163,47 +170,72 @@ class ClassifierRouter:
                 LOG.warning("ML inference failed for %s: %s", email.gmail_id, e)
 
         # --- BLEND PATH (80% content / 20% sender) ---
-        # Bug #1 fix: only enter blend when ML clears the same confidence floor as
-        # the old cascade (ml_threshold=0.65 default).  Low-confidence ML must fall
-        # through to LLM / fallback instead of short-circuiting via the blend path.
-        if (self.blend_enabled and ml_available and ml_label_probabilities
-                and ml_confidence >= self.ml_threshold):
-            from .sender_channel import build_sender_distribution, blend_distributions
-            p_sender = build_sender_distribution(
-                sender=email.sender or "",
-                db=db,
-                account=account,
-                min_count=self.sender_prior_min_count,
+        # Build the CONTENT-channel distribution:
+        #   * legacy (fold off): content = ML proba, and only when ML clears the
+        #     ml_threshold floor (Bug #1 fix). A confident content rule has already
+        #     short-circuited above via Tier 1.
+        #   * fold on: content = ML proba + content-rule vote (build_content_distribution),
+        #     so a confident rule contributes to — rather than pre-empts — the blend.
+        if self.blend_enabled:
+            from .sender_channel import (
+                build_sender_distribution,
+                blend_distributions,
+                build_content_distribution,
             )
-            p_blended = blend_distributions(
-                p_content=ml_label_probabilities,
-                p_sender=p_sender,
-                content_weight=self.content_weight,
-                sender_weight=self.sender_weight,
-            )
-            blend_label = max(p_blended, key=p_blended.get)
-            blend_confidence = p_blended[blend_label]
-            # Bug #3 fix: if the blended winner is OTHER, fall through to LLM / fallback
-            # rather than returning a generic catch-all label.
-            if blend_label == "OTHER":
-                LOG.debug(
-                    "Blend for %s resolved to OTHER (%.2f); falling through to cascade/LLM.",
-                    email.gmail_id, blend_confidence,
+            if self.fold_rules_into_content:
+                p_content = build_content_distribution(
+                    ml_proba=ml_label_probabilities,
+                    rules_label=rules_label,
+                    rules_confidence=rules_confidence,
+                    rule_weight=self.content_rule_weight,
                 )
             else:
-                LOG.info(
-                    "Blend for %s: content=%s(%.2f) sender=%s → %s(%.2f) [sender_abstained=%s]",
-                    email.gmail_id, ml_label, ml_confidence,
-                    "abstained" if not p_sender else str(sorted(p_sender.items())),
-                    blend_label, blend_confidence, not p_sender,
+                p_content = (
+                    ml_label_probabilities
+                    if (ml_available and ml_confidence >= self.ml_threshold)
+                    else {}
                 )
-                return RoutingResult(
-                    source="blend",
-                    label=blend_label,
-                    confidence=round(blend_confidence, 4),
-                    content_distribution=ml_label_probabilities,
-                    sender_distribution=p_sender or None,
+
+            if p_content:
+                p_sender = build_sender_distribution(
+                    sender=email.sender or "",
+                    db=db,
+                    account=account,
+                    min_count=self.sender_prior_min_count,
                 )
+                p_blended = blend_distributions(
+                    p_content=p_content,
+                    p_sender=p_sender,
+                    content_weight=self.content_weight,
+                    sender_weight=self.sender_weight,
+                )
+                blend_label = max(p_blended, key=p_blended.get)
+                blend_confidence = p_blended[blend_label]
+                # Bug #3 fix: an OTHER winner falls through to LLM / fallback. We do
+                # NOT impose an absolute confidence floor here — content distributions
+                # spread mass across many classes, so a valid label often tops out
+                # below ml_threshold. The pipeline escalates low-confidence blends to
+                # the LLM via LLM_FALLBACK_FLOOR, so a second router-level gate would
+                # only dump good content labels to generic fallback.
+                if blend_label == "OTHER":
+                    LOG.debug(
+                        "Blend for %s → OTHER(%.2f); falling through to cascade/LLM.",
+                        email.gmail_id, blend_confidence,
+                    )
+                else:
+                    LOG.info(
+                        "Blend for %s: content=%s(%.2f) sender=%s → %s(%.2f) [sender_abstained=%s]",
+                        email.gmail_id, ml_label or rules_label, ml_confidence,
+                        "abstained" if not p_sender else str(sorted(p_sender.items())),
+                        blend_label, blend_confidence, not p_sender,
+                    )
+                    return RoutingResult(
+                        source="blend",
+                        label=blend_label,
+                        confidence=round(blend_confidence, 4),
+                        content_distribution=p_content,
+                        sender_distribution=p_sender or None,
+                    )
 
         # --- NON-BLEND: old cascade (blend_enabled=False or no ML) ---
         if ml_available and ml_confidence >= self.ml_threshold and ml_label != "OTHER":
