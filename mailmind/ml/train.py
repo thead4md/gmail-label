@@ -17,7 +17,7 @@ from typing import List, Tuple, Optional
 
 from ..storage.database import Database
 from ..storage.models import Email  # noqa: F401 - used for type hints
-from .features import extract_features, FeatureVector, VALID_LABELS, build_model_text
+from .features import extract_features, FeatureVector, VALID_LABELS, build_content_text
 from .model import MLClassifier, ModelMetadata
 
 LOG = logging.getLogger(__name__)
@@ -152,12 +152,12 @@ def _collect_training_data_from_db(
             continue
         # NOTE: VALID_LABELS filter removed — taxonomy is now whatever you actually use.
 
-        # Build a text corpus from available fields
+        # Build a text corpus from available fields (content-only: no sender)
         subject = row["subject"] or ""
         snippet = row["snippet"] or ""
         body = row["body_text"] or ""
         sender = row["sender"] or ""
-        text = build_model_text(subject, sender, snippet, body)
+        text = build_content_text(subject, snippet, body)
 
         if not text:
             continue
@@ -246,7 +246,7 @@ def _collect_training_data_from_db(
         snippet = row["snippet"] or ""
         body = row["body_text"] or ""
         sender = row["sender"] or ""
-        text = build_model_text(subject, sender, snippet, body)
+        text = build_content_text(subject, snippet, body)
 
         if not text:
             continue

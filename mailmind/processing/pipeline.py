@@ -47,7 +47,7 @@ def resolve_label_precedence(
     the spot where "silent override" bugs kept appearing, so it is now one pure,
     independently-tested function. Precedence, highest first:
 
-      1. Router classified via a real tier ('rule'/'rules'/'ml'/'llm') → that label.
+      1. Router classified via a real tier ('rule'/'rules'/'ml'/'llm'/'blend') → that label.
       2. Router 'fallback' AND a usable LLM label (conf ≥ fallback floor) → LLM label.
       3. Router 'fallback' AND no usable LLM → the router's fallback label.
       4. No router AND a confident LLM (conf ≥ override floor) → LLM label.
@@ -79,9 +79,9 @@ def resolve_label_precedence(
             source = "llm"
             pipeline = "hybrid"
         else:
-            source = routing_source          # cases 1 & 3
+            source = routing_source          # cases 1, 3 and blend
             primary = routing_label
-            pipeline = routing_source
+            pipeline = "hybrid" if routing_source == "blend" else routing_source
 
     return primary, source, pipeline
 
@@ -191,9 +191,18 @@ class Pipeline:
         # never spend a paid LLM call on it. "rules"/"ml" = a cheaper tier already
         # classified confidently. Only the low-confidence "fallback" (or no router)
         # should reach the LLM.
-        ml_or_rules_handled = (
+        # Bug #2 fix: treat "blend" as handled only when blend confidence clears the
+        # LLM_FALLBACK_FLOOR — a low-confidence blend should still reach the LLM.
+        # Hard rule tiers ("rule"/"rules") and confident ML always skip the LLM.
+        _blend_confident = (
             routing_result is not None
-            and routing_result.source in ("rule", "rules", "ml")
+            and routing_result.source == "blend"
+            and routing_result.confidence >= self.LLM_FALLBACK_FLOOR
+        )
+        ml_or_rules_handled = (
+            (routing_result is not None
+             and routing_result.source in ("rule", "rules", "ml"))
+            or _blend_confident
         )
         llm_result = None
         if (
@@ -370,6 +379,14 @@ class Pipeline:
             if llm_result.primary_label not in final_labels:
                 final_labels.append(llm_result.primary_label)
             breakdown_dict["llm"] = llm_result.to_scoring_breakdown_entry()
+            scoring_breakdown = json.dumps(breakdown_dict)
+
+        # --- Bug #5 fix: persist blend channel distributions for audit / debugging ---
+        if (routing_result is not None and routing_result.source == "blend"):
+            if routing_result.content_distribution:
+                breakdown_dict["blend_content"] = routing_result.content_distribution
+            if routing_result.sender_distribution:
+                breakdown_dict["blend_sender"] = routing_result.sender_distribution
             scoring_breakdown = json.dumps(breakdown_dict)
 
         # --- Single source of truth for label precedence ---

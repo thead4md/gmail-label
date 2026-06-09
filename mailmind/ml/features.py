@@ -136,6 +136,33 @@ def build_model_text(subject, sender, snippet="", body_text="") -> str:
     return (f"{base} " + " ".join(tokens)).strip() if tokens else base
 
 
+def build_content_text(subject, snippet="", body_text="") -> str:
+    """Content-only TF-IDF input — no sender identity, no domain token.
+
+    Used by the content channel of the 80/20 blend so sender information is
+    not double-counted (it lives in the sender channel at 20% weight instead).
+    Train and infer must both call this function — they share the invariant
+    expressed in build_model_text's docstring.
+    """
+    subject = (subject or "").strip()
+    snippet = (snippet or "").strip()
+    body = (body_text or "")[:500]
+    base = f"{subject} {snippet} {body}".strip()
+
+    blob = base.lower()
+    tokens: List[str] = []
+    if _UNSUBSCRIBE_FEATURE_RE.search(blob):
+        tokens.append("feat_unsub")
+    if _CALENDAR_RE.search(blob):
+        tokens.append("feat_calendar")
+    if _FINANCE_RE.search(blob):
+        tokens.append("feat_finance")
+    if subject.lower().startswith(("re:", "re ", "fwd:", "fw:", "aw:")):
+        tokens.append("feat_reply")
+
+    return (f"{base} " + " ".join(tokens)).strip() if tokens else base
+
+
 def extract_features(email: Email, true_label: Optional[str] = None) -> FeatureVector:
     """Extract a FeatureVector from an Email model.
 

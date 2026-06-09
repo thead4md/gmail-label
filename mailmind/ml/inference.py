@@ -71,14 +71,12 @@ def predict_label(
         )
 
     try:
-        # Build the SAME text the trainer used (subject+snippet+sender+body +
-        # engineered feature tokens). Using build_model_text here keeps train and
-        # inference in lockstep — previously inference omitted the body the model
-        # was trained on.
-        from .features import build_model_text
-        text_corpus = build_model_text(
+        # Build the SAME text the trainer used (content-only — no sender identity).
+        # build_content_text keeps train and inference in lockstep; the sender
+        # signal lives in the 20% sender channel of the blend, not here.
+        from .features import build_content_text
+        text_corpus = build_content_text(
             subject=getattr(email, "subject", None),
-            sender=getattr(email, "sender", None),
             snippet=getattr(email, "snippet", None),
             body_text=getattr(email, "body_text", None),
         )

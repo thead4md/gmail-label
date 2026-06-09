@@ -104,7 +104,7 @@ def _build_components(
     # email) and wire a ClassifierRouter so rules->ML->LLM tiering actually
     # happens. When ML is confident enough, the paid DeepSeek call is skipped.
     # If no model file is on disk, router still works (rules + LLM only).
-    classifier_router = _build_classifier_router(rules_engine)
+    classifier_router = _build_classifier_router(rules_engine, config=config)
 
     pipeline = Pipeline(
         db=db,
@@ -230,7 +230,7 @@ def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
     return None
 
 
-def _build_classifier_router(rules_engine: RulesEngine) -> Optional["ClassifierRouter"]:
+def _build_classifier_router(rules_engine: RulesEngine, config=None) -> Optional["ClassifierRouter"]:
     """Build the router with the (mtime-cached) ML classifier.
 
     Returns a router even when the model isn't loaded so the rules tier
@@ -256,11 +256,20 @@ def _build_classifier_router(rules_engine: RulesEngine) -> Optional["ClassifierR
                 acc, ML_MIN_ACCURACY,
             )
             ml_model = None
+    blend_kwargs = {}
+    if config is not None:
+        blend_kwargs = {
+            "blend_enabled": config.blend_enabled,
+            "content_weight": config.content_weight,
+            "sender_weight": config.sender_weight,
+            "sender_prior_min_count": config.sender_prior_min_count,
+        }
     return ClassifierRouter(
         rules_engine=rules_engine,
         ml_model=ml_model,
         llm_classifier=None,
         llm_enabled=False,
+        **blend_kwargs,
     )
 
 

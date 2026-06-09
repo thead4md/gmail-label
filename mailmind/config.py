@@ -105,6 +105,12 @@ class MailMindConfig:
     openai_ml_threshold: float = 0.65
     openai_max_body_chars: int = 1500
 
+    # Content/sender blend weights
+    blend_enabled: bool = True
+    content_weight: float = 0.80
+    sender_weight: float = 0.20
+    sender_prior_min_count: int = 3
+
     # Data directory
     data_dir: str = field(
         default_factory=lambda: os.path.expanduser(
@@ -167,6 +173,14 @@ class MailMindConfig:
             max_calls = 10
             LOG.warning("Invalid DEEPSEEK_MAX_CALLS_PER_RUN, using default 10")
 
+        blend_enabled = os.environ.get("BLEND_ENABLED", "true").lower() != "false"
+        try:
+            content_weight = float(os.environ.get("CONTENT_WEIGHT", "0.80"))
+            sender_weight = float(os.environ.get("SENDER_WEIGHT", "0.20"))
+            sender_prior_min_count = int(os.environ.get("SENDER_PRIOR_MIN_COUNT", "3"))
+        except (ValueError, TypeError):
+            content_weight, sender_weight, sender_prior_min_count = 0.80, 0.20, 3
+
         config = cls(
             deepseek_api_key=deepseek_api_key,
             deepseek_model=os.environ.get("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL).strip(),
@@ -193,6 +207,10 @@ class MailMindConfig:
                 os.environ.get("MAILMIND_DATA_DIR", "~/.mailmind")
             ),
             accounts=cls.load_accounts(),
+            blend_enabled=blend_enabled,
+            content_weight=content_weight,
+            sender_weight=sender_weight,
+            sender_prior_min_count=sender_prior_min_count,
         )
 
         LOG.debug(

@@ -1074,6 +1074,58 @@ def get_thread_label(db: Database, thread_id: str) -> Optional[str]:
     return row["label"] if row else None
 
 
+def get_sender_label_prior(
+    db: Database,
+    sender_email: str,
+    account: Optional[str] = None,
+    min_count: int = 3,
+) -> dict:
+    """Return a normalised label distribution for sender_email based on
+    user-confirmed labels (corrections + approvals).
+
+    Returns {} (abstain) when the sender has fewer than min_count confirmed
+    observations — the blend then uses pure content for that sender.
+
+    The prior is derived from user *corrections* (ground truth) only, not from
+    past model predictions, to avoid echoing the content model back into itself.
+    Light additive smoothing (alpha=0.5) is applied after the min_count gate.
+    """
+    # Bug #4 fix: scope query to the given account so corrections from one mailbox
+    # don't bleed into another's sender prior.
+    if account is not None:
+        account_clause = "AND e.account = ?"
+        params: tuple = (sender_email, account)
+    else:
+        account_clause = ""
+        params = (sender_email,)
+
+    rows = db.execute_sql(
+        f"""
+        SELECT uc.corrected_label AS label, COUNT(*) AS cnt
+        FROM user_corrections uc
+        JOIN emails e ON e.gmail_id = uc.email_gmail_id
+        WHERE e.sender = ?
+          {account_clause}
+          AND uc.corrected_label IS NOT NULL
+          AND uc.corrected_label != ''
+        GROUP BY uc.corrected_label
+        """,
+        params,
+    ).fetchall()
+
+    counts: dict = {r["label"]: r["cnt"] for r in rows}
+    total = sum(counts.values())
+    if total < min_count:
+        return {}
+
+    alpha = 0.5
+    n_classes = len(counts)
+    smoothed = {lbl: (cnt + alpha) / (total + alpha * n_classes)
+                for lbl, cnt in counts.items()}
+    norm = sum(smoothed.values())
+    return {lbl: v / norm for lbl, v in smoothed.items()}
+
+
 def get_gmail_labels(db: Database, account: Optional[str] = None) -> List[str]:
     """Return the list of Gmail label names for display.
 

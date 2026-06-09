@@ -30,10 +30,13 @@ LOG = logging.getLogger(__name__)
 @dataclass
 class RoutingResult:
     """Result of routing an email through the classifier tiers."""
-    source: str  # "rules" | "ml" | "llm" | "fallback"
+    source: str  # "rule" | "rules" | "ml" | "llm" | "blend" | "fallback"
     label: str
     confidence: float
     llm_result: Optional[LLMResult] = None
+    # Blend audit: channel distributions before blending
+    content_distribution: Optional[dict] = field(default=None)
+    sender_distribution: Optional[dict] = field(default=None)
 
 
 class ClassifierRouter:
@@ -54,6 +57,11 @@ class ClassifierRouter:
         rules_threshold: float = 0.90,
         ml_threshold: float = 0.65,
         llm_enabled: bool = True,
+        # 80/20 blend parameters
+        blend_enabled: bool = True,
+        content_weight: float = 0.80,
+        sender_weight: float = 0.20,
+        sender_prior_min_count: int = 3,
     ):
         self.rules_engine = rules_engine
         self.ml_model = ml_model
@@ -61,6 +69,10 @@ class ClassifierRouter:
         self.rules_threshold = rules_threshold
         self.ml_threshold = ml_threshold
         self.llm_enabled = llm_enabled
+        self.blend_enabled = blend_enabled
+        self.content_weight = content_weight
+        self.sender_weight = sender_weight
+        self.sender_prior_min_count = sender_prior_min_count
 
     def route(
         self,
@@ -115,7 +127,7 @@ class ClassifierRouter:
                         confidence=1.0,
                     )
 
-        # --- TIER 1: Rules Engine ---
+        # --- TIER 1: Rules Engine (content rules) ---
         if rule_matches is None:
             rule_matches = self.rules_engine.evaluate(email)
         matched_rules = [m for m in rule_matches if m.matched]
@@ -136,6 +148,7 @@ class ClassifierRouter:
         ml_label: Optional[str] = None
         ml_confidence: float = 0.0
         ml_available = False
+        ml_label_probabilities: dict = {}
 
         if self.ml_model is not None and self.ml_model.is_fitted:
             try:
@@ -145,9 +158,54 @@ class ClassifierRouter:
                     ml_available = True
                     ml_label = ml_result.primary_label
                     ml_confidence = ml_result.ml_confidence or 0.0
+                    ml_label_probabilities = ml_result.label_probabilities or {}
             except Exception as e:
                 LOG.warning("ML inference failed for %s: %s", email.gmail_id, e)
 
+        # --- BLEND PATH (80% content / 20% sender) ---
+        # Bug #1 fix: only enter blend when ML clears the same confidence floor as
+        # the old cascade (ml_threshold=0.65 default).  Low-confidence ML must fall
+        # through to LLM / fallback instead of short-circuiting via the blend path.
+        if (self.blend_enabled and ml_available and ml_label_probabilities
+                and ml_confidence >= self.ml_threshold):
+            from .sender_channel import build_sender_distribution, blend_distributions
+            p_sender = build_sender_distribution(
+                sender=email.sender or "",
+                db=db,
+                account=account,
+                min_count=self.sender_prior_min_count,
+            )
+            p_blended = blend_distributions(
+                p_content=ml_label_probabilities,
+                p_sender=p_sender,
+                content_weight=self.content_weight,
+                sender_weight=self.sender_weight,
+            )
+            blend_label = max(p_blended, key=p_blended.get)
+            blend_confidence = p_blended[blend_label]
+            # Bug #3 fix: if the blended winner is OTHER, fall through to LLM / fallback
+            # rather than returning a generic catch-all label.
+            if blend_label == "OTHER":
+                LOG.debug(
+                    "Blend for %s resolved to OTHER (%.2f); falling through to cascade/LLM.",
+                    email.gmail_id, blend_confidence,
+                )
+            else:
+                LOG.info(
+                    "Blend for %s: content=%s(%.2f) sender=%s → %s(%.2f) [sender_abstained=%s]",
+                    email.gmail_id, ml_label, ml_confidence,
+                    "abstained" if not p_sender else str(sorted(p_sender.items())),
+                    blend_label, blend_confidence, not p_sender,
+                )
+                return RoutingResult(
+                    source="blend",
+                    label=blend_label,
+                    confidence=round(blend_confidence, 4),
+                    content_distribution=ml_label_probabilities,
+                    sender_distribution=p_sender or None,
+                )
+
+        # --- NON-BLEND: old cascade (blend_enabled=False or no ML) ---
         if ml_available and ml_confidence >= self.ml_threshold and ml_label != "OTHER":
             LOG.debug(
                 "Tier 2 (ML) handles email %s: label=%s confidence=%.4f",
