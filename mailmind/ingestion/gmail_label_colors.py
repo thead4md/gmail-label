@@ -13,17 +13,19 @@ from typing import Dict, Optional
 # Known-valid Gmail label colour pairs (background from Gmail's allowed palette,
 # white text for contrast). Kept saturated and well-separated.
 GMAIL_LABEL_PALETTE = [
+    # NOTE: backgroundColor MUST be on Gmail's allowed label palette or the API
+    # rejects it with HTTP 400 — every value below is from that documented set.
     {"backgroundColor": "#fb4c2f", "textColor": "#ffffff"},  # red
-    {"backgroundColor": "#ffad47", "textColor": "#ffffff"},  # orange
+    {"backgroundColor": "#ffad46", "textColor": "#ffffff"},  # orange
     {"backgroundColor": "#16a766", "textColor": "#ffffff"},  # green
-    {"backgroundColor": "#4a86e8", "textColor": "#ffffff"},  # blue
+    {"backgroundColor": "#4986e7", "textColor": "#ffffff"},  # blue
     {"backgroundColor": "#a479e2", "textColor": "#ffffff"},  # purple
     {"backgroundColor": "#f691b3", "textColor": "#ffffff"},  # pink
     {"backgroundColor": "#2da2bb", "textColor": "#ffffff"},  # cyan
     {"backgroundColor": "#0b804b", "textColor": "#ffffff"},  # dark green
     {"backgroundColor": "#8a1c0a", "textColor": "#ffffff"},  # dark red
     {"backgroundColor": "#41236d", "textColor": "#ffffff"},  # indigo
-    {"backgroundColor": "#674ea7", "textColor": "#ffffff"},  # violet
+    {"backgroundColor": "#653e9b", "textColor": "#ffffff"},  # violet
     {"backgroundColor": "#0d3472", "textColor": "#ffffff"},  # navy
     {"backgroundColor": "#076239", "textColor": "#ffffff"},  # forest
     {"backgroundColor": "#b65775", "textColor": "#ffffff"},  # rose
@@ -36,7 +38,7 @@ _CURATED: Dict[str, Dict[str, str]] = {
     "MASS_EMAIL":   {"backgroundColor": "#f691b3", "textColor": "#ffffff"},
     "FINANCE":      {"backgroundColor": "#16a766", "textColor": "#ffffff"},
     "CALENDAR":     {"backgroundColor": "#2da2bb", "textColor": "#ffffff"},
-    "PERSONAL":     {"backgroundColor": "#ffad47", "textColor": "#ffffff"},
+    "PERSONAL":     {"backgroundColor": "#ffad46", "textColor": "#ffffff"},
     "ACTION_REQUIRED": {"backgroundColor": "#fb4c2f", "textColor": "#ffffff"},
 }
 
