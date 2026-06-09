@@ -327,7 +327,7 @@ def deadline_pill_html(deadlines: Optional[list]) -> str:
     deadlines = deadlines or []
     if not deadlines:
         return ""
-    first = deadlines[0][:60]
+    first = str(deadlines[0])[:60]
     return (
         f'<span class="mm-chip" style="color:#FF4757;border-color:#FF475740;'
         f'background:#FF475718;">⏰ {html.escape(str(first))}</span>'
