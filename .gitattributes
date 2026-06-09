@@ -1,0 +1,10 @@
+# Shell scripts MUST use LF line endings — they run inside Linux containers
+# (Fly.io / Docker). CRLF breaks the shebang (`#!/bin/sh\r` → exec /bin/sh\r →
+# "No such file or directory"), crash-looping the container. Force LF regardless
+# of the contributor's core.autocrlf setting.
+*.sh            text eol=lf
+
+# Other Linux-container assets that are line-ending sensitive.
+fly-start.sh    text eol=lf
+litestream.yml  text eol=lf
+Dockerfile      text eol=lf
