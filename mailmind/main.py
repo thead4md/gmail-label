@@ -943,9 +943,11 @@ def _apply_labels_one_account(
             return {"applied": 0}
     fetcher = GmailFetcher(build_gmail_service(creds))
 
+    from mailmind.ingestion.gmail_label_colors import gmail_color_for
+
     applied = 0
     for name, ids in by_label.items():
-        label_id = fetcher.ensure_label(name)
+        label_id = fetcher.ensure_label(name, color=gmail_color_for(name))
         if not label_id:
             LOG.warning("[%s] apply-labels: could not ensure label '%s'.", label_lbl, name)
             continue

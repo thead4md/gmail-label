@@ -136,11 +136,18 @@ class GmailFetcher:
             time.sleep(self.rate_limit_seconds)
         return results
 
-    def ensure_label(self, label_name: str) -> Optional[str]:
+    def ensure_label(
+        self, label_name: str, color: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
         """Return the Gmail label id for ``label_name``, creating it if absent.
 
         Nested labels (e.g. 'MailMind/Work') are created automatically by Gmail
         when the name contains '/'. Returns None on API error.
+
+        ``color`` is an optional Gmail color dict ({"backgroundColor": "#..",
+        "textColor": "#.."}) using values from Gmail's allowed palette. It is set
+        on create and patched onto an existing label. Colour failures are
+        best-effort: they never block label creation or message labeling.
         """
         def _list():
             return self.service.users().labels().list(userId=self.user_id).execute()
@@ -149,16 +156,46 @@ class GmailFetcher:
             existing = _retry(_list).get("labels", [])
             for lab in existing:
                 if lab.get("name") == label_name:
+                    if color and lab.get("color") != color:
+                        self.set_label_color(lab["id"], color)
                     return lab.get("id")
 
-            def _create():
-                return self.service.users().labels().create(
-                    userId=self.user_id, body={"name": label_name}).execute()
+            body: Dict = {"name": label_name}
+            if color:
+                body["color"] = color
 
-            return _retry(_create).get("id")
+            def _create(body=body):
+                return self.service.users().labels().create(
+                    userId=self.user_id, body=body).execute()
+
+            try:
+                return _retry(_create).get("id")
+            except HttpError as e:
+                # Most likely an invalid colour pair — retry without colour so the
+                # label is still created (just uncoloured).
+                if color:
+                    LOG.warning("ensure_label('%s'): colour rejected (%s); "
+                                "creating without colour.", label_name, e)
+                    def _create_plain():
+                        return self.service.users().labels().create(
+                            userId=self.user_id, body={"name": label_name}).execute()
+                    return _retry(_create_plain).get("id")
+                raise
         except HttpError as e:
             LOG.error("ensure_label('%s') failed: %s", label_name, e)
             return None
+
+    def set_label_color(self, label_id: str, color: Dict[str, str]) -> bool:
+        """Patch a label's colour. Best-effort — returns False on API error."""
+        try:
+            def _patch():
+                return self.service.users().labels().patch(
+                    userId=self.user_id, id=label_id, body={"color": color}).execute()
+            _retry(_patch)
+            return True
+        except HttpError as e:
+            LOG.warning("set_label_color(%s) failed: %s", label_id, e)
+            return False
 
     def list_label_map(self) -> Dict[str, str]:
         """Return {label_id: name} for all labels in the mailbox."""
