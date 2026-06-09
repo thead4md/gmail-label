@@ -290,6 +290,7 @@ def _section(icon: str, title: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@st.fragment
 def render_now_tab(account: Optional[str] = None) -> None:
     db       = get_db()
     all_items = _c_pending(200, account)
@@ -493,6 +494,7 @@ def _render_reason_panel(reason: Dict[str, Any], item: Dict[str, Any]) -> None:
     )
 
 
+@st.fragment
 def render_review_tab(account: Optional[str] = None) -> None:
     db = get_db()
 
@@ -688,6 +690,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
 # ---------------------------------------------------------------------------
 # Tab: HISTORY
 # ---------------------------------------------------------------------------
+@st.fragment
 def render_history_tab(account: Optional[str] = None) -> None:
     import time as _time
     db = get_db()
@@ -833,6 +836,7 @@ def _digest_chart(digest: Dict[str, Any]) -> None:
     st.altair_chart(chart, use_container_width=True)
 
 
+@st.fragment
 def render_automate_tab(account: Optional[str] = None) -> None:
     import time as _time
     db = get_db()
@@ -1220,6 +1224,7 @@ def _render_sidebar() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+@st.fragment
 def render_insights_tab(account: Optional[str] = None) -> None:
     import time as _time
     db = get_db()
@@ -1443,6 +1448,17 @@ def _check_password() -> bool:
     return False
 
 
+# Tab registry: label → render fn. Each render fn is an @st.fragment, so in-tab
+# interactions rerun only that fragment, not the whole page.
+_TABS: list[tuple] = [
+    ("📍 NOW",      render_now_tab),
+    ("📋 REVIEW",   render_review_tab),
+    ("🕐 HISTORY",  render_history_tab),
+    ("📈 INSIGHTS", render_insights_tab),
+    ("⚙️ AUTOMATE", render_automate_tab),
+]
+
+
 def main() -> None:
     if not _check_password():
         return
@@ -1450,19 +1466,23 @@ def main() -> None:
     inject_css(_get_theme())
     account = _render_sidebar()
 
-    tab_now, tab_review, tab_history, tab_insights, tab_automate = st.tabs(
-        ["📍 NOW", "📋 REVIEW", "🕐 HISTORY", "📈 INSIGHTS", "⚙️ AUTOMATE"])
+    # Lazy tabs: st.tabs renders ALL five panels on every rerun. A selector lets us
+    # run ONLY the active tab's render fn — ~5× less work per interaction. The
+    # @st.fragment decorator on each render fn keeps in-tab clicks from re-running
+    # the whole page.
+    labels = [t[0] for t in _TABS]
+    selector = getattr(st, "segmented_control", None)
+    if selector is not None:
+        choice = selector("Section", labels, default=labels[0],
+                          key="active_tab", label_visibility="collapsed")
+    else:  # older Streamlit fallback
+        choice = st.radio("Section", labels, horizontal=True,
+                          key="active_tab", label_visibility="collapsed")
+    if not choice:
+        choice = st.session_state.get("active_tab") or labels[0]
 
-    with tab_now:
-        render_now_tab(account)
-    with tab_review:
-        render_review_tab(account)
-    with tab_history:
-        render_history_tab(account)
-    with tab_insights:
-        render_insights_tab(account)
-    with tab_automate:
-        render_automate_tab(account)
+    render_fn = dict(_TABS).get(choice, render_now_tab)
+    render_fn(account)
 
 
 if __name__ == "__main__":
