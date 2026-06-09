@@ -263,6 +263,8 @@ def _build_classifier_router(rules_engine: RulesEngine, config=None) -> Optional
             "content_weight": config.content_weight,
             "sender_weight": config.sender_weight,
             "sender_prior_min_count": config.sender_prior_min_count,
+            "fold_rules_into_content": config.fold_rules_into_content,
+            "content_rule_weight": config.content_rule_weight,
         }
     return ClassifierRouter(
         rules_engine=rules_engine,
