@@ -23,8 +23,39 @@ LABEL_COLORS: dict[str, str] = {
     "DEFER":        "#57606F",
     "CALENDAR":     "#1DBAB4",
     "IMPORTANT":    "#FF6348",
+    "MASS_EMAIL":   "#FD79A8",
+    "ACTION_REQUIRED": "#FF7F50",
+    "MEETING":      "#00CEC9",
+    # The user's real (scout-org) taxonomy — hand-picked so they read distinctly.
+    "OE":             "#00B894",
+    "HIRDETES-L":     "#E17055",
+    "INFO-L":         "#4285F4",
+    "811/BCS":        "#E84393",
+    "811/CSPK LISTA": "#6C5CE7",
+    "VÉLEMÉNY-L":     "#F4B400",
 }
 DEFAULT_LABEL_COLOR = "#5B8AF0"
+
+# Vivid, well-separated palette used to auto-assign a STABLE colour to any label
+# not in LABEL_COLORS (so new taxonomy gets coloured without a code change).
+_LABEL_PALETTE: list[str] = [
+    "#FF4757", "#5B8AF0", "#2ED573", "#FFA502", "#9B6DFF", "#1DBAB4",
+    "#FF6B81", "#4285F4", "#F4B400", "#0F9D58", "#E84393", "#00B894",
+    "#E17055", "#6C5CE7", "#FD79A8", "#00CEC9", "#FAB1A0", "#A29BFE",
+    "#55EFC4", "#FAB04F", "#74B9FF", "#FF7675",
+]
+
+
+def _hash_label_color(key: str) -> str:
+    """Deterministic palette colour for an arbitrary label (stable across runs).
+
+    Uses a fixed FNV-style hash — NOT Python's salted hash() — so the same label
+    always maps to the same colour in every process/restart.
+    """
+    h = 2166136261
+    for ch in key:
+        h = ((h ^ ord(ch)) * 16777619) & 0xFFFFFFFF
+    return _LABEL_PALETTE[h % len(_LABEL_PALETTE)]
 
 CHANNEL_COLORS: dict[str, str] = {
     "newsletter":    "#9B6DFF",
@@ -47,7 +78,12 @@ TRUST_COLORS: dict[str, str] = {
 
 
 def label_color(label: str) -> str:
-    return LABEL_COLORS.get((label or "").upper(), DEFAULT_LABEL_COLOR)
+    """Stable colour for a label. Curated semantic colour when known, otherwise a
+    deterministic palette colour hashed from the name (every label gets its own)."""
+    key = (label or "").upper()
+    if not key:
+        return DEFAULT_LABEL_COLOR
+    return LABEL_COLORS.get(key) or _hash_label_color(key)
 
 
 def channel_color(channel: str) -> str:
