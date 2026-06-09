@@ -288,12 +288,23 @@ def _section(icon: str, title: str) -> None:
 _PAGE_SIZE = 25
 
 
-def _paginate(items: list, key: str, page_size: int = _PAGE_SIZE) -> list:
+def _paginate(items: list, key: str, page_size: int = _PAGE_SIZE,
+              reset_token=None) -> list:
     """Return the leading slice of `items` to render this run. Call `_load_more`
     AFTER the render loop to draw the 'Load more' button. Each caller lives in an
     @st.fragment, so the button rerun is local — we avoid building hundreds of
-    expanders every rerun. `key` must be unique per list (e.g. 'history')."""
-    shown = st.session_state.get(f"_page_shown_{key}", page_size)
+    expanders every rerun. `key` must be unique per list (e.g. 'history').
+
+    `reset_token` identifies the underlying list (e.g. the history window, or the
+    item count). When it changes — slider moved, queue refreshed/mutated — the
+    shown count resets to one page so we don't dump every row that the old,
+    higher count would have revealed."""
+    shown_key = f"_page_shown_{key}"
+    token_key = f"_page_token_{key}"
+    if st.session_state.get(token_key) != reset_token:
+        st.session_state[token_key] = reset_token
+        st.session_state[shown_key] = page_size
+    shown = st.session_state.get(shown_key, page_size)
     return items[:shown]
 
 
@@ -583,7 +594,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
         )
         return
 
-    for idx, item in enumerate(_paginate(items, "review")):
+    for idx, item in enumerate(_paginate(items, "review", reset_token=len(items))):
         item_id = item.get("id")
         subject = (item.get("subject") or "[No Subject]")[:60]
         sender  = (item.get("sender")  or "Unknown")[:30]
@@ -742,7 +753,7 @@ def render_history_tab(account: Optional[str] = None) -> None:
             unsafe_allow_html=True,
         )
     else:
-        for idx, item in enumerate(_paginate(items, "history")):
+        for idx, item in enumerate(_paginate(items, "history", reset_token=(history_days, len(items)))):
             item_id  = item.get("id")
             subject  = (item.get("subject") or "[No Subject]")[:60]
             sender   = (item.get("sender")  or "Unknown")[:30]
