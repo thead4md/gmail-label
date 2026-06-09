@@ -1142,6 +1142,78 @@ def get_gmail_labels(db: Database, account: Optional[str] = None) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Label suggestions (periodic label-discovery loop)
+# ---------------------------------------------------------------------------
+
+def get_in_use_labels(db: Database) -> set:
+    """Return the set of labels already in use (lower-cased), for dedup.
+
+    Combines predicted primary labels with mapped Gmail label names so the
+    discovery loop never proposes a label the user already has.
+    """
+    labels: set = set()
+    for r in db.execute_sql(
+        "SELECT DISTINCT primary_label AS l FROM predictions "
+        "WHERE primary_label IS NOT NULL AND primary_label != ''"
+    ).fetchall():
+        labels.add(str(r["l"]).strip().lower())
+    for r in db.execute_sql(
+        "SELECT DISTINCT name AS l FROM gmail_label_map "
+        "WHERE name IS NOT NULL AND name != ''"
+    ).fetchall():
+        labels.add(str(r["l"]).strip().lower())
+    return labels
+
+
+def save_label_suggestion(
+    db: Database,
+    suggested_label: str,
+    rationale: str = "",
+    cluster_terms: str = "",
+    example_gmail_ids: Optional[List[str]] = None,
+    email_count: int = 0,
+    score: Optional[float] = None,
+    account: Optional[str] = None,
+) -> bool:
+    """Insert a pending label suggestion. Idempotent on suggested_label.
+
+    Returns True if a new row was inserted, False if the label was already
+    suggested (UNIQUE(suggested_label) → INSERT OR IGNORE).
+    """
+    examples = ",".join(example_gmail_ids or [])
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO label_suggestions "
+            "(suggested_label, rationale, cluster_terms, example_gmail_ids, "
+            " email_count, score, account, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+            (suggested_label, rationale, cluster_terms, examples,
+             int(email_count), score, account),
+        )
+        return cur.rowcount > 0
+
+
+def get_label_suggestions(db: Database, status: str = "pending") -> List[Dict[str, Any]]:
+    """Return label suggestions filtered by status (newest first)."""
+    rows = db.execute_sql(
+        "SELECT * FROM label_suggestions WHERE status = ? "
+        "ORDER BY score DESC, created_at DESC",
+        (status,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_label_suggestion_status(db: Database, suggestion_id: int, status: str) -> None:
+    """Mark a suggestion accepted/dismissed (records reviewed_at)."""
+    import time as _time
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE label_suggestions SET status = ?, reviewed_at = ? WHERE id = ?",
+            (status, int(_time.time()), suggestion_id),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Analytics queries for INSIGHTS tab
 # ---------------------------------------------------------------------------
 
