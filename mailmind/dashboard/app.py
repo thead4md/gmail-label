@@ -285,6 +285,31 @@ def _section(icon: str, title: str) -> None:
     )
 
 
+_PAGE_SIZE = 25
+
+
+def _paginate(items: list, key: str, page_size: int = _PAGE_SIZE) -> list:
+    """Return the leading slice of `items` to render this run. Call `_load_more`
+    AFTER the render loop to draw the 'Load more' button. Each caller lives in an
+    @st.fragment, so the button rerun is local — we avoid building hundreds of
+    expanders every rerun. `key` must be unique per list (e.g. 'history')."""
+    shown = st.session_state.get(f"_page_shown_{key}", page_size)
+    return items[:shown]
+
+
+def _load_more(items: list, key: str, page_size: int = _PAGE_SIZE) -> None:
+    """Render a 'Load more' button when `items` has more than the shown slice."""
+    shown_key = f"_page_shown_{key}"
+    shown = st.session_state.get(shown_key, page_size)
+    total = len(items)
+    if shown >= total:
+        return
+    if st.button(f"Load more ({total - shown} remaining)", key=f"_loadmore_{key}",
+                 use_container_width=True):
+        st.session_state[shown_key] = shown + page_size
+        st.rerun(scope="fragment")
+
+
 # ---------------------------------------------------------------------------
 # Tab 1: NOW
 # ---------------------------------------------------------------------------
@@ -558,7 +583,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
         )
         return
 
-    for idx, item in enumerate(items):
+    for idx, item in enumerate(_paginate(items, "review")):
         item_id = item.get("id")
         subject = (item.get("subject") or "[No Subject]")[:60]
         sender  = (item.get("sender")  or "Unknown")[:30]
@@ -686,6 +711,8 @@ def render_review_tab(account: Optional[str] = None) -> None:
                         else:
                             st.warning("Item no longer exists.")
 
+    _load_more(items, "review")
+
 
 # ---------------------------------------------------------------------------
 # Tab: HISTORY
@@ -715,7 +742,7 @@ def render_history_tab(account: Optional[str] = None) -> None:
             unsafe_allow_html=True,
         )
     else:
-        for idx, item in enumerate(items):
+        for idx, item in enumerate(_paginate(items, "history")):
             item_id  = item.get("id")
             subject  = (item.get("subject") or "[No Subject]")[:60]
             sender   = (item.get("sender")  or "Unknown")[:30]
@@ -791,6 +818,7 @@ def render_history_tab(account: Optional[str] = None) -> None:
                         if st.button("Cancel", key=f"hist_cancel_{item_id}"):
                             st.session_state.pop(f"edit_history_{item_id}", None)
                             st.rerun()
+        _load_more(items, "history")
     _section("✏️", "Correction history")
     corrections = _c_corrections()
     if corrections:

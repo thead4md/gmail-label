@@ -99,11 +99,14 @@ def trust_color(tier: str) -> str:
 # ---------------------------------------------------------------------------
 
 _CSS = """
-/* ─── Google Inter font ─────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* Inter is loaded non-blocking via <link rel=preconnect>+display=swap in
+   inject_css(); the --mm-font stack below renders a system font instantly
+   until Inter arrives. (The old CSS @import here was render-blocking and
+   serialised first paint on cold load.) */
 
 /* ─── CSS custom properties ─────────────────────────────────────── */
 :root {
+  --mm-font:        'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mm-bg:          #0A0E1A;
   --mm-surface:     #141928;
   --mm-surface-2:   #1C2237;
@@ -122,13 +125,13 @@ _CSS = """
   --mm-radius-sm:   6px;
   --mm-shadow:      0 4px 24px rgba(0,0,0,.45);
   --mm-shadow-sm:   0 2px 8px rgba(0,0,0,.30);
-  font-family: 'Inter', sans-serif;
+  font-family: var(--mm-font);
 }
 
 /* ─── Base overrides ────────────────────────────────────────────── */
 .stApp, [data-testid="stAppViewContainer"] {
   background: var(--mm-bg) !important;
-  font-family: 'Inter', sans-serif !important;
+  font-family: var(--mm-font) !important;
 }
 
 /* hide default Streamlit top-bar decoration */
@@ -141,7 +144,7 @@ _CSS = """
   background: var(--mm-surface) !important;
   border-right: 1px solid var(--mm-border) !important;
 }
-[data-testid="stSidebar"] * { font-family: 'Inter', sans-serif !important; }
+[data-testid="stSidebar"] * { font-family: var(--mm-font) !important; }
 [data-testid="stSidebarContent"] { padding: 1.25rem 1rem !important; }
 
 /* ─── Tabs ──────────────────────────────────────────────────────── */
@@ -206,7 +209,7 @@ _CSS = """
   border: 1px solid var(--mm-border) !important;
   border-radius: var(--mm-radius-sm) !important;
   color: var(--mm-text) !important;
-  font-family: 'Inter', sans-serif !important;
+  font-family: var(--mm-font) !important;
   font-size: 13px !important;
   font-weight: 500 !important;
   transition: all .15s !important;
@@ -312,7 +315,7 @@ _CSS = """
 hr { border-color: var(--mm-border) !important; margin: 20px 0 !important; }
 
 /* ─── Text ──────────────────────────────────────────────────────── */
-h1,h2,h3,h4 { color: var(--mm-text) !important; font-family: 'Inter', sans-serif !important; }
+h1,h2,h3,h4 { color: var(--mm-text) !important; font-family: var(--mm-font) !important; }
 p, li, span { color: var(--mm-text) !important; }
 .stMarkdown p { font-size: 13px !important; }
 caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !important; }
@@ -485,7 +488,7 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
   border-collapse: separate;
   border-spacing: 0;
   font-size: 12px;
-  font-family: 'Inter', sans-serif;
+  font-family: var(--mm-font);
 }
 .mm-table thead tr { background: var(--mm-surface-2); }
 .mm-table thead th {
@@ -549,8 +552,21 @@ _LIGHT_VARS = """
 _SYSTEM_VARS = f"@media (prefers-color-scheme: light) {{ {_LIGHT_VARS} }}"
 
 
+# Non-blocking Inter load: preconnect warms the TLS handshake, and the
+# stylesheet <link> (display=swap baked into the URL) fetches async without
+# serialising first paint — unlike the old render-blocking CSS @import. The
+# --mm-font stack paints a system font until Inter is ready.
+_FONT_LINKS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" '
+    'href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">'
+)
+
+
 def inject_css(theme: str = "dark") -> None:
     """Inject the full MailMind CSS theme. theme: 'dark' | 'light' | 'system'."""
+    st.markdown(_FONT_LINKS, unsafe_allow_html=True)
     st.markdown(f"<style>{_CSS}</style>", unsafe_allow_html=True)
     if theme == "light":
         st.markdown(f"<style>{_LIGHT_VARS}</style>", unsafe_allow_html=True)
