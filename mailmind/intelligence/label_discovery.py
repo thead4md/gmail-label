@@ -55,10 +55,23 @@ _HUNGARIAN_STOPWORDS = {
 }
 
 
+# Mailbox-ubiquitous terms. This inbox is mono-domain (a scouting org), so its
+# own vocabulary appears in nearly every email and otherwise dominates every
+# cluster — producing useless domain-restating suggestions like "Cserkész_Events"
+# or "Hungarian_Scouting". Drop them so clusters form around DISTINGUISHING
+# sub-themes. (max_df in the vectorizer also strips ubiquitous terms dynamically.)
+_DOMAIN_STOPWORDS = {
+    "cserkesz", "cserkész", "cserkeszek", "cserkészek", "cserkeszet", "cserkészet",
+    "scout", "scouts", "scouting", "mcssz", "csapat", "csapatok",
+    "esemeny", "esemény", "esemenyek", "események", "level", "levél", "levelek",
+    "magyar", "szovetseg", "szövetség", "orszagos", "országos",
+}
+
+
 def _stop_words() -> list:
-    """English + Hungarian stopwords as a list for TfidfVectorizer."""
+    """English + Hungarian + domain stopwords as a list for TfidfVectorizer."""
     from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
-    return sorted(set(ENGLISH_STOP_WORDS) | _HUNGARIAN_STOPWORDS)
+    return sorted(set(ENGLISH_STOP_WORDS) | _HUNGARIAN_STOPWORDS | _DOMAIN_STOPWORDS)
 
 
 def _chat_complete(llm_client, system: str, user: str, max_tokens: int = 60) -> str:
@@ -126,18 +139,23 @@ def _llm_name(llm_client, terms: List[str], subjects: List[str]) -> Optional[Dic
         sample = "\n".join(f"- {s}" for s in subjects[:6] if s)
         kw = ", ".join(terms[:10])
         prompt = (
-            "These emails (mostly Hungarian) form one recurring theme the user has "
-            "no label for.\n"
+            "This is a busy person's inbox at a Hungarian scouting organization — "
+            "ALL of it is about scouting, so labels like 'Scouting', 'Events' or "
+            "'Hungarian_Scouting' are useless (they describe everything).\n"
+            "These emails (mostly Hungarian) form one cluster:\n"
             f"Top keywords: {kw}\n"
             f"Example subjects:\n{sample}\n\n"
-            "Propose ONE short, meaningful English label (1-2 words, Title_Case, no "
-            "spaces — use _) describing the TOPIC (ignore greetings/filler words), "
-            "plus a one-line rationale (max 90 chars). Respond EXACTLY as:\n"
-            "LABEL: <label>\nWHY: <rationale>"
+            "Propose ONE short, SPECIFIC English label (1-2 words, Title_Case, no "
+            "spaces — use _) for a DISTINGUISHING sub-theme that would actually help "
+            "triage (e.g. Camp_Logistics, Equipment_Orders, Polls, Quizzes).\n"
+            "If the cluster has no clear specific theme, or is just generic scouting/"
+            "announcement/event mail, respond EXACTLY 'LABEL: SKIP'.\n"
+            "Otherwise respond EXACTLY as:\nLABEL: <label>\nWHY: <rationale max 90 chars>"
         )
         content = _chat_complete(
             llm_client,
-            "You name email categories concisely by topic.",
+            "You name email categories by specific, distinguishing topic. You "
+            "refuse to name over-generic clusters, answering SKIP instead.",
             prompt,
             max_tokens=60,
         ).strip()
@@ -147,7 +165,9 @@ def _llm_name(llm_client, terms: List[str], subjects: List[str]) -> Optional[Dic
                 label = line.split(":", 1)[1].strip().replace(" ", "_")
             elif line.upper().startswith("WHY:"):
                 why = line.split(":", 1)[1].strip()
-        return {"label": label, "why": why} if label else None
+        if label.upper() == "SKIP" or not label:
+            return None  # LLM judged the cluster too generic to be a useful label
+        return {"label": label, "why": why}
     except Exception as exc:
         LOG.warning("LLM cluster naming failed: %s", exc)
         return None
@@ -183,8 +203,11 @@ def suggest_labels(
     from sklearn.cluster import KMeans
     import numpy as np
 
+    # max_df=0.5 drops terms appearing in >50% of the window — i.e. the mailbox's
+    # ubiquitous domain vocabulary — so clusters form around distinguishing themes.
     vec = TfidfVectorizer(max_features=2000, stop_words=_stop_words(),
-                          token_pattern=r"(?u)[a-z][a-z0-9]{2,}", lowercase=True)
+                          token_pattern=r"(?u)[a-z][a-z0-9]{2,}", lowercase=True,
+                          max_df=0.5, min_df=2)
     try:
         X = vec.fit_transform(corpus)
     except ValueError:
@@ -192,7 +215,9 @@ def suggest_labels(
         return []
 
     n = X.shape[0]
-    k = max(2, min(8, n // 30))
+    # Finer clustering (was min(8, n//30)) so distinct sub-themes separate instead
+    # of collapsing into a few giant domain-restating lumps.
+    k = max(2, min(16, n // 15))
     km = KMeans(n_clusters=k, n_init=10, random_state=42)
     assign = km.fit_predict(X)
     terms_arr = np.array(vec.get_feature_names_out())
@@ -207,11 +232,18 @@ def suggest_labels(
         for s in get_label_suggestions(db, status="accepted")
     }
 
+    # A useful new label names a SUB-theme, not "most of the mailbox". Reject
+    # clusters that cover too large a share of the window — those are catch-alls
+    # (e.g. the 899-email "Cserkész_Events" lump), not actionable categories. The
+    # gate only binds at scale (n>=50); on tiny windows a big cluster is a real
+    # theme, not a catch-all.
+    max_cluster_size = max(min_cluster_size + 1, int(n * 0.30)) if n >= 50 else n
+
     # Rank clusters by size (descending) and propose the largest coherent ones.
     candidates = []
     for c in range(k):
         idx = [i for i, a in enumerate(assign) if a == c]
-        if len(idx) < min_cluster_size:
+        if len(idx) < min_cluster_size or len(idx) > max_cluster_size:
             continue
         top_term_idx = centroids[c].argsort()[::-1][:10]
         terms = [t for t in terms_arr[top_term_idx].tolist() if _TOKEN_RE.fullmatch(t)]
@@ -229,13 +261,19 @@ def suggest_labels(
     for cand in candidates:
         if len(inserted) >= max_suggestions:
             break
-        # Name the cluster (LLM preferred, keyword fallback).
+        # Name the cluster. When an LLM is available we trust its judgement: a
+        # None result means it judged the cluster too generic (SKIP) — drop the
+        # candidate rather than papering over it with a keyword name. Only fall
+        # back to keyword naming when no LLM is configured at all.
         name, why = "", ""
         if llm_client is not None:
             named = _llm_name(llm_client, cand["terms"], cand["subjects"])
-            if named:
-                name, why = named["label"], named["why"]
-        if not name:
+            if not named:
+                LOG.debug("Label discovery: LLM skipped a generic cluster (size=%d).",
+                          cand["size"])
+                continue
+            name, why = named["label"], named["why"]
+        else:
             name = _keyword_name(cand["terms"])
             why = "Recurring theme from top terms: " + ", ".join(cand["terms"][:5])
         if not name:
