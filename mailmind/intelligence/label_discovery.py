@@ -125,29 +125,74 @@ def _fetch_window(db: Database, window_days: int, account: Optional[str]) -> Lis
     return out
 
 
+def _is_valid_label(name: str) -> bool:
+    """Reject generated label names that are stopwords, domain words, or too short."""
+    stop = _HUNGARIAN_STOPWORDS | _DOMAIN_STOPWORDS
+    words = [w.lower() for w in name.replace("_", " ").split() if w]
+    if not words:
+        return False
+    if any(len(w) <= 2 for w in words):
+        return False
+    if any(w in stop for w in words):
+        return False
+    return True
+
+
+def _purge_stale_suggestions(db: Database) -> int:
+    """Delete pending suggestions whose label is composed entirely of stopwords/domain words."""
+    stop = _HUNGARIAN_STOPWORDS | _DOMAIN_STOPWORDS
+    pending = get_label_suggestions(db, status="pending")
+    bad_ids = []
+    for s in pending:
+        words = [w.lower() for w in s["suggested_label"].replace("_", " ").split()]
+        if all(w in stop or len(w) <= 2 for w in words):
+            bad_ids.append(s["id"])
+    if bad_ids:
+        db.execute_sql(
+            f"DELETE FROM label_suggestions WHERE id IN ({','.join('?' * len(bad_ids))})",
+            bad_ids,
+        )
+        LOG.info("Label discovery: purged %d stale bad suggestion(s).", len(bad_ids))
+    return len(bad_ids)
+
+
 def _keyword_name(terms: List[str]) -> str:
     """Fallback label name from the top cluster terms (Title_Case, joined)."""
-    picked = [t for t in terms if len(t) > 2][:2]
-    if not picked:
+    stop = _HUNGARIAN_STOPWORDS | _DOMAIN_STOPWORDS
+    valid = [t for t in terms if len(t) >= 4 and t.lower() not in stop][:2]
+    if not valid:
         return ""
-    return "_".join(w.capitalize() for w in picked)
+    return "_".join(w.capitalize() for w in valid)
 
 
-def _llm_name(llm_client, terms: List[str], subjects: List[str]) -> Optional[Dict[str, str]]:
+def _llm_name(
+    llm_client,
+    terms: List[str],
+    subjects: List[str],
+    in_use_labels: Optional[List[str]] = None,
+) -> Optional[Dict[str, str]]:
     """Ask the LLM for a short label name + one-line rationale for a cluster."""
     try:
-        sample = "\n".join(f"- {s}" for s in subjects[:6] if s)
+        sample = "\n".join(f"- {s}" for s in subjects[:12] if s)
         kw = ", ".join(terms[:10])
+        taxonomy_hint = ""
+        if in_use_labels:
+            taxonomy_hint = (
+                f"Labels the user already has: {', '.join(in_use_labels[:20])}.\n"
+                "Do NOT suggest anything that overlaps with or is broader than these.\n"
+            )
         prompt = (
             "This is a busy person's inbox at a Hungarian scouting organization — "
             "ALL of it is about scouting, so labels like 'Scouting', 'Events' or "
             "'Hungarian_Scouting' are useless (they describe everything).\n"
+            f"{taxonomy_hint}"
             "These emails (mostly Hungarian) form one cluster:\n"
             f"Top keywords: {kw}\n"
             f"Example subjects:\n{sample}\n\n"
             "Propose ONE short, SPECIFIC English label (1-2 words, Title_Case, no "
             "spaces — use _) for a DISTINGUISHING sub-theme that would actually help "
             "triage (e.g. Camp_Logistics, Equipment_Orders, Polls, Quizzes).\n"
+            "Do NOT use person names, city names, or org abbreviations as labels.\n"
             "If the cluster has no clear specific theme, or is just generic scouting/"
             "announcement/event mail, respond EXACTLY 'LABEL: SKIP'.\n"
             "Otherwise respond EXACTLY as:\nLABEL: <label>\nWHY: <rationale max 90 chars>"
@@ -182,6 +227,7 @@ def suggest_labels(
     llm_client=None,
 ) -> List[Dict[str, Any]]:
     """Discover and persist new label suggestions. Returns the rows it inserted."""
+    _purge_stale_suggestions(db)
     rows = _fetch_window(db, window_days, account)
     if len(rows) < min_cluster_size * 2:
         LOG.info("Label discovery: only %d candidate emails in window; skipping.", len(rows))
@@ -267,7 +313,8 @@ def suggest_labels(
         # back to keyword naming when no LLM is configured at all.
         name, why = "", ""
         if llm_client is not None:
-            named = _llm_name(llm_client, cand["terms"], cand["subjects"])
+            named = _llm_name(llm_client, cand["terms"], cand["subjects"],
+                              in_use_labels=sorted(in_use))
             if not named:
                 LOG.debug("Label discovery: LLM skipped a generic cluster (size=%d).",
                           cand["size"])
@@ -277,6 +324,9 @@ def suggest_labels(
             name = _keyword_name(cand["terms"])
             why = "Recurring theme from top terms: " + ", ".join(cand["terms"][:5])
         if not name:
+            continue
+        if not _is_valid_label(name):
+            LOG.debug("Label discovery: rejecting invalid label name '%s'.", name)
             continue
         key = name.strip().lower()
         # Skip themes the user already has a label for, or we already proposed.
