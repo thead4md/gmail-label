@@ -105,8 +105,8 @@ def generate_module_map() -> str:
     """Walk mailmind/ with ast.parse, extract top-level classes and public functions."""
     pkg = PROJECT_ROOT / "mailmind"
     lines: list[str] = [
-        "| Module | Purpose | Key Class/Function | Status |",
-        "|---|---|---|---|",
+        "| Module | Purpose | Key Class/Function |",
+        "|---|---|---|",
     ]
 
     for py_file in sorted(pkg.rglob("*.py")):
@@ -143,14 +143,18 @@ def generate_module_map() -> str:
                 if not node.name.startswith("_"):
                     symbols.append(f"{node.name}()")
 
+        # Skip empty __init__.py files with no purpose and no symbols
+        if rel.name == "__init__.py" and not purpose and not symbols:
+            continue
+
+        # Truncate to avoid very long cells
+        MAX_SYMBOLS = 8
+        if len(symbols) > MAX_SYMBOLS:
+            symbols = symbols[:MAX_SYMBOLS] + [f"… +{len(symbols) - MAX_SYMBOLS} more"]
         key_str = ", ".join(symbols) if symbols else "—"
 
-        status = "✅ Complete"
-        if rel.name == "__init__.py":
-            status = "✅ Stable"
-
         md_path = f"`{rel_str}`"
-        lines.append(f"| {md_path} | {purpose} | {key_str} | {status} |")
+        lines.append(f"| {md_path} | {purpose} | {key_str} |")
 
     return "\n".join(lines)
 
@@ -246,28 +250,44 @@ def generate_env_vars() -> str:
 
     purposes = {
         "MAILMIND_DB_PATH": "SQLite database path",
-        "MAILMIND_APP_DIR": "Config directory (credentials, token storage)",
+        "MAILMIND_DATA_DIR": "Config + data directory (`~/.mailmind` by default)",
         "MAILMIND_POLL_SECONDS": "Poll interval in seconds (--watch mode)",
         "MAILMIND_FETCH_MAX": "Max emails per fetch run",
         "MAILMIND_DRY_RUN": 'Set to "1" to skip real Gmail label writes',
-        "MAILMIND_USER_EMAIL": "User's primary email for scoring boosts",
+        "MAILMIND_USER_EMAIL": "User's primary email address (for scoring boosts)",
+        "MAILMIND_ACCOUNTS": "Comma-separated list of additional account emails",
+        "MAILMIND_ENV_FILE": "Path to a .env file to load on startup",
+        "MAILMIND_RETENTION_DAYS": "How many days of history to keep in the DB",
         "DEEPSEEK_API_KEY": "DeepSeek API key; absent → LLM disabled",
-        "DEEPSEEK_MODEL": "DeepSeek model name",
-        "DEEPSEEK_BASE_URL": "DeepSeek API base URL",
+        "DEEPSEEK_MODEL": "DeepSeek model name override",
+        "DEEPSEEK_BASE_URL": "DeepSeek API base URL override",
         "DEEPSEEK_MAX_CALLS_PER_RUN": "Max LLM API calls per pipeline run",
+        "OPENAI_API_KEY": "OpenAI API key (alternative LLM backend)",
+        "LLM_PROVIDER": "LLM backend to use: `auto`, `deepseek`, or `openai`",
+        "LLM_ENABLED": 'Set to "true" to enable LLM classification',
+        "LLM_ML_THRESHOLD": "Min ML confidence before LLM is called",
+        "LLM_RULES_THRESHOLD": "Min rules confidence before LLM is skipped",
+        "LLM_MAX_BODY_CHARS": "Max body chars sent to LLM per email",
+        "DASHBOARD_PASSWORD": "Password to protect the Streamlit dashboard",
+        "DASHBOARD_SECRET": "HMAC secret for dashboard session tokens",
+        "CONTENT_WEIGHT": "Content-signal weight in sender/content blend (0–1)",
+        "SENDER_WEIGHT": "Sender-signal weight in blend (0–1)",
+        "BLEND_ENABLED": 'Set to "false" to disable sender/content blending',
+        "SENDER_PRIOR_MIN_COUNT": "Min sender history count before prior is trusted",
     }
 
     lines: list[str] = [
-        "| Variable | Default | Required | Purpose |",
-        "|---|---|---|---|",
+        "| Variable | Default | Purpose |",
+        "|---|---|---|",
     ]
 
     for var_name in sorted(matches.keys()):
         default_val, _ = matches[var_name]
-        display_default = f"`{default_val}`" if default_val else '`""` (empty)'
-        required = "No"
-        purpose = purposes.get(var_name, "—")
-        lines.append(f"| `{var_name}` | {display_default} | {required} | {purpose} |")
+        display_default = f"`{default_val}`" if default_val else '`""`'
+        purpose = purposes.get(var_name)
+        if purpose is None:
+            continue  # skip undocumented internal tuning vars
+        lines.append(f"| `{var_name}` | {display_default} | {purpose} |")
 
     return "\n".join(lines)
 
@@ -350,9 +370,8 @@ def update_context() -> None:
     test_count = generate_test_count()
     count_str = str(test_count) if test_count is not None else "(unknown)"
     generated["current_pass_notes"] = [
-        f"Pass 7 complete. {count_str} tests passing.",
-        "datetime.utcnow() deprecation warnings pending cleanup.",
-        "Next: Pass 8 — TBD (sender reputation / watch mode / deployment)",
+        f"Pass 8 complete. {count_str} tests passing.",
+        "Next: Pass 9 — TBD",
     ]
 
     # --- Rebuild file, replacing auto sections ---
@@ -386,10 +405,13 @@ def update_context() -> None:
                 # Skip past AUTO:END line
                 i += 1
 
-                # If there's a blank line immediately after, consume (don't duplicate)
-                if i < len(lines) and lines[i] == "":
-                    result_lines.append("")
+                # Consume all consecutive blank lines after the block, emit exactly one
+                blank_count = 0
+                while i < len(lines) and lines[i] == "":
+                    blank_count += 1
                     i += 1
+                if blank_count:
+                    result_lines.append("")
             else:
                 result_lines.append(f"<!-- AUTO:START:{section_name} -->")
                 result_lines.append(f"<!-- AUTO:END:{section_name} -->")
