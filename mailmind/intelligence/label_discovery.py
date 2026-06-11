@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import unicodedata
 from typing import Optional, List, Dict, Any
 
 from ..ml.features import build_content_text
@@ -42,16 +43,36 @@ _TOKEN_RE = re.compile(r"[a-z][a-z0-9]{2,}")
 # This mailbox is largely Hungarian; sklearn only ships English stopwords, so
 # without these the clusters get named by Hungarian filler/greeting words
 # ("hogy", "kedves", "sziasztok"…) instead of by topic.
+# NOTE: text is accent-normalised before TF-IDF (see _normalise()), so only
+# ASCII de-accented forms are needed here.
 _HUNGARIAN_STOPWORDS = {
+    # Greetings / salutations
     "hogy", "nem", "egy", "isten", "szia", "sziasztok", "kedves", "tisztelt",
-    "üdv", "udv", "udvozlettel", "üdvözlettel", "köszönöm", "koszonom", "koszi",
-    "köszi", "ezt", "azt", "ami", "mint", "csak", "még", "meg", "már", "mar",
-    "vagy", "lesz", "volt", "lenne", "kell", "lehet", "lehetne", "ezek", "azok",
-    "ehhez", "ahhoz", "minden", "illetve", "valamint", "tehát", "tehat", "ill",
-    "stb", "pedig", "azonban", "amely", "amelyek", "akik", "aki", "ezzel",
-    "ezért", "ezert", "miatt", "után", "utan", "előtt", "elott", "során", "soran",
-    "felé", "fele", "részére", "reszere", "számára", "szamara", "esetén", "eseten",
-    "com", "www", "http", "https", "gmail", "email", "mail", "from", "subject",
+    "udv", "udvozlettel", "koszonom", "koszi", "helló", "hello", "sziasz",
+    # Pronouns / demonstratives
+    "ezt", "azt", "ami", "aki", "akik", "amely", "amelyek", "ezek", "azok",
+    "ezzel", "ehhez", "ahhoz", "erre", "arra", "ebben", "abban",
+    # Common verbs / auxiliaries
+    "mint", "csak", "meg", "mar", "vagy", "lesz", "volt", "lenne", "kell",
+    "lehet", "lehetne", "van", "nincs", "nincsen", "legyen", "lett",
+    "szeretne", "szeretn", "szeretnem",
+    # Conjunctions / particles
+    "illetve", "valamint", "tehat", "ill", "stb", "pedig", "azonban",
+    "viszont", "mivel", "mert", "hiszen", "ugyan", "ugye", "igen", "nem",
+    # Postpositions / case suffixes that survive tokenisation as tokens
+    "utan", "elott", "soran", "fele", "reszere", "szamara", "eseten",
+    "miatt", "kepen", "kent", "hoz", "hez", "tol", "nek", "ben", "ban",
+    "bol", "bol", "val", "vel", "ert", "nak", "hoz", "tek", "ket", "sem",
+    "bar", "hat", "les", "tun", "jon", "jon", "juk", "juk",
+    # Adverbs / fillers
+    "minden", "nagyon", "nagys", "sok", "kevés", "keves", "itt", "ott",
+    "most", "majd", "mar", "meg", "is", "sem", "ugy", "igy", "ott", "ide",
+    "oda", "erre", "arra", "ezert", "azert", "miert", "hogyan", "amikor",
+    "akkor", "mindig", "soha", "talán", "talan", "szinte", "inkabb",
+    "szerintem", "szerinte", "szoval", "tehat", "ugyan",
+    # Web / email noise
+    "com", "www", "http", "https", "gmail", "email", "mail", "from",
+    "subject", "poszt", "post", "bbl", "okgy", "jus", "besz",
 }
 
 
@@ -66,6 +87,16 @@ _DOMAIN_STOPWORDS = {
     "esemeny", "esemény", "esemenyek", "események", "level", "levél", "levelek",
     "magyar", "szovetseg", "szövetség", "orszagos", "országos",
 }
+
+
+def _normalise(text: str) -> str:
+    """Strip accents so TF-IDF sees whole words, not accent-split stumps.
+
+    Without this, 'cserkész' tokenises to 'cserk' + 'sz' (the accent splits
+    the run), and neither fragment matches our stopword list. After stripping,
+    'cserkész' → 'cserkesz' which IS in _DOMAIN_STOPWORDS and gets dropped.
+    """
+    return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode("ascii")
 
 
 def _stop_words() -> list:
@@ -238,7 +269,7 @@ def suggest_labels(
         text = build_content_text(r.get("subject") or "", r.get("snippet") or "",
                                   r.get("body_text") or "")
         if text and len(text) > 8:
-            corpus.append(text)
+            corpus.append(_normalise(text))
             meta.append(r)
     if len(corpus) < min_cluster_size * 2:
         LOG.info("Label discovery: too little usable text (%d); skipping.", len(corpus))
