@@ -33,6 +33,7 @@ from mailmind.dashboard.helpers import (
     get_heartbeat_status,
     get_time_ago_str,
     history_badge_html,
+    kpi_card_html,
     label_chip_html,
     parse_reason_json,
     reply_needed_pill_html,
@@ -285,6 +286,35 @@ def _section(icon: str, title: str) -> None:
     )
 
 
+def _day_start_ts(days_ago: int = 0) -> int:
+    """Local-midnight epoch for today (days_ago=0) or N days back. Stable within
+    the day, so it's a cache-friendly key for the digest windows."""
+    from datetime import datetime, timedelta
+    d = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    return int((d - timedelta(days=days_ago)).timestamp())
+
+
+def _render_kpi_row(account: Optional[str]) -> None:
+    """Overview KPI cards at the top of the NOW tab. Reuses build_digest (no new
+    query): two day-windows give value + day-over-day delta for the windowed
+    counters; queued/reply-needed are live snapshots so they carry no delta."""
+    today        = _c_digest(_day_start_ts(0), account) or {}
+    yesterday_p  = _c_digest(_day_start_ts(1), account) or {}
+
+    def _delta(key: str) -> int:
+        # Both windows end "now"; subtract today's slice to isolate yesterday.
+        yesterday_only = int(yesterday_p.get(key, 0)) - int(today.get(key, 0))
+        return int(today.get(key, 0)) - yesterday_only
+
+    cards = [
+        {"icon": "📨", "label": "Triaged today",   "value": int(today.get("classified", 0)),           "delta": _delta("classified")},
+        {"icon": "🤖", "label": "Auto-labeled",     "value": int(today.get("executed", 0)),             "delta": _delta("executed")},
+        {"icon": "📥", "label": "Awaiting review",  "value": int(today.get("queued", 0))},
+        {"icon": "💬", "label": "Reply needed",     "value": int(today.get("pending_reply_needed", 0))},
+    ]
+    st.markdown(kpi_card_html(cards), unsafe_allow_html=True)
+
+
 _PAGE_SIZE = 25
 
 
@@ -335,6 +365,8 @@ def render_now_tab(account: Optional[str] = None) -> None:
     all_items  = [i for i in all_items if i.get("id") not in _dismissed]
     now_items = filter_now_items(all_items, queue_threshold=QueueManager.QUEUE_THRESHOLD)
 
+    _render_kpi_row(account)
+
     if not now_items:
         st.markdown(
             '<div class="mm-empty">'
@@ -353,7 +385,8 @@ def render_now_tab(account: Optional[str] = None) -> None:
     st.markdown("")
 
     # Display daily brief (if available)
-    daily_brief = _c_daily_brief(account)
+    with st.spinner("Building today's brief…"):
+        daily_brief = _c_daily_brief(account)
     if daily_brief:
         with st.expander("📋 Today's brief", expanded=False):
             st.markdown(daily_brief)
@@ -398,9 +431,9 @@ def render_now_tab(account: Optional[str] = None) -> None:
             escaped_url = html.escape(unsub_url)
             st.markdown(
                 f'<a href="{escaped_url}" target="_blank" style="'
-                f'display:inline-block;font-size:12px;color:#5B8AF0;'
+                f'display:inline-block;font-size:12px;color:#6366F1;'
                 f'text-decoration:none;padding:4px 8px;'
-                f'border:1px solid #2D3656;border-radius:3px;">'
+                f'border:1px solid #2A2F3C;border-radius:3px;">'
                 f'Unsubscribe ↗</a>',
                 unsafe_allow_html=True,
             )
@@ -1281,30 +1314,31 @@ def render_insights_tab(account: Optional[str] = None) -> None:
         else:
             st.info(empty_msg)
 
-    _section("📊", "Label distribution")
-    _chart_or_info(
-        charts.label_distribution_chart(_c_label_dist(since, account)),
-        "No data yet.")
+    with st.spinner("Crunching insights…"):
+        _section("📊", "Label distribution")
+        _chart_or_info(
+            charts.label_distribution_chart(_c_label_dist(since, account)),
+            "No data yet.")
 
-    _section("📨", "Channel volume")
-    _chart_or_info(
-        charts.channel_distribution_chart(_c_channel_dist(since, account)),
-        "No data yet.")
+        _section("📨", "Channel volume")
+        _chart_or_info(
+            charts.channel_distribution_chart(_c_channel_dist(since, account)),
+            "No data yet.")
 
-    _section("🗓️", "Channel × weekday")
-    _chart_or_info(
-        charts.channel_weekday_heatmap(_c_channel_weekday(since, account)),
-        "No data yet.")
+        _section("🗓️", "Channel × weekday")
+        _chart_or_info(
+            charts.channel_weekday_heatmap(_c_channel_weekday(since, account)),
+            "No data yet.")
 
-    _section("👤", "Top senders")
-    _chart_or_info(
-        charts.top_senders_chart(_c_top_senders(since, account)),
-        "No data yet.")
+        _section("👤", "Top senders")
+        _chart_or_info(
+            charts.top_senders_chart(_c_top_senders(since, account)),
+            "No data yet.")
 
-    _section("⏱️", "Time to decision")
-    _chart_or_info(
-        charts.decision_time_chart(_c_decision_times(since, account)),
-        "No reviewed items yet.")
+        _section("⏱️", "Time to decision")
+        _chart_or_info(
+            charts.decision_time_chart(_c_decision_times(since, account)),
+            "No reviewed items yet.")
 
     # ── Classification quality: per-tier correction rate (lower = better) ──
     _section("🎯", "Classification quality by tier")

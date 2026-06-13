@@ -164,7 +164,43 @@ def parse_reason_json(raw: Any) -> Dict[str, Any]:
 # These do NOT import streamlit — fully testable.
 # ---------------------------------------------------------------------------
 
-def sender_avatar_html(sender: Optional[str], color: str = "#5B8AF0") -> str:
+def kpi_card_html(cards: List[Dict[str, Any]]) -> str:
+    """Render a responsive grid of KPI cards for the NOW-tab overview row.
+
+    Each card dict: {icon, label, value, delta (optional int)}. When ``delta`` is
+    an int it renders a coloured "▲ +N vs yesterday" / "▼ -N vs yesterday" line
+    (green up, red down, faint flat); omit or pass None for a snapshot metric with
+    no day-over-day comparison. Pure function — no streamlit import, fully testable.
+    """
+    if not cards:
+        return ""
+    cells = []
+    for c in cards:
+        icon  = html.escape(str(c.get("icon", "")))
+        label = html.escape(str(c.get("label", "")))
+        value = html.escape(str(c.get("value", "")))
+        delta = c.get("delta")
+        delta_html = ""
+        if isinstance(delta, (int, float)):
+            d = int(delta)
+            if d > 0:
+                delta_html = f'<div class="mm-kpi-delta mm-kpi-delta-up">▲ +{d} vs yesterday</div>'
+            elif d < 0:
+                delta_html = f'<div class="mm-kpi-delta mm-kpi-delta-down">▼ {d} vs yesterday</div>'
+            else:
+                delta_html = '<div class="mm-kpi-delta mm-kpi-delta-flat">→ no change</div>'
+        cells.append(
+            '<div class="mm-kpi-card">'
+            f'<div class="mm-kpi-top"><span class="mm-kpi-icon">{icon}</span>'
+            f'<span class="mm-kpi-label">{label}</span></div>'
+            f'<div class="mm-kpi-value">{value}</div>'
+            f'{delta_html}'
+            '</div>'
+        )
+    return f'<div class="mm-kpi-grid">{"".join(cells)}</div>'
+
+
+def sender_avatar_html(sender: Optional[str], color: str = "#6366F1") -> str:
     """Return an HTML circle avatar with the sender's first initial."""
     initial = "?"
     s = (sender or "").strip()
@@ -222,7 +258,7 @@ def confidence_bar_html(conf: Optional[float]) -> str:
     """Return an inline HTML confidence bar (green/amber/red)."""
     v = conf or 0.0
     pct = int(v * 100)
-    color = "#2ED573" if v > 0.8 else "#FFA502" if v > 0.5 else "#FF4757"
+    color = "#22C55E" if v > 0.8 else "#F59E0B" if v > 0.5 else "#EF4444"
     return (
         f'<div style="display:inline-flex;align-items:center;gap:6px;">'
         f'<div class="mm-conf-bar-wrap">'

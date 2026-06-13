@@ -13,12 +13,12 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 
 LABEL_COLORS: dict[str, str] = {
-    "URGENT":       "#FF4757",
-    "WORK":         "#5B8AF0",
-    "FINANCE":      "#2ED573",
-    "PERSONAL":     "#FFA502",
+    "URGENT":       "#EF4444",
+    "WORK":         "#6366F1",
+    "FINANCE":      "#22C55E",
+    "PERSONAL":     "#F59E0B",
     "NOTIFICATION": "#747D8C",
-    "NEWSLETTER":   "#9B6DFF",
+    "NEWSLETTER":   "#A78BFA",
     "SPAMCANDIDATE":"#FF6B81",
     "DEFER":        "#57606F",
     "CALENDAR":     "#1DBAB4",
@@ -34,12 +34,12 @@ LABEL_COLORS: dict[str, str] = {
     "811/CSPK LISTA": "#6C5CE7",
     "VÉLEMÉNY-L":     "#F4B400",
 }
-DEFAULT_LABEL_COLOR = "#5B8AF0"
+DEFAULT_LABEL_COLOR = "#6366F1"
 
 # Vivid, well-separated palette used to auto-assign a STABLE colour to any label
 # not in LABEL_COLORS (so new taxonomy gets coloured without a code change).
 _LABEL_PALETTE: list[str] = [
-    "#FF4757", "#5B8AF0", "#2ED573", "#FFA502", "#9B6DFF", "#1DBAB4",
+    "#FF4757", "#6366F1", "#2ED573", "#FFA502", "#A78BFA", "#1DBAB4",
     "#FF6B81", "#4285F4", "#F4B400", "#0F9D58", "#E84393", "#00B894",
     "#E17055", "#6C5CE7", "#FD79A8", "#00CEC9", "#FAB1A0", "#A29BFE",
     "#55EFC4", "#FAB04F", "#74B9FF", "#FF7675",
@@ -58,10 +58,10 @@ def _hash_label_color(key: str) -> str:
     return _LABEL_PALETTE[h % len(_LABEL_PALETTE)]
 
 CHANNEL_COLORS: dict[str, str] = {
-    "newsletter":    "#9B6DFF",
+    "newsletter":    "#A78BFA",
     "transactional": "#1DBAB4",
-    "team":          "#5B8AF0",
-    "personal":      "#FFA502",
+    "team":          "#6366F1",
+    "personal":      "#F59E0B",
     "marketing":     "#FF6B81",
     "automated":     "#747D8C",
     "docs":          "#4285F4",
@@ -71,9 +71,9 @@ CHANNEL_COLORS: dict[str, str] = {
 }
 
 TRUST_COLORS: dict[str, str] = {
-    "trusted":   "#2ED573",
-    "neutral":   "#FFA502",
-    "watchlist": "#FF4757",
+    "trusted":   "#22C55E",
+    "neutral":   "#F59E0B",
+    "watchlist": "#EF4444",
 }
 
 
@@ -107,20 +107,20 @@ _CSS = """
 /* ─── CSS custom properties ─────────────────────────────────────── */
 :root {
   --mm-font:        'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --mm-bg:          #0A0E1A;
-  --mm-surface:     #141928;
-  --mm-surface-2:   #1C2237;
-  --mm-surface-3:   #232B42;
-  --mm-border:      #2D3656;
-  --mm-border-soft: #1E2740;
-  --mm-primary:     #5B8AF0;
-  --mm-secondary:   #9B6DFF;
-  --mm-success:     #2ED573;
-  --mm-warning:     #FFA502;
-  --mm-danger:      #FF4757;
-  --mm-text:        #E2E8F0;
-  --mm-text-muted:  #94A3B8;
-  --mm-text-faint:  #4A5568;
+  --mm-bg:          #0B0D12;
+  --mm-surface:     #13161D;
+  --mm-surface-2:   #1A1E27;
+  --mm-surface-3:   #222632;
+  --mm-border:      #2A2F3C;
+  --mm-border-soft: #1E222C;
+  --mm-primary:     #6366F1;
+  --mm-secondary:   #A78BFA;
+  --mm-success:     #22C55E;
+  --mm-warning:     #F59E0B;
+  --mm-danger:      #EF4444;
+  --mm-text:        #E8EAF0;
+  --mm-text-muted:  #9AA3B4;
+  --mm-text-faint:  #5A6273;
   --mm-radius:      10px;
   --mm-radius-sm:   6px;
   --mm-shadow:      0 4px 24px rgba(0,0,0,.45);
@@ -320,6 +320,40 @@ p, li, span { color: var(--mm-text) !important; }
 .stMarkdown p { font-size: 13px !important; }
 caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !important; }
 
+/* ─── KPI cards (NOW tab overview row) ──────────────────────────── */
+.mm-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.mm-kpi-card {
+  background: linear-gradient(140deg, var(--mm-surface) 0%, var(--mm-surface-2) 100%);
+  border: 1px solid var(--mm-border);
+  border-left: 3px solid var(--mm-primary);
+  border-radius: var(--mm-radius);
+  padding: 14px 16px;
+  box-shadow: var(--mm-shadow-sm);
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;
+}
+.mm-kpi-top { display: flex; align-items: center; gap: 8px; }
+.mm-kpi-icon { font-size: 16px; line-height: 1; }
+.mm-kpi-label {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--mm-text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mm-kpi-value {
+  font-size: 28px; font-weight: 700; line-height: 1.1;
+  color: var(--mm-text);
+}
+.mm-kpi-delta { font-size: 11px; font-weight: 600; }
+.mm-kpi-delta-up   { color: var(--mm-success); }
+.mm-kpi-delta-down { color: var(--mm-danger); }
+.mm-kpi-delta-flat { color: var(--mm-text-faint); }
+
 /* ─── Custom MailMind card components ───────────────────────────── */
 .mm-card {
   background: var(--mm-surface);
@@ -383,9 +417,9 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
 .mm-pill-reply {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 8px; border-radius: 20px;
-  background: rgba(91,138,240,.15);
-  border: 1px solid rgba(91,138,240,.4);
-  color: #5B8AF0; font-size: 10px; font-weight: 700;
+  background: rgba(99,102,241,.15);
+  border: 1px solid rgba(99,102,241,.4);
+  color: var(--mm-primary); font-size: 10px; font-weight: 700;
 }
 .mm-time {
   font-size: 11px; color: var(--mm-text-faint);
@@ -523,6 +557,8 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
     flex: 1 1 100% !important;
     min-width: 100% !important;
   }
+  .mm-kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .mm-kpi-value { font-size: 22px; }
   .mm-card { flex-direction: row; padding: 12px; }
   .mm-subject { white-space: normal; }
   .stButton > button { width: 100% !important; padding: 10px 14px !important; }
@@ -535,15 +571,15 @@ caption, .stCaption { color: var(--mm-text-muted) !important; font-size: 11px !i
 
 _LIGHT_VARS = """
 :root {
-  --mm-bg:          #F0F4F8;
+  --mm-bg:          #F4F5F8;
   --mm-surface:     #FFFFFF;
-  --mm-surface-2:   #F7F9FC;
-  --mm-surface-3:   #EDF1F7;
-  --mm-border:      #C8D5E8;
-  --mm-border-soft: #DDE6F4;
-  --mm-text:        #1A2232;
-  --mm-text-muted:  #526070;
-  --mm-text-faint:  #8FA0B5;
+  --mm-surface-2:   #F7F8FB;
+  --mm-surface-3:   #EEF0F5;
+  --mm-border:      #D6DAE3;
+  --mm-border-soft: #E5E8EF;
+  --mm-text:        #161A22;
+  --mm-text-muted:  #565E6E;
+  --mm-text-faint:  #939BAB;
   --mm-shadow:      0 4px 24px rgba(0,0,0,.10);
   --mm-shadow-sm:   0 2px 8px rgba(0,0,0,.06);
 }
