@@ -123,6 +123,13 @@ def _now_stack(items, filter_out=None, approve_ret=True):
     """Return an ExitStack that patches all NOW-tab dependencies."""
     stack = contextlib.ExitStack()
     stack.enter_context(patch('mailmind.dashboard.app.get_db', return_value=MagicMock()))
+    # KPI overview row reads build_digest via _c_digest — stub it so the row
+    # renders without touching the mock DB.
+    stack.enter_context(
+        patch('mailmind.dashboard.app._c_digest', return_value={
+            'classified': 12, 'executed': 5, 'queued': 3, 'pending_reply_needed': 2,
+        })
+    )
     stack.enter_context(
         patch('mailmind.dashboard.app.get_pending_queue_enriched', return_value=items)
     )
@@ -172,6 +179,15 @@ class TestRenderNowTab:
         all_md = ' '.join(el.value for el in at.markdown)
         assert 'mm-empty' in all_md or 'caught up' in all_md.lower()
         assert len(at.button) == 0
+
+    def test_kpi_overview_row_renders(self):
+        with _now_stack([], filter_out=[]):
+            at = AppTest.from_function(_render_now)
+            at.run()
+        assert not at.exception
+        all_md = ' '.join(el.value for el in at.markdown)
+        assert 'mm-kpi-grid' in all_md
+        assert 'Triaged today' in all_md
 
     def test_single_item_shows_exactly_one_approve_button(self):
         item = _item(priority_score=90)

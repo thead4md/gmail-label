@@ -19,8 +19,8 @@ from mailmind.dashboard.theme import label_color, channel_color, trust_color
 # ---------------------------------------------------------------------------
 
 def test_label_color_known():
-    assert label_color("URGENT") == "#FF4757"
-    assert label_color("WORK")   == "#5B8AF0"
+    assert label_color("URGENT") == "#EF4444"
+    assert label_color("WORK")   == "#6366F1"
 
 def test_label_color_case_insensitive():
     assert label_color("urgent") == label_color("URGENT")
@@ -35,12 +35,12 @@ def test_label_color_unknown_returns_default():
 # ---------------------------------------------------------------------------
 
 def test_channel_color_known():
-    assert channel_color("newsletter") == "#9B6DFF"
-    assert channel_color("team")       == "#5B8AF0"
+    assert channel_color("newsletter") == "#A78BFA"
+    assert channel_color("team")       == "#6366F1"
 
 def test_trust_color_known():
-    assert trust_color("trusted")   == "#2ED573"
-    assert trust_color("watchlist") == "#FF4757"
+    assert trust_color("trusted")   == "#22C55E"
+    assert trust_color("watchlist") == "#EF4444"
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ def test_label_chip_contains_label_text():
 
 def test_label_chip_uses_urgent_color():
     html = label_chip_html("URGENT")
-    assert "#FF4757" in html
+    assert "#EF4444" in html
 
 def test_label_chip_none_safe():
     html = label_chip_html(None)
@@ -104,15 +104,15 @@ def test_channel_chip_unknown_safe():
 
 def test_confidence_bar_green_above_08():
     html = confidence_bar_html(0.85)
-    assert "#2ED573" in html   # green
+    assert "#22C55E" in html   # green
 
 def test_confidence_bar_amber_mid():
     html = confidence_bar_html(0.65)
-    assert "#FFA502" in html   # amber
+    assert "#F59E0B" in html   # amber
 
 def test_confidence_bar_red_below_05():
     html = confidence_bar_html(0.3)
-    assert "#FF4757" in html   # red
+    assert "#EF4444" in html   # red
 
 def test_confidence_bar_shows_percent():
     html = confidence_bar_html(0.75)
@@ -130,12 +130,12 @@ def test_confidence_bar_none_safe():
 def test_trust_badge_trusted():
     html = trust_badge_html("trusted")
     assert "trusted" in html
-    assert "#2ED573" in html
+    assert "#22C55E" in html
 
 def test_trust_badge_watchlist():
     html = trust_badge_html("watchlist")
     assert "watchlist" in html
-    assert "#FF4757" in html
+    assert "#EF4444" in html
 
 def test_trust_badge_none_defaults_neutral():
     html = trust_badge_html(None)

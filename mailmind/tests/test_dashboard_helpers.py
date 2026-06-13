@@ -12,9 +12,47 @@ from mailmind.dashboard.helpers import (
     format_unix_ts,
     get_confidence_badge,
     get_time_ago_str,
+    kpi_card_html,
     parse_reason_json,
 )
 from mailmind.processing.queue_manager import QueueManager
+
+
+class TestKpiCardHtml:
+    """Tests for the NOW-tab KPI overview card grid."""
+
+    def test_empty_cards_returns_empty_string(self):
+        assert kpi_card_html([]) == ""
+
+    def test_renders_label_value_and_grid(self):
+        html_out = kpi_card_html([{"icon": "📨", "label": "Triaged today", "value": 12}])
+        assert "mm-kpi-grid" in html_out
+        assert "mm-kpi-card" in html_out
+        assert "Triaged today" in html_out
+        assert ">12<" in html_out
+
+    def test_positive_delta_is_up_and_green_class(self):
+        html_out = kpi_card_html([{"label": "x", "value": 5, "delta": 3}])
+        assert "mm-kpi-delta-up" in html_out
+        assert "+3 vs yesterday" in html_out
+
+    def test_negative_delta_is_down_class(self):
+        html_out = kpi_card_html([{"label": "x", "value": 5, "delta": -2}])
+        assert "mm-kpi-delta-down" in html_out
+        assert "-2 vs yesterday" in html_out
+
+    def test_zero_delta_is_flat(self):
+        html_out = kpi_card_html([{"label": "x", "value": 5, "delta": 0}])
+        assert "mm-kpi-delta-flat" in html_out
+
+    def test_no_delta_key_renders_no_delta_line(self):
+        html_out = kpi_card_html([{"label": "x", "value": 5}])
+        assert "mm-kpi-delta" not in html_out
+
+    def test_label_is_html_escaped(self):
+        html_out = kpi_card_html([{"label": "<script>", "value": 1}])
+        assert "<script>" not in html_out
+        assert "&lt;script&gt;" in html_out
 
 
 class TestFilterNowItems:
