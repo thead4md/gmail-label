@@ -29,7 +29,7 @@ def channel_distribution_chart(rows: list):
     df["color"] = df["channel"].apply(channel_color)
     return (alt.Chart(df).mark_bar(cornerRadius=4)
             .encode(x=alt.X("channel:N", sort="-y", axis=alt.Axis(**_AXIS, title=None)),
-                    y=alt.Y("count:Q", axis=alt.Axis(**_AXIS, title=None, gridColor="#1C2237")),
+                    y=alt.Y("count:Q", axis=alt.Axis(**_AXIS, title=None, gridColor="#1A1E27")),
                     color=alt.Color("color:N", scale=None, legend=None),
                     tooltip=["channel", "count"])
             .properties(height=200, background="transparent").configure_view(strokeWidth=0))
@@ -41,7 +41,7 @@ def top_senders_chart(rows: list):
     df = pd.DataFrame(rows)
     return (alt.Chart(df).mark_bar(cornerRadius=4)
             .encode(y=alt.Y("sender:N", sort="-x", axis=alt.Axis(**_AXIS, title=None)),
-                    x=alt.X("volume:Q", axis=alt.Axis(**_AXIS, title=None, gridColor="#1C2237")),
+                    x=alt.X("volume:Q", axis=alt.Axis(**_AXIS, title=None, gridColor="#1A1E27")),
                     color=alt.Color("approval_rate:Q",
                                     scale=alt.Scale(scheme="blues"), legend=None),
                     tooltip=["sender", "volume", "approval_rate"])
@@ -52,10 +52,10 @@ def decision_time_chart(rows: list):
     if not rows:
         return None
     df = pd.DataFrame(rows)
-    return (alt.Chart(df).mark_bar(color="#5B8AF0")
+    return (alt.Chart(df).mark_bar(color="#6366F1")
             .encode(x=alt.X("minutes:Q", bin=alt.Bin(maxbins=20),
                             axis=alt.Axis(**_AXIS, title="minutes to decision")),
-                    y=alt.Y("count():Q", axis=alt.Axis(**_AXIS, title=None, gridColor="#1C2237")))
+                    y=alt.Y("count():Q", axis=alt.Axis(**_AXIS, title=None, gridColor="#1A1E27")))
             .properties(height=200, background="transparent").configure_view(strokeWidth=0))
 
 
