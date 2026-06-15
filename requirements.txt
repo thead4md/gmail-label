@@ -6,7 +6,7 @@ streamlit-cookies-controller>=0.0.4
 pandas>=3.0.3,<4.0
 
 # Dev / testing
-pytest>=7.0
+pytest>=9.1.0
 google-api-python-client>=2.197.0
 google-auth>=2.20.0
 google-auth-oauthlib>=1.0.0
