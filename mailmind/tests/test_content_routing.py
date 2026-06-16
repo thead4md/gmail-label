@@ -61,6 +61,7 @@ class _Cfg:
     def __init__(self, openai_key="", deepseek_enabled=False):
         self.openai_api_key = openai_key
         self.openai_model = "gpt-4o-mini"
+        self.openai_max_body_chars = 500
         self.deepseek_api_key = "dk" if deepseek_enabled else ""
         self.deepseek_model = "deepseek-chat"
         self.llm_enabled = deepseek_enabled

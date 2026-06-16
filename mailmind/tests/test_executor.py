@@ -260,6 +260,34 @@ class TestGmailErrorHandling:
         assert ok is False
 
 
+class TestConfidenceGateBeforeRateLimit:
+    """Bug G: low-confidence deferrals must not consume rate-limit budget."""
+
+    def test_deferred_action_does_not_consume_rate_limit_slot(self, db: Database):
+        """An action deferred by the confidence gate must not record in SafetyPolicy."""
+        executor, _service = _make_executor(db, dry_run=False, max_actions_per_hour=1)
+        # First call: high confidence — executes fine and uses 1 slot.
+        ok1 = executor.execute_action(_email(), "label", _score(total=90), confidence=0.90)
+        assert ok1 is True
+        slots_after_first = len(executor.safety_policy._action_timestamps)
+        assert slots_after_first == 1
+
+        # Second call: low confidence — must be deferred WITHOUT burning a slot,
+        # so the rate-limit counter does not increase.
+        ok2 = executor.execute_action(_email(), "label", _score(total=90), confidence=0.10)
+        assert ok2 is False
+        assert len(executor.safety_policy._action_timestamps) == 1  # unchanged
+
+    def test_high_confidence_consumes_slot_then_rate_limits(self, db: Database):
+        """Verify rate limit still fires for high-confidence actions that exceed budget."""
+        executor, _service = _make_executor(db, dry_run=False, max_actions_per_hour=1)
+        ok1 = executor.execute_action(_email(), "label", _score(total=90), confidence=0.90)
+        assert ok1 is True
+        # Second high-confidence action should be blocked by rate limit (budget=1).
+        ok2 = executor.execute_action(_email(), "label", _score(total=90), confidence=0.90)
+        assert ok2 is False
+
+
 class TestConfidenceThresholdsContract:
     def test_delete_threshold_is_unreachable(self):
         """delete=1.00 is a sentinel: real confidences are < 1.0."""
