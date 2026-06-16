@@ -218,6 +218,7 @@ def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
         from mailmind.ml.llm_classifier import LLMClassifier, OpenAIAdapter
         client = OpenAIAdapter(LLMClassifier(
             api_key=config.openai_api_key, model=config.openai_model,
+            max_body_chars=config.openai_max_body_chars,
         ))
         LOG.info("LLM stage: enabled via OpenAI (%s)", config.openai_model)
         return client

@@ -92,24 +92,18 @@ Respond with ONLY 3 bullets, no extra text. E.g.:
 - Reply to John's project question
 - Confirm meeting with Alice"""
 
-        LOG.debug("Calling DeepSeek for daily brief (items=%d)", len(items))
+        LOG.debug("Calling LLM for daily brief (items=%d)", len(items))
 
-        response = llm_client.client.chat.completions.create(
-            model=llm_client.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant. Create concise daily briefs.",
-                },
-                {"role": "user", "content": prompt},
-            ],
+        from ..llm.chat import chat_complete
+        content = chat_complete(
+            llm_client,
+            system="You are a helpful assistant. Create concise daily briefs.",
+            user=prompt,
             temperature=0.1,
             max_tokens=100,
         )
-
-        content = response.choices[0].message.content
         if not content:
-            LOG.warning("Daily brief: DeepSeek returned empty response")
+            LOG.warning("Daily brief: LLM returned empty response")
             return ""
 
         brief = content.strip()[:200]

@@ -60,18 +60,15 @@ def parse_rule_nl(text: str, client: DeepSeekClient) -> dict:
 
         user_prompt = f"Parse this rule: {text}"
 
-        response = client.client.chat.completions.create(
-            model=client.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
+        from ..llm.chat import chat_complete
+        content = chat_complete(
+            client,
+            system=system_prompt,
+            user=user_prompt,
             temperature=0.1,
             max_tokens=150,
+            json_mode=True,
         )
-
-        content = response.choices[0].message.content
         if not content:
             return {
                 "sender_email": None,

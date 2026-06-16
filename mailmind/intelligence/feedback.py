@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -12,6 +13,45 @@ from ..storage.queries import (
 )
 
 LOG = logging.getLogger(__name__)
+
+# Tiny EN+HU stopword set for subject-keyword extraction. Not exhaustive — just
+# enough to keep a derived sender rule pattern from keying on filler words.
+_SUBJECT_STOPWORDS = frozenset({
+    "the", "and", "for", "your", "you", "with", "from", "this", "that", "have",
+    "about", "please", "regarding", "update", "info", "information",
+    "egy", "hogy", "nem", "igen", "kell", "lesz", "volt", "amely", "ezt", "azt",
+})
+# Strip common reply/forward prefixes (EN + HU) before extracting keywords.
+_SUBJECT_PREFIX_RE = re.compile(r"^\s*(re|fw|fwd|v[aá]lasz|tov[aá]bb[ií]t[aá]s)\s*:\s*", re.I)
+
+
+def _subject_match_pattern(subject: Optional[str], max_keywords: int = 3) -> Optional[str]:
+    """Derive a case-insensitive subject regex from an email's subject keywords.
+
+    Returns a ``kw1|kw2|kw3`` alternation (each keyword regex-escaped) so a sender
+    rule created from the dashboard is CONDITIONAL on the email's topic instead of
+    a blanket catch-all — honouring the content-over-sender labelling preference.
+    Returns None when the subject yields no usable keywords (then the caller may
+    fall back to a catch-all, which is only appropriate for single-purpose senders).
+    """
+    if not subject:
+        return None
+    cleaned = _SUBJECT_PREFIX_RE.sub("", subject)
+    seen: set = set()
+    keywords: list = []
+    for tok in re.findall(r"\w+", cleaned, re.UNICODE):
+        low = tok.lower()
+        if len(low) < 4 or low in _SUBJECT_STOPWORDS or low.isdigit():
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        keywords.append(low)
+        if len(keywords) >= max_keywords:
+            break
+    if not keywords:
+        return None
+    return "|".join(re.escape(k) for k in keywords)
 
 
 def handle_approve(
@@ -278,6 +318,7 @@ def handle_label_email(
     scope: str,
     executor: Optional[Any] = None,
     account: Optional[str] = None,
+    match_pattern: Optional[str] = None,
 ) -> bool:
     """Create a label rule based on user feedback.
 
@@ -285,6 +326,11 @@ def handle_label_email(
            or "sender" (rule for this sender)
     When executor is provided, applies the label to Gmail via the same path
     as handle_approve.
+
+    match_pattern: optional subject regex for the "sender" scope. When omitted, a
+    pattern is derived from the email's subject keywords so the sender rule is
+    CONDITIONAL (content-over-sender preference) rather than a blanket catch-all.
+    Pass an explicit "" to force a catch-all (single-purpose senders only).
 
     Returns True if the item was found and label rule set, False if not found.
     """
@@ -304,22 +350,27 @@ def handle_label_email(
         gmail_id = queue_row["email_gmail_id"]
         original_action = queue_row["action"]
 
-        # Get email details for thread_id and sender
-        cur.execute("SELECT thread_id, sender FROM emails WHERE gmail_id = ?", (gmail_id,))
+        # Get email details for thread_id, sender, and subject
+        cur.execute("SELECT thread_id, sender, subject FROM emails WHERE gmail_id = ?", (gmail_id,))
         email_row = cur.fetchone()
         if not email_row:
             return False
 
         thread_id = email_row["thread_id"]
         sender = email_row["sender"]
+        subject = email_row["subject"]
 
         # Create the rule based on scope
         if scope == "thread" and thread_id:
             set_thread_label_rule(db, thread_id, label)
             LOG.info(f"Created thread rule: thread_id={thread_id} → {label}")
         elif scope == "sender" and sender:
-            set_sender_label_rule(db, sender, label, account=account)
-            LOG.info(f"Created sender rule: sender={sender} → {label}")
+            # Conditional-by-default: scope the rule to the email's topic so it
+            # doesn't relabel everything from this sender (content-over-sender).
+            pattern = match_pattern if match_pattern is not None else _subject_match_pattern(subject)
+            set_sender_label_rule(db, sender, label, account=account, match_pattern=pattern)
+            LOG.info("Created sender rule: sender=%s → %s (subject pattern=%s)",
+                     sender, label, pattern or "(catch-all)")
         # scope == "email" doesn't create a persistent rule, just logs the correction
 
         # Log the correction for training

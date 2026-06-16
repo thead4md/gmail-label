@@ -108,26 +108,11 @@ def _stop_words() -> list:
 def _chat_complete(llm_client, system: str, user: str, max_tokens: int = 60) -> str:
     """Single chat completion that works for both LLM client shapes.
 
-    - DeepSeekClient exposes `.client` (an OpenAI-compatible client) + `.model`.
-    - OpenAIAdapter wraps an LLMClassifier (`.classifier.api_key` / `.model`) and
-      constructs the OpenAI client on demand, with no persistent `.client`.
+    Thin wrapper around the shared :func:`mailmind.llm.chat.chat_complete` so the
+    dual-shape handling lives in exactly one place.
     """
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    client = getattr(llm_client, "client", None)
-    model = getattr(llm_client, "model", None)
-    if client is not None and model:
-        resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.2, max_tokens=max_tokens)
-        return resp.choices[0].message.content or ""
-    inner = getattr(llm_client, "classifier", None)
-    if inner is not None and getattr(inner, "api_key", None):
-        import openai
-        oc = openai.OpenAI(api_key=inner.api_key)
-        resp = oc.chat.completions.create(
-            model=getattr(inner, "model", "gpt-4o-mini"),
-            messages=messages, temperature=0.2, max_tokens=max_tokens)
-        return resp.choices[0].message.content or ""
-    raise RuntimeError("no usable LLM chat interface on client")
+    from ..llm.chat import chat_complete
+    return chat_complete(llm_client, system, user, temperature=0.2, max_tokens=max_tokens)
 
 
 def _fetch_window(db: Database, window_days: int, account: Optional[str]) -> List[Dict[str, Any]]:

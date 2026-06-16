@@ -140,14 +140,15 @@ class LLMClassifier:
         self,
         api_key: str,
         model: str = "gpt-4o-mini",
-        max_body_chars: int = 1500,
+        max_body_chars: int = 500,
     ):
         """Initialize the LLM classifier.
 
         Args:
             api_key: OpenAI API key.
             model: OpenAI model name (default: gpt-4o-mini).
-            max_body_chars: Max characters to include from email body (default: 1500).
+            max_body_chars: Max characters to include from email body (default: 500,
+                matching the project's privacy invariant — never send the full body).
         """
         self.api_key = api_key
         self.model = model
@@ -183,12 +184,17 @@ class LLMClassifier:
             LOG.error("openai package is not installed. LLM classification unavailable.")
             return None
 
-        # Build compact user prompt
+        # Build compact user prompt. Cap every free-text field that leaves the
+        # machine — body (max_body_chars), subject (200), snippet (300) — so the
+        # privacy invariant ("never send the full body / unbounded content") holds
+        # on the OpenAI path exactly as it does on the DeepSeek path.
         body_trimmed = (body_text or "")[:self.max_body_chars]
+        subject_trimmed = (subject or "")[:200]
+        snippet_trimmed = (snippet or "")[:300]
         user_prompt = (
-            f"Subject: {subject or '(no subject)'}\n"
+            f"Subject: {subject_trimmed or '(no subject)'}\n"
             f"From: {sender or '(unknown)'}\n"
-            f"Snippet: {snippet or '(no snippet)'}\n"
+            f"Snippet: {snippet_trimmed or '(no snippet)'}\n"
             f"Body: {body_trimmed or '(no body text)'}"
         )
 
