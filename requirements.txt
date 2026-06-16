@@ -11,5 +11,5 @@ google-api-python-client>=2.197.0
 google-auth>=2.20.0
 google-auth-oauthlib>=1.0.0
 cryptography>=49.0.0
-keyring>=23.0
+keyring>=25.7.0
 openai>=2.41.1
