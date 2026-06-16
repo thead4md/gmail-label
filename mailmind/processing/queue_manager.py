@@ -65,10 +65,15 @@ class QueueManager:
         """
         # Use the LLM/ML classification confidence (0-1), NOT total_score/100.
         # total_score is the *priority* score — intentionally 0 for newsletters —
-        # and has nothing to do with how certain the classifier is.
-        confidence = float(getattr(prediction, 'confidence', None) or 0.0)
-        if not confidence:
+        # and has nothing to do with how certain the classifier is. An explicit
+        # confidence (including a legitimate 0.0 from the low-confidence fallback
+        # router) is authoritative and must NOT be overridden by the priority
+        # score; only a genuinely-absent value falls back for back-compat.
+        raw_conf = getattr(prediction, 'confidence', None)
+        if raw_conf is None:
             confidence = score_result.total_score / 100.0
+        else:
+            confidence = float(raw_conf)
         suggested_action = prediction.action_suggested
 
         # Tier 1: Auto-execute
@@ -101,22 +106,19 @@ class QueueManager:
                 else:
                     # No prediction found, skip execution
                     return 'skipped'
-            # Execute the action via executor. Pass the real classification
-            # confidence (already verified >= AUTO_EXECUTE_THRESHOLD above), NOT
-            # the priority score, so the executor's threshold gate uses the right
-            # metric and low-priority actions (e.g. archiving newsletters) are not
-            # silently deferred.
-            try:
-                self.executor.execute_action(
-                    email, suggested_action, score_result, confidence=confidence
-                )
-            except Exception:
-                LOG.exception("Auto-execution failed for %s", email.gmail_id)
-            # Log executed row
+            fingerprint = make_action_fingerprint(email.gmail_id, suggested_action, {})
+            now = int(time.time())
+
+            # CLAIM-BEFORE-EXECUTE (idempotency): insert the executed row FIRST
+            # with INSERT OR IGNORE on the UNIQUE action_fingerprint. If a row
+            # already exists (rowcount == 0) this email was already auto-actioned,
+            # so we must NOT re-execute the Gmail action — return without touching
+            # Gmail. Previously a raw INSERT here would both double-execute the
+            # action and crash on the unique index when an email was reprocessed.
             with db.transaction() as cur:
                 cur.execute(
                     """
-                    INSERT INTO action_queue
+                    INSERT OR IGNORE INTO action_queue
                         (email_gmail_id, account, prediction_id, action, params_json, action_fingerprint,
                          status, confidence, priority_score, reason_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -130,15 +132,52 @@ class QueueManager:
                         getattr(prediction, 'id', None),
                         suggested_action,
                         json.dumps({}),
-                        make_action_fingerprint(email.gmail_id, suggested_action, {}),
+                        fingerprint,
                         'executed',
                         confidence,
                         score_result.total_score,
                         json.dumps({'reason': 'auto-executed'}),
-                        int(time.time()),
-                        int(time.time()),
+                        now,
+                        now,
                     ),
                 )
+                claimed = cur.rowcount != 0
+            if not claimed:
+                LOG.info(
+                    "Auto-action '%s' for %s already recorded; skipping re-execution.",
+                    suggested_action, email.gmail_id,
+                )
+                return "executed"
+
+            # Execute the action via executor. Pass the real classification
+            # confidence (already verified >= AUTO_EXECUTE_THRESHOLD above), NOT
+            # the priority score, so the executor's threshold gate uses the right
+            # metric and low-priority actions (e.g. archiving newsletters) are not
+            # silently deferred. Respect the return value: a False result means the
+            # action was blocked by policy, deferred, or failed at the Gmail API —
+            # don't leave a false 'executed' audit row in that case.
+            ok = False
+            try:
+                ok = bool(self.executor.execute_action(
+                    email, suggested_action, score_result, confidence=confidence
+                ))
+            except Exception:
+                LOG.exception("Auto-execution failed for %s", email.gmail_id)
+                ok = False
+
+            if not ok:
+                with db.transaction() as cur:
+                    cur.execute(
+                        "UPDATE action_queue SET status = 'execute_failed', updated_at = ? "
+                        "WHERE action_fingerprint = ?",
+                        (int(time.time()), fingerprint),
+                    )
+                LOG.warning(
+                    "Auto-action '%s' for %s did not execute (blocked/deferred/failed); "
+                    "recorded as execute_failed.", suggested_action, email.gmail_id,
+                )
+                return "execute_failed"
+
             # Record the autopilot action as 'seen' (volume), NOT 'approved'.
             # 'approved' is reserved for HUMAN approvals — counting the system's
             # own auto-executions there would inflate approval_rate / the

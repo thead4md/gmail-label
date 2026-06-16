@@ -120,6 +120,21 @@ class ActionExecutor:
             confidence = score.total_score / 100.0
         primary_label = score.primary_label or "NOTIFICATION"
 
+        # Check confidence threshold FIRST so deferred actions never consume
+        # rate-limit budget inside safety_policy.evaluate().
+        threshold = CONFIDENCE_THRESHOLDS.get(action, 0.65)
+        if confidence < threshold:
+            LOG.info(
+                f"Action '{action}' on {email.gmail_id} deferred "
+                f"(confidence {confidence:.2f} < threshold {threshold})"
+            )
+            deferred_decision = SafetyDecision(
+                action=action, allowed=False,
+                reason=f"Confidence {confidence:.2f} below threshold {threshold}",
+            )
+            self._log_action_attempted(email, action, "deferred", deferred_decision)
+            return False
+
         # Check safety policy
         safety_decision = self.safety_policy.evaluate(
             action=action,
@@ -132,12 +147,6 @@ class ActionExecutor:
             LOG.info(f"Action '{action}' on {email.gmail_id} blocked: {safety_decision.reason}")
             # Log the decision even if blocked
             self._log_action_attempted(email, action, "blocked", safety_decision)
-            return False
-
-        # Check confidence threshold
-        if confidence < CONFIDENCE_THRESHOLDS.get(action, 0.65):
-            LOG.info(f"Action '{action}' on {email.gmail_id} deferred (confidence {confidence:.2f} < threshold {CONFIDENCE_THRESHOLDS.get(action, 0.65)})")
-            self._log_action_attempted(email, action, "deferred", safety_decision)
             return False
 
         # In dry-run, just log the decision

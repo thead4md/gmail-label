@@ -103,7 +103,7 @@ class MailMindConfig:
     openai_model: str = DEFAULT_OPENAI_MODEL
     openai_rules_threshold: float = 0.90
     openai_ml_threshold: float = 0.65
-    openai_max_body_chars: int = 1500
+    openai_max_body_chars: int = 500
 
     # Content/sender blend weights
     blend_enabled: bool = True
@@ -216,7 +216,7 @@ class MailMindConfig:
                 os.environ.get("LLM_ML_THRESHOLD", "0.65")
             ),
             openai_max_body_chars=int(
-                os.environ.get("LLM_MAX_BODY_CHARS", "1500")
+                os.environ.get("LLM_MAX_BODY_CHARS", "500")
             ),
             data_dir=os.path.expanduser(
                 os.environ.get("MAILMIND_DATA_DIR", "~/.mailmind")
