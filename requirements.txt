@@ -7,7 +7,7 @@ pandas>=3.0.3,<4.0
 
 # Dev / testing
 pytest>=9.1.0
-google-api-python-client>=2.197.0
+google-api-python-client>=2.198.0
 google-auth>=2.54.0
 google-auth-oauthlib>=1.4.0
 cryptography>=49.0.0
