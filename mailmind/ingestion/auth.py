@@ -218,8 +218,17 @@ def load_stored_credentials(
             creds.refresh(Request())
             _save_stored_token(creds.to_json(), account)
             LOG.info("Refreshed expired credentials for %s", account or "primary")
-        except Exception:
-            LOG.debug("Failed to refresh credentials for %s", account, exc_info=True)
+        except Exception as exc:
+            # WARNING (not debug): a refresh failure here (e.g. invalid_grant
+            # from a revoked/expired token) is indistinguishable from "never
+            # connected" to the caller, which then falls back to interactive
+            # auth. On a headless deploy that fallback can never complete, so
+            # this needs to be visible under default INFO logging, not hidden
+            # at DEBUG.
+            LOG.warning(
+                "Failed to refresh credentials for %s: %s",
+                account or "primary", exc, exc_info=True,
+            )
             return None
     return creds if (creds and creds.valid) else None
 

@@ -20,6 +20,8 @@ from googleapiclient.errors import HttpError
 
 from ..storage.models import Email, ActionApplied
 from ..storage.database import Database
+from ..ingestion.fetcher import GmailFetcher
+from ..ingestion.gmail_label_colors import gmail_color_for
 from .safety import SafetyPolicy, SafetyDecision
 from ..processing.scorer import ScoreResult
 
@@ -65,6 +67,11 @@ class ActionExecutor:
         self.safety_policy = safety_policy
         self.user_id = user_id
         self.rate_limit_seconds = rate_limit_seconds
+        # Real-time labeling now goes through the same GmailFetcher.ensure_label
+        # path the bulk `apply-labels` CLI command uses — retries via GmailFetcher's
+        # shared _retry helper and supports Gmail label colours — instead of the
+        # weaker bespoke get-or-create this class used to maintain itself.
+        self._label_fetcher = GmailFetcher(self.service, user_id=self.user_id)
 
     def suggest_action(
         self,
@@ -185,8 +192,10 @@ class ActionExecutor:
 
     def _apply_label(self, message_id: str, label_name: str) -> None:
         """Apply a label to a message (create label if needed)."""
-        # Get or create label ID
-        label_id = self._get_or_create_label(label_name)
+        # Get or create label ID (with retry + colour support via GmailFetcher).
+        label_id = self._label_fetcher.ensure_label(
+            label_name, color=gmail_color_for(label_name)
+        )
         if not label_id:
             raise ValueError(f"Could not create or find label: {label_name}")
 
@@ -219,26 +228,6 @@ class ActionExecutor:
             id=message_id,
             body={"removeLabelIds": ["INBOX"]},
         ).execute()
-
-    def _get_or_create_label(self, label_name: str) -> Optional[str]:
-        """Get label ID by name, or create if doesn't exist. Returns label ID."""
-        try:
-            # List all labels
-            results = self.service.users().labels().list(userId=self.user_id).execute()
-            labels = results.get("labels", [])
-            for label in labels:
-                if label["name"] == label_name:
-                    return label["id"]
-
-            # Create label if not found
-            new_label = self.service.users().labels().create(
-                userId=self.user_id,
-                body={"name": label_name},
-            ).execute()
-            return new_label.get("id")
-        except HttpError as e:
-            LOG.error(f"Error managing label '{label_name}': {e}")
-            return None
 
     def _log_action_attempted(
         self,

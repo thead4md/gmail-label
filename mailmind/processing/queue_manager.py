@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Optional
 
 from mailmind.utils.fingerprint import make_action_fingerprint
@@ -149,6 +150,23 @@ class QueueManager:
                 )
                 return "executed"
 
+            # ActionExecutor.execute_action() writes score.primary_label to Gmail
+            # (falling back to 'NOTIFICATION' if unset) — it does NOT look at
+            # prediction.primary_label. score_result here was reconstructed by the
+            # caller from prediction.scoring_breakdown, i.e. the scorer's ORIGINAL
+            # pre-resolution label guess; resolve_label_precedence() (pipeline.py)
+            # may have since overridden it via ML/LLM/a rule, and THAT resolved
+            # label lives on prediction.primary_label. Pass a copy of score_result
+            # with primary_label swapped to the resolved label so auto-execute
+            # writes the label the pipeline actually decided on — mirroring how
+            # feedback.py's _execute_approved_action resolves the label for the
+            # human-approval path. Only copy when they actually differ so the
+            # common case (no override happened) passes the original object.
+            resolved_label = getattr(prediction, 'primary_label', None)
+            exec_score_result = score_result
+            if resolved_label and resolved_label != score_result.primary_label:
+                exec_score_result = replace(score_result, primary_label=resolved_label)
+
             # Execute the action via executor. Pass the real classification
             # confidence (already verified >= AUTO_EXECUTE_THRESHOLD above), NOT
             # the priority score, so the executor's threshold gate uses the right
@@ -159,7 +177,7 @@ class QueueManager:
             ok = False
             try:
                 ok = bool(self.executor.execute_action(
-                    email, suggested_action, score_result, confidence=confidence
+                    email, suggested_action, exec_score_result, confidence=confidence
                 ))
             except Exception:
                 LOG.exception("Auto-execution failed for %s", email.gmail_id)
@@ -201,6 +219,46 @@ class QueueManager:
                 confidence,
                 self.QUEUE_THRESHOLD,
             )
+            # Observability (FIX 4): record the skip so dashboard/digest counters
+            # are not blind to it — previously this branch wrote nothing to any
+            # table. Same INSERT OR IGNORE + action_fingerprint idempotency
+            # pattern as the auto-execute path above, so re-processing the same
+            # email+action is a no-op instead of a duplicate row or a UNIQUE
+            # constraint crash. `action_queue.status` is a plain TEXT column with
+            # no CHECK constraint (migrations.py 0008_create_action_queue), so
+            # this new status value needs no schema migration. Best-effort: a
+            # logging failure here must never change the returned status.
+            try:
+                skip_fingerprint = make_action_fingerprint(email.gmail_id, suggested_action, {})
+                now = int(time.time())
+                with db.transaction() as cur:
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO action_queue
+                            (email_gmail_id, account, prediction_id, action, params_json, action_fingerprint,
+                             status, confidence, priority_score, reason_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            email.gmail_id,
+                            getattr(email, 'account', None),
+                            getattr(prediction, 'id', None),
+                            suggested_action,
+                            json.dumps({}),
+                            skip_fingerprint,
+                            'skipped_low_confidence',
+                            confidence,
+                            score_result.total_score,
+                            json.dumps({'reason': 'skipped_low_confidence'}),
+                            now,
+                            now,
+                        ),
+                    )
+            except Exception:
+                LOG.warning(
+                    "Failed to record skipped_low_confidence row for %s",
+                    email.gmail_id, exc_info=True,
+                )
             return "skipped"
 
         # Compute unique fingerprint for queueing. Use {} params (same basis as
@@ -261,13 +319,3 @@ class QueueManager:
         count = supersede_old_queue_items(db, email.gmail_id, fingerprint)
         LOG.debug("Superseded %d old items for email %s", count, email.gmail_id)
         return "queued" if result else None
-
-    def execute_action(self, email: "Email", action: str, score_result: "ScoreResult"):
-        """Execute an action on an email.
-
-        Args:
-            email: The email being processed.
-            action: The action to execute.
-            score_result: ScoreResult containing the total score and breakdown.
-        """
-        self.executor.execute_action(email, action, score_result)

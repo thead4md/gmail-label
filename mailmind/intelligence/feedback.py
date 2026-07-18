@@ -243,8 +243,24 @@ def handle_correction(
     queue_id: int,
     corrected_label: Optional[str] = None,
     corrected_action: Optional[str] = None,
+    executor: Optional[Any] = None,
 ) -> bool:
-    """Handle user label/action correction and log it.
+    """Handle user label/action correction, persist it, and (optionally) reapply it.
+
+    Before this fix, a correction only ever inserted an audit row into
+    user_corrections — it never updated the stored prediction and never
+    touched Gmail, so re-opening the same email in the dashboard resurfaced
+    the exact same stale label every time, no matter how many times it was
+    "corrected". Now, mirroring the sibling handle_approve/handle_label_email:
+      (a) the most recent prediction row for this email has its primary_label
+          overwritten with corrected_label (classifier_source set to
+          'user_correction'), so the dashboard stops resurfacing the stale
+          label; and
+      (b) when an executor is provided, the corrected label is reapplied to
+          Gmail via the same execute_action path used by _execute_approved_action.
+
+    executor defaults to None so existing callers (dashboard/app.py) keep
+    working unchanged until they're updated to pass one.
 
     Returns True if the item was found and correction logged, False if not found.
     """
@@ -272,6 +288,55 @@ def handle_correction(
         corrected_action=corrected_action,
         source='dashboard_correction',
     )
+
+    if corrected_label:
+        # Overwrite the stored prediction so the dashboard (and any future
+        # read of this email's prediction) sees the corrected label instead
+        # of resurfacing the model's original, now-known-wrong one.
+        with db.transaction() as cur:
+            cur.execute(
+                "UPDATE predictions SET primary_label = ?, classifier_source = 'user_correction' "
+                "WHERE email_gmail_id = ?",
+                (corrected_label, gmail_id),
+            )
+
+    if executor is not None and corrected_label:
+        from ..processing.scorer import ScoreResult  # local: avoid cycle at import
+
+        email_row = db.get_email_by_gmail_id(gmail_id)
+        if email_row is None:
+            LOG.warning("Corrected queue %s references missing email %s — not executing.",
+                        queue_id, gmail_id)
+            return True
+
+        # Resurrect a minimal Email from the cached row, same pattern as
+        # _execute_approved_action.
+        email = Email(
+            gmail_id=email_row['gmail_id'],
+            thread_id=email_row['thread_id'],
+            sender=email_row['sender'],
+            recipients=(email_row['recipients'] or '').split(',') if email_row['recipients'] else [],
+            subject=email_row['subject'],
+            snippet=email_row['snippet'],
+            body_text=email_row['body_text'],
+            date_ts=email_row['date_ts'],
+            labels=(email_row['labels'] or '').split(',') if email_row['labels'] else [],
+            parsed=bool(email_row['parsed']),
+        )
+        score = ScoreResult(
+            total_score=100,
+            base_score=100,
+            rule_contribution=0,
+            direct_mention_bonus=0,
+            recency_bonus=0,
+            sender_trust=0,
+            primary_label=corrected_label,
+        )
+        try:
+            executor.execute_action(email, 'label', score, confidence=1.0)
+        except Exception as exc:
+            LOG.error("Executor raised applying correction %s to queue %s: %s",
+                      corrected_label, queue_id, exc, exc_info=True)
 
     return True
 

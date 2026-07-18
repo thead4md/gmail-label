@@ -438,58 +438,136 @@ def test_writes_are_paired_with_invalidate():
     assert src.count("_invalidate()") >= 4  # approve/reject/correct/toggle paths
 
 
-def test_invalidate_clears_only_queue_caches():
-    """Verify _invalidate() clears queue-affected caches but not analytics caches."""
+def test_invalidate_clears_queue_and_analytics_caches():
+    """_invalidate() must clear queue-affected caches AND every cache whose
+    underlying data an approve/reject/correct can change — the REVIEW tab's
+    predictions table (_c_recent_predictions), the AUTOMATE tab's sender list
+    (_c_sender_profiles, whose approval_rate/trust_tier shift on every
+    approve/reject), and all seven INSIGHTS analytics caches. Regression guard
+    for the bug where those went stale for their full TTL after a write."""
     from mailmind.dashboard import app as a
 
-    # Queue/decision-affected caches that SHOULD be cleared by _invalidate()
-    queue_caches = [
-        '_c_pending',
-        '_c_queue_stats',
-        '_c_digest',
-        '_c_executed',
-        '_c_new_senders',
-        '_c_corrections',
+    caches_that_must_go_stale_free = [
+        '_c_pending', '_c_queue_stats', '_c_digest', '_c_executed',
+        '_c_new_senders', '_c_corrections',
+        '_c_recent_predictions', '_c_sender_profiles',
+        '_c_label_dist', '_c_channel_dist', '_c_channel_weekday',
+        '_c_top_senders', '_c_decision_times', '_c_tier_quality',
+        '_c_autopilot_precision',
     ]
+    for cache_name in caches_that_must_go_stale_free:
+        assert hasattr(a, cache_name), f"expected cache function {cache_name} to exist"
 
-    # Caches that should NOT be cleared by _invalidate() (sender or analytics)
-    analytics_caches = [
-        '_c_recent_predictions',
-        '_c_sender_profiles',
-        '_c_label_dist',
-        '_c_channel_dist',
-        '_c_channel_weekday',
-        '_c_top_senders',
-        '_c_decision_times',
-        '_c_model_metadata',
-        '_c_gmail_labels',
-    ]
+    call_count = {"n": 0}
 
-    # Mock all cache functions with .clear() methods
-    with patch.object(a, '_c_pending', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_queue_stats', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_digest', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_executed', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_new_senders', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_recent_predictions', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_corrections', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_sender_profiles', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_label_dist', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_channel_dist', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_channel_weekday', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_top_senders', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_decision_times', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_model_metadata', MagicMock(clear=MagicMock())), \
-         patch.object(a, '_c_gmail_labels', MagicMock(clear=MagicMock())):
+    def _fake_query(*args, **kwargs):
+        call_count["n"] += 1
+        return call_count["n"]
+
+    with patch('mailmind.dashboard.app.get_pending_queue_enriched', side_effect=_fake_query), \
+         patch('mailmind.dashboard.app.get_recent_predictions_with_emails', side_effect=_fake_query), \
+         patch('mailmind.dashboard.app.get_sender_profiles', side_effect=_fake_query), \
+         patch('mailmind.dashboard.app.get_db', return_value=MagicMock()):
+        first_pending = a._c_pending(200, None)
+        first_preds = a._c_recent_predictions(None)
+        first_profiles = a._c_sender_profiles()
+        # Cached: calling again with the same args must NOT hit the query fn.
+        assert a._c_pending(200, None) == first_pending
+        assert a._c_recent_predictions(None) == first_preds
+        assert a._c_sender_profiles() == first_profiles
 
         a._invalidate()
 
-        # Verify queue caches were cleared
-        for cache_name in queue_caches:
-            cache_obj = getattr(a, cache_name)
-            cache_obj.clear.assert_called_once()
+        # After invalidation, each must recompute (new call, new return value).
+        assert a._c_pending(200, None) != first_pending
+        assert a._c_recent_predictions(None) != first_preds
+        assert a._c_sender_profiles() != first_profiles
 
-        # Verify analytics caches were NOT cleared
-        for cache_name in analytics_caches:
-            cache_obj = getattr(a, cache_name)
-            cache_obj.clear.assert_not_called()
+
+def test_invalidate_uses_global_cache_data_clear():
+    """_invalidate() clears via st.cache_data.clear() (simplest correct fix given
+    how many @st.cache_data functions this file has) rather than hand-maintaining
+    a partial per-function clear list that drifts as caches are added."""
+    from mailmind.dashboard import app as a
+    with patch('streamlit.cache_data') as mock_cache_data:
+        a._invalidate()
+        mock_cache_data.clear.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# get_action_executor — single-mailbox executor regression guard.
+#
+# Previously get_action_executor() took no arguments and was a bare
+# @st.cache_resource singleton built from load_stored_credentials() with no
+# account, so it always resolved the PRIMARY mailbox's token — every action
+# for a secondary mailbox silently ran against the wrong Gmail service.
+# ---------------------------------------------------------------------------
+
+class TestGetActionExecutor:
+
+    def test_requires_account_argument(self):
+        import inspect
+        from mailmind.dashboard import app as a
+        # st.cache_resource wraps the function; unwrap to inspect the real signature.
+        target = getattr(a.get_action_executor, '__wrapped__', a.get_action_executor)
+        sig = inspect.signature(target)
+        assert 'account' in sig.parameters, (
+            "get_action_executor must take an `account` argument so "
+            "st.cache_resource keys the cache per mailbox"
+        )
+
+    def test_no_parameterless_call_sites_remain(self):
+        """Static guard: every call site must pass `account`, not call
+        get_action_executor() bare (which would silently resolve the primary
+        mailbox for every account, reintroducing the bug)."""
+        src = (pathlib.Path(__file__).parent.parent / 'dashboard' / 'app.py').read_text()
+        assert 'get_action_executor()' not in src
+        assert src.count('get_action_executor(account)') >= 3
+
+    def test_caches_one_executor_per_account(self):
+        """Same account -> same cached executor; different accounts -> distinct
+        executors built from that account's own credentials (st.cache_resource
+        keys by argument value, so this falls out naturally once `account` is a
+        parameter)."""
+        from mailmind.dashboard import app as a
+        st.cache_resource.clear()
+
+        creds_by_account = {
+            'primary@example.com': MagicMock(name='creds_primary'),
+            'secondary@example.com': MagicMock(name='creds_secondary'),
+        }
+
+        def _fake_load_creds(account=None, scopes=None):
+            return creds_by_account.get(account)
+
+        def _fake_build_service(creds):
+            svc = MagicMock(name='service')
+            svc.creds = creds
+            return svc
+
+        with patch('mailmind.ingestion.auth.load_stored_credentials',
+                   side_effect=_fake_load_creds), \
+             patch('mailmind.ingestion.auth.build_gmail_service',
+                   side_effect=_fake_build_service), \
+             patch('mailmind.dashboard.app.get_db', return_value=MagicMock()):
+            exec_primary       = a.get_action_executor('primary@example.com')
+            exec_secondary     = a.get_action_executor('secondary@example.com')
+            exec_primary_again = a.get_action_executor('primary@example.com')
+
+        assert exec_primary is not None and exec_secondary is not None
+        # Distinct accounts -> distinct cached executors.
+        assert exec_primary is not exec_secondary
+        # Same account -> same cached instance (no rebuild).
+        assert exec_primary is exec_primary_again
+        # Each executor's Gmail service was built from THAT account's
+        # credentials — the actual bug was cross-account leakage, not just
+        # object identity.
+        assert exec_primary.service.creds is creds_by_account['primary@example.com']
+        assert exec_secondary.service.creds is creds_by_account['secondary@example.com']
+
+    def test_returns_none_without_stored_credentials(self):
+        from mailmind.dashboard import app as a
+        st.cache_resource.clear()
+        with patch('mailmind.ingestion.auth.load_stored_credentials', return_value=None), \
+             patch('mailmind.dashboard.app.get_db', return_value=MagicMock()):
+            assert a.get_action_executor('nobody@example.com') is None

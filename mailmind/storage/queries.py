@@ -728,11 +728,18 @@ def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, in
         # ('execute_failed'); the old 'failed' key never matched, so failed
         # executions were silently counted as 0.
         'execute_failed': 0,
+        # PURELY ADDITIVE: rows QueueManager writes for low-confidence
+        # predictions (status='skipped_low_confidence') so the dashboard isn't
+        # blind to them. Status string differs from this dict key, so it's
+        # accumulated separately below rather than via the exact-match loop.
+        'skipped': 0,
     }
 
     for r in rows:
         if r['status'] in stats:
             stats[r['status']] = r['count']
+        elif r['status'] == 'skipped_low_confidence':
+            stats['skipped'] += r['count']
 
     # Count items with reply_needed still pending
     reply_needed_count = 0
@@ -775,6 +782,8 @@ def build_digest(
       pending_reply_needed (int): pending items the LLM flagged reply-needed.
       corrections (int): user_corrections rows logged in window.
       top_labels (list[dict]): top 5 [{label, count}] over the window.
+      skipped (int): queue rows recorded as status='skipped_low_confidence'
+        in window (low-confidence predictions QueueManager declined to act on).
     """
     account_pred = " AND account = ?" if account else ""
     account_q = " AND account = ?" if account else ""
@@ -794,6 +803,15 @@ def build_digest(
 
     execute_failed = db.execute_sql(
         f"SELECT COUNT(*) c FROM action_queue WHERE status = 'execute_failed' "
+        f"AND updated_at >= ?{account_q}",
+        q_params_since,
+    ).fetchone()["c"]
+
+    # PURELY ADDITIVE: low-confidence predictions QueueManager now records as
+    # status='skipped_low_confidence' (previously written nowhere). Windowed
+    # the same way as executed/execute_failed above.
+    skipped = db.execute_sql(
+        f"SELECT COUNT(*) c FROM action_queue WHERE status = 'skipped_low_confidence' "
         f"AND updated_at >= ?{account_q}",
         q_params_since,
     ).fetchone()["c"]
@@ -844,6 +862,8 @@ def build_digest(
         "pending_reply_needed": reply_needed,
         "corrections": corrections,
         "top_labels": top_labels,
+        # PURELY ADDITIVE — see comment above the `skipped` query.
+        "skipped": skipped,
     }
 
 

@@ -124,7 +124,6 @@ class RulesEngine:
 class QueueManager:
     def __init__(executor: 'ActionExecutor')
     def enqueue_from_prediction(self, db: 'Database', email: 'Email', score_result: 'ScoreResult', prediction: 'Prediction', force: bool)
-    def execute_action(self, email: 'Email', action: str, score_result: 'ScoreResult')
 ```
 
 ### DeepSeekClient
@@ -219,6 +218,6 @@ None found.
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 8 complete. 640 tests passing.
+Pass 8 complete. 778 tests passing.
 Next: Pass 9 — TBD
 <!-- AUTO:END:current_pass_notes -->

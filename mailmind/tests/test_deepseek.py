@@ -105,6 +105,43 @@ class TestDeepSeekClient:
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][1]["role"] == "user"
 
+    @pytest.mark.parametrize("label", ["WORK", "URGENT"])
+    @patch("mailmind.llm.deepseek.OpenAI")
+    def test_classify_email_accepts_work_and_urgent(self, mock_openai_class, label):
+        """Regression test for FIX 2: WORK and URGENT are the two highest
+        base-score labels in taxonomy.py (60 and 80) but were missing from
+        DEEPSEEK_LABELS/SYSTEM_PROMPT, so any work/urgent email routed to
+        this tier was structurally forced into the closest available
+        category (almost always NOTIFICATION). Both must now validate."""
+        mock_instance = MagicMock()
+        mock_openai_class.return_value = mock_instance
+
+        mock_instance.chat.completions.create.return_value = FakeResponse(
+            json.dumps({
+                "label": label,
+                "confidence": 0.88,
+                "reasoning": "Business-critical content.",
+            })
+        )
+
+        from mailmind.config import MailMindConfig
+        config = MailMindConfig(deepseek_api_key="sk-test-key", llm_enabled=True)
+        client = __import__("mailmind.llm.deepseek", fromlist=["DeepSeekClient"]).DeepSeekClient(config)
+        email = _make_test_email()
+
+        result = client.classify_email(email)
+
+        assert result.model_available is True
+        assert result.primary_label == label
+
+    def test_valid_labels_include_work_and_urgent(self):
+        """DEEPSEEK_LABELS (imported from taxonomy.py) must include WORK and
+        URGENT, the two highest-priority labels in the full taxonomy."""
+        from mailmind.llm.deepseek import DeepSeekClient
+
+        assert "WORK" in DeepSeekClient.VALID_LABELS
+        assert "URGENT" in DeepSeekClient.VALID_LABELS
+
     @patch("mailmind.llm.deepseek.OpenAI")
     def test_classify_email_invalid_label(self, mock_openai_class):
         """Test invalid label returns model_available=False."""

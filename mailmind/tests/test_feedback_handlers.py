@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email, QueueItem, Prediction
 from mailmind.intelligence.feedback import handle_approve, handle_reject, handle_correction
@@ -135,6 +136,121 @@ def test_handle_correction_logs_corrected_label():
         assert len(corrections) > 0
         latest = corrections[0]
         assert latest['corrected_label'] == 'spam'
+    finally:
+        tmpdir.cleanup()
+
+
+def test_handle_correction_updates_stored_prediction():
+    """Regression test for FIX 1: a correction must overwrite the stored
+    prediction's primary_label, not just log an audit row — otherwise a
+    subsequent read of the email's prediction keeps returning the original,
+    now-known-wrong label forever (this is why the live email
+    gmail_id=19dff64f8eba0831 was "corrected" 4+ times with zero effect)."""
+    db, tmpdir = setup_db()
+    try:
+        email = Email(gmail_id='reg1', sender='r@example.com')
+        db.insert_email(email)
+
+        pred = Prediction(
+            email_gmail_id='reg1',
+            model='rules',
+            labels=['NOTIFICATION'],
+            priority_score=30,
+            primary_label='NOTIFICATION',
+            confidence=0.7,
+        )
+        db.save_prediction(pred)
+
+        fp = make_action_fingerprint(email.gmail_id, 'label', {})
+        qi = QueueItem(email_gmail_id=email.gmail_id, action='label', action_fingerprint=fp, status='pending')
+        q = upsert_queue_item(db, qi)
+
+        result = handle_correction(db, q.id, corrected_label='WORK')
+        assert result is True
+
+        # A subsequent read of the prediction must return the corrected
+        # label — not the stale original one.
+        row = db.execute_sql(
+            "SELECT primary_label, classifier_source FROM predictions WHERE email_gmail_id = ?",
+            ('reg1',),
+        ).fetchone()
+        assert row['primary_label'] == 'WORK'
+        assert row['classifier_source'] == 'user_correction'
+    finally:
+        tmpdir.cleanup()
+
+
+def test_handle_correction_reapplies_to_gmail_when_executor_given():
+    """Regression test for FIX 1: when an executor is passed, the corrected
+    label must actually be reapplied to Gmail via execute_action — mirroring
+    handle_approve's executor-integration pattern."""
+    db, tmpdir = setup_db()
+    try:
+        email = Email(
+            gmail_id='reg2', sender='r2@example.com', subject='s', snippet='sn',
+            body_text='b', recipients=['me@example.com'], date_ts=1, labels=[], parsed=True,
+        )
+        db.insert_email(email)
+        pred = Prediction(
+            email_gmail_id='reg2',
+            model='rules',
+            labels=['NOTIFICATION'],
+            priority_score=30,
+            primary_label='NOTIFICATION',
+            confidence=0.7,
+        )
+        db.save_prediction(pred)
+
+        fp = make_action_fingerprint(email.gmail_id, 'label', {})
+        qi = QueueItem(email_gmail_id=email.gmail_id, action='label', action_fingerprint=fp, status='pending')
+        q = upsert_queue_item(db, qi)
+
+        executor = MagicMock()
+        executor.execute_action.return_value = True
+
+        result = handle_correction(db, q.id, corrected_label='WORK', executor=executor)
+        assert result is True
+
+        executor.execute_action.assert_called_once()
+        call_args = executor.execute_action.call_args
+        call_email, call_action, call_score = call_args.args
+        assert call_email.gmail_id == 'reg2'
+        assert call_action == 'label'
+        assert call_score.primary_label == 'WORK'
+        assert call_args.kwargs.get('confidence') == 1.0
+    finally:
+        tmpdir.cleanup()
+
+
+def test_handle_correction_without_label_does_not_touch_prediction():
+    """A correction that only carries corrected_action (no corrected_label)
+    must not overwrite the prediction row — only label corrections do."""
+    db, tmpdir = setup_db()
+    try:
+        email = Email(gmail_id='reg3', sender='r3@example.com')
+        db.insert_email(email)
+        pred = Prediction(
+            email_gmail_id='reg3',
+            model='rules',
+            labels=['NOTIFICATION'],
+            priority_score=30,
+            primary_label='NOTIFICATION',
+            confidence=0.7,
+        )
+        db.save_prediction(pred)
+
+        fp = make_action_fingerprint(email.gmail_id, 'archive', {})
+        qi = QueueItem(email_gmail_id=email.gmail_id, action='archive', action_fingerprint=fp, status='pending')
+        q = upsert_queue_item(db, qi)
+
+        result = handle_correction(db, q.id, corrected_action='label:WORK')
+        assert result is True
+
+        row = db.execute_sql(
+            "SELECT primary_label FROM predictions WHERE email_gmail_id = ?",
+            ('reg3',),
+        ).fetchone()
+        assert row['primary_label'] == 'NOTIFICATION'
     finally:
         tmpdir.cleanup()
 

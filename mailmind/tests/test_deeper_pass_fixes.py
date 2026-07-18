@@ -10,6 +10,8 @@ Covers:
 from __future__ import annotations
 
 import base64
+import json
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,6 +28,7 @@ from mailmind.processing.scorer import ScoreResult
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email, Prediction
 from mailmind.storage.queries import (
+    build_digest,
     get_queue_stats,
     set_sender_label_rule,
     update_sender_profile,
@@ -193,6 +196,88 @@ class TestAutoExecuteStampsAccount:
         assert row["account"] == "me@example.com"
 
 
+# ── FIX 4: skip-path observability ───────────────────────────────────────────
+class TestSkippedLowConfidenceObservability:
+    def test_low_confidence_skip_produces_queryable_row_and_digest_count(self, db: Database):
+        db.insert_email(Email(
+            gmail_id="g3", sender="carol@example.com", subject="s", snippet="x",
+            body_text="b", recipients=["me@example.com"], date_ts=1, labels=[],
+            parsed=True, account="me@example.com",
+        ))
+        pred = Prediction(
+            email_gmail_id="g3", model="rules", labels=["NOTIFICATION"],
+            priority_score=40, primary_label="NOTIFICATION", confidence=0.40,
+            pipeline_used="rules", rule_matches=[], scoring_breakdown="{}",
+            action_suggested="label", account="me@example.com",
+        )
+        pred.id = db.save_prediction(pred)
+
+        email_obj = Email(
+            gmail_id="g3", sender="carol@example.com", subject="s", snippet="x",
+            body_text="b", recipients=["me@example.com"], date_ts=1, labels=[],
+            parsed=True, account="me@example.com",
+        )
+        score = ScoreResult(
+            total_score=40, base_score=40, rule_contribution=0,
+            direct_mention_bonus=0, recency_bonus=0, sender_trust=0,
+            primary_label="NOTIFICATION",
+        )
+        qm = QueueManager(executor=MagicMock())
+
+        # confidence (0.40) is below QUEUE_THRESHOLD (0.65) -> skip branch.
+        status = qm.enqueue_from_prediction(db, email_obj, score, pred)
+
+        assert status == "skipped"
+        qm.executor.execute_action.assert_not_called()
+
+        row = db.execute_sql(
+            "SELECT status, confidence, account FROM action_queue WHERE email_gmail_id = 'g3'",
+        ).fetchone()
+        assert row is not None
+        assert row["status"] == "skipped_low_confidence"
+        assert row["confidence"] == pytest.approx(0.40)
+        assert row["account"] == "me@example.com"
+
+        digest = build_digest(db, since_ts=int(time.time()) - 3600, account="me@example.com")
+        assert digest["skipped"] == 1
+
+    def test_repeated_skip_is_idempotent(self, db: Database):
+        """Re-processing the same low-confidence email+action must not create
+        a second row (same INSERT OR IGNORE + action_fingerprint pattern used
+        by the auto-execute path)."""
+        db.insert_email(Email(
+            gmail_id="g4", sender="dave@example.com", subject="s", snippet="x",
+            body_text="b", recipients=["me@example.com"], date_ts=1, labels=[],
+            parsed=True, account="me@example.com",
+        ))
+        pred = Prediction(
+            email_gmail_id="g4", model="rules", labels=["NOTIFICATION"],
+            priority_score=40, primary_label="NOTIFICATION", confidence=0.40,
+            pipeline_used="rules", rule_matches=[], scoring_breakdown="{}",
+            action_suggested="label", account="me@example.com",
+        )
+        pred.id = db.save_prediction(pred)
+        email_obj = Email(
+            gmail_id="g4", sender="dave@example.com", subject="s", snippet="x",
+            body_text="b", recipients=["me@example.com"], date_ts=1, labels=[],
+            parsed=True, account="me@example.com",
+        )
+        score = ScoreResult(
+            total_score=40, base_score=40, rule_contribution=0,
+            direct_mention_bonus=0, recency_bonus=0, sender_trust=0,
+            primary_label="NOTIFICATION",
+        )
+        qm = QueueManager(executor=MagicMock())
+
+        qm.enqueue_from_prediction(db, email_obj, score, pred)
+        qm.enqueue_from_prediction(db, email_obj, score, pred)
+
+        count = db.execute_sql(
+            "SELECT COUNT(*) c FROM action_queue WHERE email_gmail_id = 'g4'",
+        ).fetchone()["c"]
+        assert count == 1
+
+
 # ── C2: manual trust tier is sticky ──────────────────────────────────────────
 class TestManualTrustTierSticky:
     def test_known_sender_survives_approve_recompute(self, db: Database):
@@ -256,3 +341,73 @@ class TestParserFixes:
             "Subject": "=?UTF-8?B?SGVsbG8gV29ybGQ=?=",
         }))
         assert email.subject == "Hello World"
+
+
+# ── Confidence sentinel collision (the classify/execute/queue paradox) ──────
+class TestNoSignalConfidenceIsNotZero:
+    """End-to-end: an email with genuinely no classification signal anywhere
+    (no matching rule, no ML model, no LLM) must resolve to a real-review
+    confidence (0.85, landing it in the 0.65-0.90 queued-for-review band), NOT
+    the bare 0.0 'no rule matched' sentinel that used to be indistinguishable
+    from a real, confident-but-low score and silently dropped by QueueManager
+    with zero persisted trace. This is the core mechanism behind '48
+    classified / 0 executed / 0 queued' in production.
+    """
+
+    def test_unclassifiable_email_is_queued_not_silently_skipped(self, db: Database):
+        from dataclasses import fields
+        from mailmind.processing.pipeline import Pipeline
+        from mailmind.processing.rules import RulesEngine
+        from mailmind.processing.scorer import PriorityScorer
+        from mailmind.ml.classifier_router import ClassifierRouter
+
+        rules_engine = RulesEngine(user_email="me@example.com")
+        scorer = PriorityScorer(user_email="me@example.com")
+        # No ML model, no LLM classifier, LLM tier disabled, blend disabled —
+        # every tier is unavailable, so an email matching no labeling rule has
+        # genuinely zero real signal from any source.
+        router = ClassifierRouter(
+            rules_engine=rules_engine, ml_model=None, llm_classifier=None,
+            llm_enabled=False, blend_enabled=False,
+        )
+        stub_executor = MagicMock()
+        stub_executor.suggest_action.return_value = "label"
+        pipeline = Pipeline(
+            db=db, rules_engine=rules_engine, scorer=scorer,
+            executor=stub_executor, llm_client=None, classifier_router=router,
+        )
+
+        email = Email(
+            gmail_id="unclassifiable_001", sender="randomsender@example.com",
+            subject="hello", snippet="", body_text="just checking in, no news",
+            recipients=["me@example.com"], date_ts=1, labels=[], parsed=True,
+            account="me@example.com",
+        )
+        db.insert_email(email)
+        prediction = pipeline.process(email)
+
+        # The sentinel fix: no real signal must resolve to the 0.85 safety-net
+        # default, not the bare 0.0 "no rule matched" placeholder.
+        assert prediction.confidence == pytest.approx(0.85)
+
+        score_data = json.loads(prediction.scoring_breakdown)
+        valid_fields = {f.name for f in fields(ScoreResult)}
+        score_result = ScoreResult(**{
+            k: v for k, v in score_data.items() if k in valid_fields
+        })
+
+        qm = QueueManager(executor=MagicMock())
+        status = qm.enqueue_from_prediction(db, email, score_result, prediction)
+
+        # 0.65 <= 0.85 < 0.90: queued for human review, not auto-executed and
+        # NOT silently skipped.
+        assert status == "queued"
+        qm.executor.execute_action.assert_not_called()
+
+        row = db.execute_sql(
+            "SELECT status, confidence FROM action_queue WHERE email_gmail_id = ?",
+            ("unclassifiable_001",),
+        ).fetchone()
+        assert row is not None
+        assert row["status"] == "pending"
+        assert row["confidence"] == pytest.approx(0.85)

@@ -124,7 +124,10 @@ class Pipeline:
             executor: Optional ActionExecutor for applying actions.
             safety_policy: Optional SafetyPolicy for action decisions.
             llm_client: Optional DeepSeekClient for LLM classification (Pass 7+).
-            llm_skip_threshold: Skip LLM if rules score >= this value (default 70).
+            llm_skip_threshold: Retained for constructor back-compat (config.py /
+                main.py still pass it); no longer gates the LLM call in process()
+                — that decision now uses `ml_or_rules_handled`, a real
+                classification-confidence signal, instead of the priority score.
             llm_max_calls_per_run: Max LLM API calls per pipeline run (default 10).
             classifier_router: Optional ClassifierRouter for tiered classification.
         """
@@ -153,7 +156,7 @@ class Pipeline:
         matched_rules = [m for m in rule_matches if m.matched]
         LOG.debug(f"Matched {len(matched_rules)} rules: {[m.rule_name for m in matched_rules]}")
 
-        score = self.scorer.compute_score(email, rule_matches)
+        score = self.scorer.compute_score(email, rule_matches, db=self.db)
         LOG.debug(f"Score: {score.total_score} (primary_label: {score.primary_label})")
         LOG.debug(f"Breakdown:\n{score.breakdown_text}")
 
@@ -174,19 +177,33 @@ class Pipeline:
                 email, rule_matches=rule_matches, db=self.db, account=account
             )
             if routing_result is not None:
+                # routing_result.confidence is None exactly when the router had
+                # genuinely no signal (fallback with no rule/ML/LLM opinion) \u2014
+                # %.2f would raise TypeError on None, so format defensively.
+                _routed_conf_str = (
+                    f"{routing_result.confidence:.2f}"
+                    if routing_result.confidence is not None else "n/a"
+                )
                 LOG.info(
-                    "email %s classified by %s \u2192 %s (%.2f)",
+                    "email %s classified by %s \u2192 %s (%s)",
                     email.gmail_id,
                     routing_result.source,
                     routing_result.label,
-                    routing_result.confidence,
+                    _routed_conf_str,
                 )
 
         # 3b. Run LLM classification (Pass 7+ DeepSeek) if applicable.
-        # Skip the paid LLM when:
-        #   - rules score is high enough, OR
-        #   - the router already handled this email via rules or ML (cheap tiers
-        #     succeeded; calling LLM would be wasted spend).
+        # Skip the paid LLM only when the router already handled this email via
+        # a tier with real classification confidence (cheap tiers succeeded;
+        # calling LLM would be wasted spend). This gate used to also fire when
+        # `score.total_score >= self.llm_skip_threshold`, but total_score is
+        # PriorityScorer's *importance* score (base + direct-mention bonus +
+        # recency + sender trust + label-priority weight) — not classification
+        # confidence. A directly-addressed, otherwise-unclassified email can
+        # score ~74 on importance alone (clearing the old default-70 threshold)
+        # and would skip the one stage that might actually classify it. Gating on
+        # ml_or_rules_handled instead ties the skip to an actual "already
+        # classified" signal.
         # "rule" = a Tier-0 user override (explicit, confidence 1.0) — honour it and
         # never spend a paid LLM call on it. "rules"/"ml" = a cheaper tier already
         # classified confidently. Only the low-confidence "fallback" (or no router)
@@ -208,7 +225,6 @@ class Pipeline:
         if (
             self.llm_client is not None
             and self._llm_calls_this_run < self.llm_max_calls_per_run
-            and score.total_score < self.llm_skip_threshold
             and not ml_or_rules_handled
         ):
             llm_result = self.llm_client.classify_email(email)
@@ -222,14 +238,18 @@ class Pipeline:
                 self.llm_max_calls_per_run,
             )
         elif ml_or_rules_handled:
-            LOG.debug(
-                "Skipping LLM for %s: router handled via %s (conf=%.2f)",
-                email.gmail_id, routing_result.source, routing_result.confidence,
+            _handled_conf_str = (
+                f"{routing_result.confidence:.2f}"
+                if routing_result.confidence is not None else "n/a"
             )
-        elif score.total_score >= self.llm_skip_threshold:
             LOG.debug(
-                "Skipping LLM for %s: rules score %d >= threshold %d",
-                email.gmail_id, score.total_score, self.llm_skip_threshold,
+                "Skipping LLM for %s: router handled via %s (conf=%s)",
+                email.gmail_id, routing_result.source, _handled_conf_str,
+            )
+        elif self.llm_client is not None:
+            LOG.debug(
+                "Skipping LLM for %s: call budget exhausted (%d/%d)",
+                email.gmail_id, self._llm_calls_this_run, self.llm_max_calls_per_run,
             )
 
         prediction = self._create_prediction(

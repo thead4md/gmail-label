@@ -240,13 +240,20 @@ def _c_daily_brief(account):
     return build_daily_brief(db, account=account, llm_client=llm_client)
 
 def _invalidate() -> None:
-    """Clear queue-affected caches after approve/reject/correct/label-weight writes."""
-    _c_pending.clear()
-    _c_queue_stats.clear()
-    _c_executed.clear()
-    _c_digest.clear()
-    _c_new_senders.clear()
-    _c_corrections.clear()
+    """Clear every cache that a queue write (approve/reject/correct/label-weight)
+    can make stale.
+
+    Previously this only cleared the queue-facing caches (_c_pending,
+    _c_queue_stats, _c_executed, _c_digest, _c_new_senders, _c_corrections) and
+    left _c_recent_predictions (REVIEW tab's predictions table),
+    _c_sender_profiles (AUTOMATE tab's sender list — approval_rate/trust_tier
+    change on every approve/reject), and all seven INSIGHTS analytics caches
+    stale for their full TTL even though approve/reject/correct mutate the
+    underlying rows those all read. Simplest correct fix: clear all cached
+    data globally rather than hand-maintain a second list that's guaranteed to
+    drift from the growing set of @st.cache_data functions in this file.
+    """
+    st.cache_data.clear()
 
 
 def _invalidate_senders() -> None:
@@ -260,14 +267,22 @@ def get_accounts() -> List[str]:
 
 
 @st.cache_resource
-def get_action_executor():
-    """Build a real ActionExecutor when credentials are available, else None."""
+def get_action_executor(account: Optional[str]):
+    """Build a real ActionExecutor for *account*, or None if it has no stored
+    credentials.
+
+    st.cache_resource keys its cache by argument values, so passing `account`
+    naturally yields one cached executor per mailbox — previously this was a
+    parameterless singleton that always resolved the PRIMARY mailbox's token,
+    so every action for a secondary mailbox silently ran against the wrong
+    Gmail service and 404'd.
+    """
     import os
     from mailmind.actions.executor import ActionExecutor
     from mailmind.actions.safety import SafetyPolicy
     from mailmind.ingestion.auth import build_gmail_service, load_stored_credentials
 
-    creds = load_stored_credentials()
+    creds = load_stored_credentials(account)
     if creds is None:
         return None
     service = build_gmail_service(creds)
@@ -459,7 +474,7 @@ def render_now_tab(account: Optional[str] = None) -> None:
             if st.button("✅ Approve", key=f"now_approve_{idx}_{item_id}"):
                 if chosen_label != predicted_label:
                     handle_correction(db, item_id, corrected_label=chosen_label)
-                acted = handle_approve(db, item_id, executor=get_action_executor())
+                acted = handle_approve(db, item_id, executor=get_action_executor(account))
                 if acted:
                     st.session_state.setdefault("dismissed_ids", set()).add(item_id)
                     st.toast(f"✅ {subject[:50]}", icon="✅")
@@ -698,7 +713,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
             with col_approve:
                 st.markdown('<div class="mm-btn-approve">', unsafe_allow_html=True)
                 if st.button("✅ Approve", key=f"review_approve_{idx}_{item_id}"):
-                    acted = handle_approve(db, item_id, executor=get_action_executor())
+                    acted = handle_approve(db, item_id, executor=get_action_executor(account))
                     if acted:
                         st.session_state.setdefault("dismissed_ids", set()).add(item_id)
                         st.toast("✅ Approved", icon="✅")
@@ -744,7 +759,7 @@ def render_review_tab(account: Optional[str] = None) -> None:
                 with col_save:
                     if st.button("Save", key=f"review_save_label_{item_id}"):
                         if scope in ("thread", "sender"):
-                            acted = handle_label_email(db, item_id, new_label, scope, executor=get_action_executor(), account=account)
+                            acted = handle_label_email(db, item_id, new_label, scope, executor=get_action_executor(account), account=account)
                         else:
                             acted = handle_correction(db, item_id, corrected_label=new_label)
                         if acted:
@@ -850,7 +865,15 @@ def render_history_tab(account: Optional[str] = None) -> None:
                         )
                     with col_save:
                         if st.button("Save", key=f"hist_save_label_{item_id}"):
-                            acted = handle_correction(db, item_id, corrected_label=new_label)
+                            # This item is already executed/terminal — there is no
+                            # later Approve step to pick up the correction, so the
+                            # executor must be passed here for the fix to actually
+                            # reach Gmail (unlike the REVIEW-tab scope='email' edit,
+                            # which is still pending and gets applied at Approve time).
+                            acted = handle_correction(
+                                db, item_id, corrected_label=new_label,
+                                executor=get_action_executor(account),
+                            )
                             if acted:
                                 st.toast(f"✏️ Corrected → {new_label}", icon="✏️")
                                 st.session_state.pop(f"edit_history_{item_id}", None)
@@ -1233,8 +1256,30 @@ def _get_theme() -> str:
     return st.session_state.get("_theme", "dark")
 
 
+def _warn_weak_cookie_secret() -> None:
+    """Surface the _auth_secret() fallback in the UI instead of leaving it silent.
+
+    When DASHBOARD_SECRET is unset, the auth cookie's HMAC key falls back to the
+    plaintext DASHBOARD_PASSWORD, capping cookie-forgery resistance at a
+    human-chosen login password. Only worth warning about when a password is
+    actually configured — with no password, there's no cookie to sign either.
+    """
+    import os
+    if not os.environ.get("DASHBOARD_PASSWORD", "").strip():
+        return
+    if os.environ.get("DASHBOARD_SECRET", "").strip():
+        return
+    st.sidebar.warning(
+        "⚠️ Cookie security is weaker than it could be: `DASHBOARD_SECRET` is "
+        "unset, so the login-cookie signature falls back to your "
+        "`DASHBOARD_PASSWORD`. Set a dedicated `DASHBOARD_SECRET` for stronger "
+        "cookie-forgery resistance."
+    )
+
+
 def _render_sidebar() -> Optional[str]:
     """Render mailbox switcher, heartbeat, theme picker; return selected account."""
+    _warn_weak_cookie_secret()
     st.sidebar.markdown(
         '<div style="font-size:20px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">'
         '📧 MailMind</div>'
@@ -1419,6 +1464,8 @@ def _valid_auth_token(token: str, secret: str) -> bool:
 _AUTH_MAX_FAILURES = 5
 _AUTH_LOCKOUT_SECONDS = 300
 _AUTH_STATE_KEY = "dashboard_auth_state"
+_CLIENT_ID_COOKIE = "mm_client_id"
+_CLIENT_ID_DAYS = 30
 
 
 def _auth_secret(password: str) -> str:
@@ -1429,9 +1476,39 @@ def _auth_secret(password: str) -> str:
     return os.environ.get("DASHBOARD_SECRET", "").strip() or password
 
 
-def _auth_lockout_remaining() -> int:
+def _get_or_set_client_id(controller) -> str:
+    """Stable per-browser identifier used to partition login-lockout state.
+
+    Without this, `_AUTH_STATE_KEY` was one single global DB row shared by
+    every visitor: 5 wrong-password attempts from ANYONE locked out the real
+    operator for `_AUTH_LOCKOUT_SECONDS`, repeatably — a trivial DoS. Keying
+    the lockout counter by a dedicated cookie (same pattern as `_AUTH_COOKIE`)
+    means an anonymous attacker can only ever lock out their own counter; the
+    operator's own browser keeps a separate one that a remote attacker has no
+    access to.
+
+    This is not a perfect defense — clearing cookies resets an attacker's own
+    lockout, and the very first render can race the cookie component's
+    hydration (same caveat as `_AUTH_COOKIE`) — but it eliminates the
+    single-shared-counter DoS, which was the actual reported risk, without a
+    bigger refactor (e.g. real per-IP tracking, which Streamlit doesn't expose
+    cleanly).
+    """
+    import secrets
+    cid = controller.get(_CLIENT_ID_COOKIE)
+    if not cid:
+        cid = secrets.token_hex(16)
+        controller.set(_CLIENT_ID_COOKIE, cid, max_age=_CLIENT_ID_DAYS * 86400)
+    return cid
+
+
+def _auth_state_key(client_id: str) -> str:
+    return f"{_AUTH_STATE_KEY}:{client_id}"
+
+
+def _auth_lockout_remaining(client_id: str) -> int:
     import json, time
-    raw = get_db().get_state(_AUTH_STATE_KEY)
+    raw = get_db().get_state(_auth_state_key(client_id))
     if not raw:
         return 0
     try:
@@ -1441,9 +1518,10 @@ def _auth_lockout_remaining() -> int:
     return max(0, int(data.get("locked_until", 0)) - int(time.time()))
 
 
-def _record_auth_failure() -> None:
+def _record_auth_failure(client_id: str) -> None:
     import json, time
-    raw = get_db().get_state(_AUTH_STATE_KEY)
+    key = _auth_state_key(client_id)
+    raw = get_db().get_state(key)
     try:
         data = json.loads(raw) if raw else {}
     except Exception:
@@ -1453,12 +1531,12 @@ def _record_auth_failure() -> None:
     if failures >= _AUTH_MAX_FAILURES:
         locked_until = int(time.time()) + _AUTH_LOCKOUT_SECONDS
         failures = 0
-    get_db().set_state(_AUTH_STATE_KEY, json.dumps({"failures": failures, "locked_until": locked_until}))
+    get_db().set_state(key, json.dumps({"failures": failures, "locked_until": locked_until}))
 
 
-def _reset_auth_failures() -> None:
+def _reset_auth_failures(client_id: str) -> None:
     import json
-    get_db().set_state(_AUTH_STATE_KEY, json.dumps({"failures": 0, "locked_until": 0}))
+    get_db().set_state(_auth_state_key(client_id), json.dumps({"failures": 0, "locked_until": 0}))
 
 
 def _check_password() -> bool:
@@ -1482,6 +1560,7 @@ def _check_password() -> bool:
     # Persistent path: check the cookie (may be None on the very first render
     # while the cookie component hydrates — handled below).
     controller = CookieController()
+    client_id = _get_or_set_client_id(controller)
     token = controller.get(_AUTH_COOKIE)
 
     if token and _valid_auth_token(token, _auth_secret(required)):
@@ -1504,7 +1583,7 @@ def _check_password() -> bool:
     with col:
         pwd = st.text_input("Password", type="password", label_visibility="collapsed",
                             placeholder="Password")
-        locked = _auth_lockout_remaining()
+        locked = _auth_lockout_remaining(client_id)
         if locked > 0:
             st.error(f"Too many attempts. Try again in {locked}s.")
         elif st.button("Unlock", use_container_width=True):
@@ -1513,10 +1592,10 @@ def _check_password() -> bool:
                 controller.set(_AUTH_COOKIE, _make_auth_token(_auth_secret(required)),
                                max_age=_AUTH_DAYS * 86400)
                 st.session_state["_authenticated"] = True
-                _reset_auth_failures()
+                _reset_auth_failures(client_id)
                 st.rerun()
             else:
-                _record_auth_failure()
+                _record_auth_failure(client_id)
                 st.error("Incorrect password.")
     return False
 

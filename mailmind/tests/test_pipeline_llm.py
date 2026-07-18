@@ -4,7 +4,9 @@ All LLM API calls are mocked — no real DeepSeek API calls are made.
 
 Covers:
 - LLM called when rules score is below skip threshold
-- LLM skipped when rules score is above skip threshold
+- LLM called despite a high priority score when nothing classified confidently
+  (priority/importance must never gate the LLM call by itself)
+- LLM skipped when a router tier already classified confidently
 - LLM skipped when budget is exhausted
 - LLM skipped when client is None
 - LLM result merged into Prediction correctly
@@ -71,8 +73,17 @@ class TestLLMPipelineIntegration:
         # LLM confidence should be set
         assert prediction.llm_confidence == 0.92
 
-    def test_llm_skipped_when_score_above_threshold(self, mock_deepseek_client):
-        """Verify LLM is NOT called when rules score >= skip threshold."""
+    def test_llm_called_despite_high_score_when_unclassified(self, mock_deepseek_client):
+        """A high PRIORITY score must not skip the LLM by itself.
+
+        total_score is importance (direct-mention + recency + ...), not
+        classification confidence. This pipeline has no classifier_router, so
+        nothing has actually classified the email yet — the LLM must still be
+        called regardless of how important it scores. This replaces a test
+        that asserted the opposite (the exact bug: gating the LLM call on
+        `score.total_score < llm_skip_threshold`) — see pipeline.py's
+        process(), which now gates on `ml_or_rules_handled` instead.
+        """
         db = Database(":memory:")
         pipeline = Pipeline(
             db=db,
@@ -83,7 +94,8 @@ class TestLLMPipelineIntegration:
             llm_max_calls_per_run=10,
         )
 
-        # Create an email that will score high (direct finance + recency)
+        # Create an email that will score high on IMPORTANCE alone (direct
+        # mention + recency) despite matching no confident classification rule.
         email = _make_email(
             gmail_id="llm_skip_test_001",
             sender="billing@company.com",
@@ -92,12 +104,48 @@ class TestLLMPipelineIntegration:
         )
         prediction = pipeline.process(email)
 
-        # LLM should NOT have been called
-        mock_deepseek_client.classify_email.assert_not_called()
-        # Pipeline should be rules-only
-        assert prediction.pipeline_used == "rules"
-        # LLM confidence should be None
-        assert prediction.llm_confidence is None
+        # LLM SHOULD have been called — no router/rule tier confidently
+        # classified this email, so its high priority score must not skip it.
+        mock_deepseek_client.classify_email.assert_called_once_with(email)
+        assert prediction.pipeline_used == "hybrid"
+        assert prediction.llm_confidence == 0.92
+
+    def test_llm_skipped_when_router_already_handled_confidently(self):
+        """LLM must be skipped when a router tier already classified confidently.
+
+        This is the actual intent the old (buggy) test was reaching for: don't
+        waste a paid LLM call — but the real gate must be "already classified
+        with confidence" (ml_or_rules_handled), not "importance score is high".
+        """
+        from unittest.mock import MagicMock
+        from mailmind.ml.classifier_router import RoutingResult
+
+        db = Database(":memory:")
+        mock_llm = MagicMock()
+        mock_router = MagicMock()
+        mock_router.route.return_value = RoutingResult(
+            source="rules", label="FINANCE", confidence=0.95,
+        )
+        pipeline = Pipeline(
+            db=db,
+            rules_engine=RulesEngine(user_email="me@example.com"),
+            scorer=PriorityScorer(user_email="me@example.com"),
+            llm_client=mock_llm,
+            llm_skip_threshold=70,
+            llm_max_calls_per_run=10,
+            classifier_router=mock_router,
+        )
+
+        email = _make_email(
+            gmail_id="llm_skip_test_002",
+            sender="billing@company.com",
+            subject="Your invoice #12345 - Payment Due",
+            body_text="This is an invoice for your recent purchase.",
+        )
+        prediction = pipeline.process(email)
+
+        mock_llm.classify_email.assert_not_called()
+        assert prediction.primary_label == "FINANCE"
 
     def test_llm_skipped_when_budget_exhausted(self, mock_deepseek_client):
         """Verify LLM stops being called after budget is exhausted."""
