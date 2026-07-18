@@ -58,13 +58,17 @@ def test_label_free_plus_low_conf_labeling_rule_falls_through():
 
 class _Cfg:
     """Minimal stand-in for MailMindConfig."""
-    def __init__(self, openai_key="", deepseek_enabled=False):
+    def __init__(self, openai_key="", deepseek_enabled=False, openai_llm_enabled=True):
         self.openai_api_key = openai_key
         self.openai_model = "gpt-4o-mini"
         self.openai_max_body_chars = 500
         self.deepseek_api_key = "dk" if deepseek_enabled else ""
         self.deepseek_model = "deepseek-chat"
         self.llm_enabled = deepseek_enabled
+        # Defaults to True so existing tests (written before the LLM_ENABLED
+        # gate existed) keep exercising "has a key => usable" behavior; the
+        # gating itself is pinned by the tests below that pass this False.
+        self.openai_llm_enabled = openai_llm_enabled
 
 
 def test_provider_switch_auto_prefers_openai_when_key_present():
@@ -98,3 +102,27 @@ def test_provider_switch_no_llm_returns_none():
     from mailmind import main
     cfg = _Cfg(openai_key="sk", deepseek_enabled=True)
     assert main._build_llm_client(cfg, no_llm=True) is None
+
+
+def test_provider_switch_openai_key_alone_does_not_activate_when_llm_disabled():
+    """Regression for the LLM_ENABLED gate: an OPENAI_API_KEY must NOT be
+    sufficient on its own to activate the OpenAI tier under provider=auto —
+    config.openai_llm_enabled (LLM_ENABLED env var) must also be true. With it
+    false, auto falls through to DeepSeek instead."""
+    from mailmind import main
+    cfg = _Cfg(openai_key="sk-test", deepseek_enabled=True, openai_llm_enabled=False)
+    with patch.dict("os.environ", {"LLM_PROVIDER": "auto"}, clear=False), \
+         patch("mailmind.main.DeepSeekClient") as MockDS:
+        client = main._build_llm_client(cfg)
+    MockDS.assert_called_once_with(cfg)
+
+
+def test_provider_switch_explicit_openai_refused_when_llm_disabled():
+    """An explicit LLM_PROVIDER=openai request is refused (not silently
+    rerouted to DeepSeek) when LLM_ENABLED is not true, even with a key."""
+    from mailmind import main
+    cfg = _Cfg(openai_key="sk-test", deepseek_enabled=True, openai_llm_enabled=False)
+    with patch.dict("os.environ", {"LLM_PROVIDER": "openai"}, clear=False), \
+         patch("mailmind.main.DeepSeekClient") as MockDS:
+        assert main._build_llm_client(cfg) is None
+        MockDS.assert_not_called()

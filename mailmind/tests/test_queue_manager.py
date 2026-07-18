@@ -96,6 +96,37 @@ class TestQueueManager(unittest.TestCase):
         # Two transactions: action_queue INSERT + update_sender_profile
         self.assertEqual(self.mock_db.transaction.call_count, 2)
 
+    def test_auto_execute_writes_resolved_label_not_stale_scorer_guess(self):
+        """FIX 1 regression.
+
+        score_result.primary_label is the scorer's ORIGINAL pre-resolution
+        guess (main.py rebuilds it from prediction.scoring_breakdown).
+        prediction.primary_label is what resolve_label_precedence() actually
+        decided (e.g. after an ML/LLM/rule override). ActionExecutor writes
+        score.primary_label to Gmail, so the executor must receive the
+        RESOLVED label — not the stale scorer guess — or auto-execute would
+        mislabel the message the instant autopilot is enabled for a sender.
+        """
+        self.test_prediction.confidence = 0.95
+        self.test_prediction.primary_label = "FINANCE"  # resolved label
+        score = self._make_score(95)  # score.primary_label == "IMPORTANT" (stale)
+
+        status = self.queue_manager.enqueue_from_prediction(
+            self.mock_db, self.test_email, score, self.test_prediction,
+        )
+
+        self.assertEqual(status, "executed")
+        self.mock_executor.execute_action.assert_called_once()
+        call_args = self.mock_executor.execute_action.call_args
+        email_arg, action_arg, score_arg = call_args.args
+        self.assertEqual(email_arg, self.test_email)
+        self.assertEqual(action_arg, "star")
+        self.assertEqual(score_arg.primary_label, "FINANCE")
+        self.assertEqual(call_args.kwargs, {"confidence": 0.95})
+        # The original score_result passed in by the caller must be untouched
+        # (no aliasing bug — queue_manager must build a copy, not mutate it).
+        self.assertEqual(score.primary_label, "IMPORTANT")
+
     def test_enqueue_above_threshold_exactly_90(self):
         """prediction.confidence exactly 0.90 should auto-execute."""
         self.test_prediction.confidence = 0.90

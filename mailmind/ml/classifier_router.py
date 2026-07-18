@@ -32,7 +32,10 @@ class RoutingResult:
     """Result of routing an email through the classifier tiers."""
     source: str  # "rule" | "rules" | "ml" | "llm" | "blend" | "fallback"
     label: str
-    confidence: float
+    # None only in the "fallback" source when there is genuinely no real signal
+    # (no labeling rule matched, no ML, no usable LLM) — see route()'s final
+    # return. Every other tier always carries a real (possibly still low) float.
+    confidence: Optional[float]
     llm_result: Optional[LLMResult] = None
     # Blend audit: channel distributions before blending
     content_distribution: Optional[dict] = field(default=None)
@@ -285,10 +288,22 @@ class ClassifierRouter:
             "Fallback to rules for email %s: label=%s confidence=%.4f",
             email.gmail_id, rules_label, rules_confidence,
         )
+        # rules_confidence == 0.0 here is the bare _extract_rules_result sentinel
+        # for "no labeling rule matched". Combined with ml_available being False
+        # (checked above) and Tier 3 already having returned above if the LLM had
+        # a usable result, reaching this point with rules_confidence == 0.0 means
+        # nobody had an opinion at all. Surface that as confidence=None (not 0.0)
+        # so it can't be mistaken downstream for a real, confident-but-low 0.0
+        # score. That exact collision made Pipeline._create_prediction's
+        # `next((c for c in (..., routed_conf) if c is not None), 0.85)` fallback
+        # never fire — 0.0 is not None, so it passed through verbatim — and
+        # QueueManager then saw 0.0 < 0.65 and silently dropped the email instead
+        # of queuing it for human review.
+        no_real_signal = rules_confidence <= 0.0
         return RoutingResult(
             source="fallback",
             label=rules_label,
-            confidence=rules_confidence,
+            confidence=None if no_real_signal else rules_confidence,
         )
 
     def _extract_rules_result(

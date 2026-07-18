@@ -44,9 +44,20 @@ class DeepSeekClient:
 
     SYSTEM_PROMPT = (
         "You are an email classifier. Classify the email into exactly one "
-        "of these categories: NOTIFICATION, NEWSLETTER, MASS_EMAIL, "
-        "PERSONAL, FINANCE, CALENDAR. Return JSON with fields: "
-        "label (string), confidence (float 0-1), reasoning (string)."
+        "of these categories: URGENT, WORK, NOTIFICATION, NEWSLETTER, "
+        "MASS_EMAIL, PERSONAL, FINANCE, CALENDAR.\n"
+        "- URGENT: time-critical, needs an immediate response or action "
+        "(explicit deadline, escalation, or urgent request).\n"
+        "- WORK: job/organizational correspondence — colleagues, projects, "
+        "tasks, business coordination.\n"
+        "- NOTIFICATION: automated system message needing no human action.\n"
+        "- NEWSLETTER: periodic editorial/broadcast content.\n"
+        "- MASS_EMAIL: bulk announcement that isn't an editorial newsletter.\n"
+        "- PERSONAL: a human writing to humans, not covered above.\n"
+        "- FINANCE: invoices, payments, billing, money/accounting.\n"
+        "- CALENDAR: meeting/event invites and scheduling.\n"
+        "Return JSON with fields: label (string), confidence (float 0-1), "
+        "reasoning (string)."
     )
 
     def __init__(self, config: MailMindConfig):

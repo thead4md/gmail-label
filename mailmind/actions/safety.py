@@ -44,6 +44,14 @@ class SafetyPolicy:
     - Support dry-run mode
     """
 
+    # Canonical set of actions considered "destructive" (i.e. they remove mail
+    # from the user's normal view). Both the sensitive-category guard and the
+    # protected-sender/domain guard below test membership against this ONE
+    # set, so a future destructive action (e.g. "trash", "spam") only needs to
+    # be added here to automatically inherit both guards — no need to hunt
+    # down and extend every string-matched conditional in evaluate().
+    DESTRUCTIVE_ACTIONS: frozenset[str] = frozenset({"archive", "delete"})
+
     def __init__(
         self,
         dry_run: bool = True,
@@ -110,8 +118,8 @@ class SafetyPolicy:
                 logs=logs,
             )
 
-        # 3. Never auto-archive sensitive categories
-        if action == "archive":
+        # 3. Never auto-archive (or otherwise destructively act on) sensitive categories
+        if action in self.DESTRUCTIVE_ACTIONS:
             labels_to_check = set(email.labels or [])
             if primary_label:
                 labels_to_check.add(primary_label)
@@ -129,7 +137,7 @@ class SafetyPolicy:
         sender_domain = sender.split("@")[-1] if "@" in sender else ""
 
         if sender in self.protected_senders or sender_domain in self.protected_domains:
-            if action in ("archive", "delete"):
+            if action in self.DESTRUCTIVE_ACTIONS:
                 return SafetyDecision(
                     action=action,
                     allowed=False,

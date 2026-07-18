@@ -159,3 +159,33 @@ class TestBuildClassifierRouter:
         assert router.ml_model is None
         # LLM tier on the router must be off (DeepSeek path is wired separately).
         assert router.llm_enabled is False
+
+    def test_router_thresholds_reflect_config_not_hardcoded_defaults(self, monkeypatch):
+        """LLM_RULES_THRESHOLD/LLM_ML_THRESHOLD must actually reach the router.
+
+        Regression for the bug where config.openai_rules_threshold/
+        openai_ml_threshold were parsed from the environment but never passed
+        into the ClassifierRouter(...) call, so the router silently ran on its
+        own hardcoded defaults (0.90/0.65) regardless of what was configured.
+        """
+        from mailmind import main as main_mod
+        from mailmind.config import MailMindConfig
+
+        monkeypatch.setenv("LLM_RULES_THRESHOLD", "0.77")
+        monkeypatch.setenv("LLM_ML_THRESHOLD", "0.42")
+        config = MailMindConfig.from_env()
+        assert config.openai_rules_threshold == 0.77
+        assert config.openai_ml_threshold == 0.42
+
+        router = main_mod._build_classifier_router(RulesEngine(), config=config)
+        assert router.rules_threshold == 0.77
+        assert router.ml_threshold == 0.42
+
+    def test_router_uses_hardcoded_defaults_when_no_config(self):
+        """No config passed (e.g. direct/test callers) -> router's own
+        defaults, unchanged back-compat behavior."""
+        from mailmind import main as main_mod
+
+        router = main_mod._build_classifier_router(RulesEngine())
+        assert router.rules_threshold == 0.90
+        assert router.ml_threshold == 0.65

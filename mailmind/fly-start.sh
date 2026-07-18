@@ -7,7 +7,7 @@
 
 set -e
 
-DB_PATH="${MAILMIND_DB_PATH:-/data/mailmind.db}"
+export MAILMIND_DB_PATH="${MAILMIND_DB_PATH:-/data/mailmind.db}"
 STREAMLIT_PORT="${STREAMLIT_PORT:-8501}"
 LITESTREAM_BUCKET="${LITESTREAM_S3_BUCKET:-}"
 LITESTREAM_ENDPOINT="${LITESTREAM_S3_ENDPOINT:-}"
@@ -31,7 +31,7 @@ fi
 if [ -n "$LITESTREAM_BUCKET" ] && [ -n "$LITESTREAM_ENDPOINT" ] && [ -n "$LITESTREAM_ACCESS_KEY_ID" ] && [ -n "$LITESTREAM_SECRET_ACCESS_KEY" ]; then
   echo "[fly-start] Litestream: all S3 env vars present (bucket=$LITESTREAM_BUCKET endpoint=$LITESTREAM_ENDPOINT)."
   echo "[fly-start] Restoring DB from S3 if a replica exists (won't overwrite existing local DB)..."
-  litestream restore -config /etc/litestream.yml -if-replica-exists "$DB_PATH" || true
+  litestream restore -config /etc/litestream.yml -if-replica-exists "$MAILMIND_DB_PATH" || true
 
   echo "[fly-start] Starting Litestream replica + MailMind app..."
   exec litestream replicate \

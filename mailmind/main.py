@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from dataclasses import fields
 from typing import Optional
@@ -73,6 +74,7 @@ def _get_db() -> Database:
 def _build_components(
     db: Database, dry_run: bool, service,
     llm_client: Optional[DeepSeekClient] = None,
+    safety_policy: Optional[SafetyPolicy] = None,
 ) -> tuple[Pipeline, QueueManager]:
     """Build Pipeline and QueueManager from default components.
 
@@ -85,12 +87,18 @@ def _build_components(
         dry_run: If True, actions are logged but not executed.
         service: Gmail API service object.
         llm_client: Optional DeepSeekClient for LLM classification stage.
+        safety_policy: Optional shared SafetyPolicy instance. The watch loop
+            constructs ONE SafetyPolicy outside its per-cycle loop and passes
+            it in here on every cycle so its rate-limiter state (see
+            SafetyPolicy._action_timestamps) survives across cycles instead of
+            being rebuilt empty every call. When omitted (one-shot commands),
+            a fresh instance is built as before.
     """
     config = MailMindConfig.from_env()
     user_email = os.environ.get("MAILMIND_USER_EMAIL", "")
     rules_engine = RulesEngine(user_email=user_email)
     scorer = PriorityScorer(user_email=user_email)
-    safety = SafetyPolicy(dry_run=dry_run)
+    safety = safety_policy if safety_policy is not None else SafetyPolicy(dry_run=dry_run)
     if service is not None:
         executor = ActionExecutor(
             service=service,
@@ -196,9 +204,15 @@ def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
     """Build the content-classification LLM client, honouring the chosen provider.
 
     Provider is selected by the LLM_PROVIDER env var (openai | deepseek | auto):
-      - "openai"   → OpenAI (requires OPENAI_API_KEY); raises if key missing.
+      - "openai"   → OpenAI (requires OPENAI_API_KEY AND LLM_ENABLED=true); raises
+                     if the key is missing, refuses if LLM_ENABLED is not true.
       - "deepseek" → DeepSeek (requires DEEPSEEK_API_KEY).
-      - "auto" (default) → OpenAI when OPENAI_API_KEY is set, else DeepSeek.
+      - "auto" (default) → OpenAI when OPENAI_API_KEY is set AND LLM_ENABLED=true,
+                     else DeepSeek.
+
+    config.openai_llm_enabled (parsed from LLM_ENABLED) gates the OpenAI tier per
+    the documented contract (see taxonomy.py: OPENAI_LABELS are "inactive unless
+    LLM_ENABLED=true") — an OPENAI_API_KEY alone must not activate it.
 
     Returns a client exposing classify_email(email) -> LLMResult (the unified
     Protocol), or None when no provider is available / no_llm is set. Both
@@ -209,7 +223,8 @@ def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
         return None
     provider = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
     has_openai = bool(config.openai_api_key)
-    use_openai = provider == "openai" or (provider == "auto" and has_openai)
+    want_openai = provider == "openai" or (provider == "auto" and has_openai)
+    use_openai = want_openai and config.openai_llm_enabled
 
     if use_openai:
         if not has_openai:
@@ -222,6 +237,17 @@ def _build_llm_client(config: "MailMindConfig", no_llm: bool = False):
         ))
         LOG.info("LLM stage: enabled via OpenAI (%s)", config.openai_model)
         return client
+
+    if want_openai and not config.openai_llm_enabled:
+        LOG.warning(
+            "LLM_PROVIDER=%s requests OpenAI but LLM_ENABLED is not true — "
+            "OpenAI tier disabled (set LLM_ENABLED=true to activate).", provider,
+        )
+        if provider == "openai":
+            # Explicit request for a disabled provider: refuse rather than
+            # silently falling back to a different provider than asked for.
+            return None
+        # provider == "auto": fall through to the DeepSeek check below.
 
     if config.llm_enabled:
         LOG.info("LLM stage: enabled via DeepSeek (%s)", config.deepseek_model)
@@ -257,9 +283,15 @@ def _build_classifier_router(rules_engine: RulesEngine, config=None) -> Optional
                 acc, ML_MIN_ACCURACY,
             )
             ml_model = None
-    blend_kwargs = {}
+    router_kwargs = {}
     if config is not None:
-        blend_kwargs = {
+        router_kwargs = {
+            # LLM_RULES_THRESHOLD / LLM_ML_THRESHOLD: previously parsed into
+            # config.openai_rules_threshold/openai_ml_threshold but never
+            # passed here, so the router always ran on its hardcoded
+            # defaults (0.90/0.65) regardless of the env vars.
+            "rules_threshold": config.openai_rules_threshold,
+            "ml_threshold": config.openai_ml_threshold,
             "blend_enabled": config.blend_enabled,
             "content_weight": config.content_weight,
             "sender_weight": config.sender_weight,
@@ -272,7 +304,7 @@ def _build_classifier_router(rules_engine: RulesEngine, config=None) -> Optional
         ml_model=ml_model,
         llm_classifier=None,
         llm_enabled=False,
-        **blend_kwargs,
+        **router_kwargs,
     )
 
 
@@ -396,6 +428,23 @@ def _process_message_id(
         LOG.error("Pipeline failed for %s: %s", email.gmail_id, exc, exc_info=True)
 
 
+def _interactive_auth_available() -> bool:
+    """Best-effort signal that InstalledAppFlow.run_local_server() could work.
+
+    That flow needs a local browser to hit a localhost redirect. On a headless
+    deploy (e.g. a Fly.io machine) there is no attached terminal/browser, so
+    the flow can never complete — without this check, a revoked/expired token
+    (see auth.load_stored_credentials) would make the watch loop call
+    authenticate() every cycle forever, each call hanging/retrying pointlessly.
+    Absence of a TTY on stdin is the simplest reliable signal we have for
+    "this process cannot complete an interactive OAuth flow."
+    """
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
 def _run_once(
     db: Database,
     dry_run: bool,
@@ -404,6 +453,7 @@ def _run_once(
     account: Optional[str] = None,
     auth_account: Optional[str] = None,
     allow_interactive: bool = True,
+    safety_policy: Optional[SafetyPolicy] = None,
 ) -> None:
     """One-shot for a single mailbox: authenticate → fetch unread → process.
 
@@ -415,14 +465,28 @@ def _run_once(
             working unchanged).
         allow_interactive: If True, fall back to the interactive OAuth flow when
             no stored token exists. Set False for secondary mailboxes so a
-            not-yet-connected account is skipped instead of blocking.
+            not-yet-connected account is skipped instead of blocking. Even when
+            True, the fallback is skipped on a headless process (see
+            _interactive_auth_available) since it could never complete there.
+        safety_policy: Optional shared SafetyPolicy to reuse across watch-loop
+            cycles; forwarded to _build_components. See its docstring.
     """
     label = account or "primary"
     LOG.info("Authenticating mailbox %s…", label)
     creds = load_stored_credentials(auth_account)
     if creds is None:
-        if allow_interactive:
+        if allow_interactive and _interactive_auth_available():
             creds = authenticate(account=auth_account)
+        elif allow_interactive:
+            LOG.error(
+                "Mailbox %s has no valid stored credentials and this process "
+                "has no interactive terminal — the OAuth browser flow cannot "
+                "complete here (headless deploy). Reconnect required — run "
+                "`python -m mailmind.main auth` from a machine with a "
+                "browser. Skipping this account for this cycle.",
+                label,
+            )
+            return
         else:
             LOG.warning(
                 "No stored credentials for mailbox %s — skipping. Connect it by "
@@ -437,7 +501,9 @@ def _run_once(
     config = MailMindConfig.from_env()
     llm_client = _build_llm_client(config, no_llm=no_llm)
 
-    pipeline, queue_manager = _build_components(db, dry_run, service, llm_client=llm_client)
+    pipeline, queue_manager = _build_components(
+        db, dry_run, service, llm_client=llm_client, safety_policy=safety_policy,
+    )
 
     # Refresh the label-id→name map once per cycle so new mail can be tagged
     # with the user's real labels (truth signal). Cheap: one labels.list call.
@@ -471,7 +537,10 @@ def _run_once(
     LOG.info("[%s] Run complete.", label)
 
 
-def _run_all_accounts(db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False) -> None:
+def _run_all_accounts(
+    db: Database, dry_run: bool, fetch_max: int, no_llm: bool = False,
+    safety_policy: Optional[SafetyPolicy] = None,
+) -> None:
     """Run one cycle across every configured mailbox.
 
     With no MAILMIND_ACCOUNTS configured, behaves exactly like the legacy
@@ -479,10 +548,17 @@ def _run_all_accounts(db: Database, dry_run: bool, fetch_max: int, no_llm: bool 
     reuses the legacy token and may auth interactively; secondary mailboxes
     load their own stored token and are skipped if not yet connected.
     A failure on one account never aborts the others.
+
+    safety_policy: Optional shared SafetyPolicy (see run()'s --watch loop),
+        forwarded to _run_once for every account this cycle. Omitted entirely
+        (not passed as a kwarg) when None, so callers/tests using the legacy
+        _run_once(db, dry_run, fetch_max, no_llm=..., account=..., ...)
+        signature are unaffected.
     """
+    extra = {} if safety_policy is None else {"safety_policy": safety_policy}
     accounts = MailMindConfig.load_accounts()
     if not accounts:
-        _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+        _run_once(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm, **extra)
         return
 
     for i, acct in enumerate(accounts):
@@ -496,6 +572,7 @@ def _run_all_accounts(db: Database, dry_run: bool, fetch_max: int, no_llm: bool 
                 account=acct,
                 auth_account=None if is_primary else acct,
                 allow_interactive=is_primary,
+                **extra,
             )
         except Exception as exc:
             LOG.error("Run failed for mailbox %s: %s", acct, exc, exc_info=True)
@@ -708,9 +785,18 @@ def run(
 
     if watch:
         LOG.info("Watch mode active — polling every %ds. Ctrl+C to stop.", poll_secs)
+        # Built ONCE and reused across every cycle/account below (instead of
+        # letting _build_components() construct a fresh SafetyPolicy per
+        # cycle via _run_once). SafetyPolicy._action_timestamps is in-process
+        # rate-limiter state — rebuilding the policy every cycle wiped it
+        # empty every ~120s, making max_actions_per_hour unenforceable across
+        # cycles. One shared instance for the life of this watch loop fixes
+        # that without changing the limit's value or semantics.
+        safety_policy = SafetyPolicy(dry_run=dry_run)
         while True:
             try:
-                _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm)
+                _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm,
+                                  safety_policy=safety_policy)
                 _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
                 _maybe_refresh_labels(db)
