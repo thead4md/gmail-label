@@ -34,6 +34,16 @@ class Email:
     account: Optional[str] = None
     # Unsubscribe URL extracted from List-Unsubscribe header (https preferred over mailto).
     unsubscribe_url: Optional[str] = None
+    # Full decoded HTML body (body_text remains the flattened-to-plain-text
+    # version used for scoring/LLM prompts; this is the raw HTML for display).
+    body_html: Optional[str] = None
+    # RFC 5322 threading headers (Message-ID / In-Reply-To / References),
+    # needed to build a correct reply MIME message (Phase 3).
+    message_id: Optional[str] = None
+    in_reply_to: Optional[str] = None
+    references_header: Optional[str] = None
+    # Gmail mailbox history cursor at the time this message was fetched.
+    history_id: Optional[int] = None
 
     def to_db_tuple(self) -> tuple:
         # Convert lists to JSON-like strings (comma-separated). Keep this simple for now.
@@ -52,6 +62,11 @@ class Email:
             int(bool(self.parsed)),
             self.account,
             self.unsubscribe_url,
+            self.body_html,
+            self.message_id,
+            self.in_reply_to,
+            self.references_header,
+            self.history_id,
         )
 
 

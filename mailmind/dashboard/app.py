@@ -54,6 +54,9 @@ from mailmind.intelligence.feedback import (
     handle_know_sender, handle_mute_sender, handle_block_sender,
     handle_label_email,
 )
+from mailmind.dashboard.tab_inbox import render_inbox_tab
+from mailmind.dashboard.tab_search import render_search_tab
+from mailmind.dashboard.tab_folders import render_folders_tab
 from mailmind.processing.queue_manager import QueueManager
 from mailmind.storage.database import Database
 from mailmind.taxonomy import BASE_SCORES as LABEL_BASE_SCORES
@@ -1606,6 +1609,9 @@ _TABS: list[tuple] = [
     ("📍 NOW",      render_now_tab),
     ("📋 REVIEW",   render_review_tab),
     ("🕐 HISTORY",  render_history_tab),
+    ("📥 INBOX",    render_inbox_tab),
+    ("🔎 SEARCH",   render_search_tab),
+    ("🗂️ FOLDERS",  render_folders_tab),
     ("📈 INSIGHTS", render_insights_tab),
     ("⚙️ AUTOMATE", render_automate_tab),
 ]

@@ -30,10 +30,27 @@ except Exception:
 LOG = logging.getLogger(__name__)
 
 # Minimal scopes required for MVP
+#
+# NOTE (Phase 3A): "gmail.send" was added here to support the compose/reply
+# feature. Deliberately NOT adding "gmail.compose" — drafts live only in
+# MailMind's own `drafts` table, never in Gmail's native Drafts folder, which
+# keeps this scope list (and the re-consent surface) as small as possible.
+#
+# IMPORTANT — broadening SCOPES is a breaking change for already-stored
+# tokens: a token minted under the old 3-scope list will fail to refresh
+# once it's checked against this new list (there is no scope-diffing logic
+# in this file — see load_stored_credentials()/authenticate() below), so
+# every already-connected mailbox needs a one-time interactive re-consent
+# run locally (this can't run headless, e.g. on Fly.io) before the broadened
+# scope actually works:
+#     python -m mailmind.main auth --account <email>
+# Run this once per already-connected mailbox (both current accounts) after
+# this change lands.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 

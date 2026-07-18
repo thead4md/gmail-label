@@ -1454,3 +1454,129 @@ def get_labeled_predictions(
     ).fetchall()
     return [{"email_gmail_id": r["email_gmail_id"], "primary_label": r["primary_label"]}
             for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 contract: inbox browse / search / thread view (Phase 1 provides the
+# query layer so the dashboard tabs being built in parallel have a stable
+# interface to code against). All three return the same enriched-queue row
+# shape: gmail_id, thread_id, sender, subject, snippet, date_ts, primary_label,
+# channel, confidence — left-joined against the latest (only, per migration
+# 0014's uniqueness) prediction per email, so emails without one yet still
+# show up with nulls for those fields.
+# ---------------------------------------------------------------------------
+
+_EMAIL_LIST_SELECT = """
+    SELECT
+        e.gmail_id,
+        e.thread_id,
+        e.sender,
+        e.subject,
+        e.snippet,
+        e.date_ts,
+        p.primary_label,
+        p.channel,
+        p.confidence
+    FROM emails e
+    LEFT JOIN predictions p ON p.email_gmail_id = e.gmail_id
+"""
+
+
+def _row_to_email_list_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    """Convert an emails+predictions joined row to the shared inbox row shape."""
+    return {
+        "gmail_id": row["gmail_id"],
+        "thread_id": row["thread_id"],
+        "sender": row["sender"],
+        "subject": row["subject"],
+        "snippet": row["snippet"],
+        "date_ts": row["date_ts"],
+        "primary_label": row["primary_label"],
+        "channel": row["channel"],
+        "confidence": row["confidence"],
+    }
+
+
+def get_all_emails(
+    db: Database,
+    account: Optional[str] = None,
+    folder: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return emails (optionally scoped to a mailbox/folder/search term), newest first.
+
+    ``folder`` filters by substring match against ``emails.labels`` OR
+    ``emails.user_labels`` (both comma-separated strings already in the
+    schema) — no schema change needed for folder nav. ``search`` does a light
+    substring match against subject/sender/snippet, for a combined
+    browse+quick-filter UI; for a dedicated search box use `search_emails`
+    instead (it also matches body_text).
+    """
+    clauses: List[str] = []
+    params: List[Any] = []
+    if account:
+        clauses.append("e.account = ?")
+        params.append(account)
+    if folder:
+        clauses.append("(e.labels LIKE ? OR e.user_labels LIKE ?)")
+        like = f"%{folder}%"
+        params.extend([like, like])
+    if search:
+        clauses.append("(e.subject LIKE ? OR e.sender LIKE ? OR e.snippet LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like, like])
+
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.extend([limit, offset])
+    rows = db.execute_sql(
+        f"{_EMAIL_LIST_SELECT}{where} ORDER BY e.date_ts DESC LIMIT ? OFFSET ?",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_email_list_dict(r) for r in rows]
+
+
+def search_emails(
+    db: Database,
+    query_text: str,
+    account: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Full-mailbox substring search across subject/sender/snippet/body_text.
+
+    Uses a parameterized LIKE (SQLite FTS5 is overkill at this row count —
+    see Phase 1 plan); `query_text` is never string-formatted into the SQL,
+    only bound as a placeholder value.
+    """
+    like = f"%{query_text}%"
+    clauses = ["(e.subject LIKE ? OR e.sender LIKE ? OR e.snippet LIKE ? OR e.body_text LIKE ?)"]
+    params: List[Any] = [like, like, like, like]
+    if account:
+        clauses.append("e.account = ?")
+        params.append(account)
+    where = f" WHERE {' AND '.join(clauses)}"
+    params.extend([limit, offset])
+    rows = db.execute_sql(
+        f"{_EMAIL_LIST_SELECT}{where} ORDER BY e.date_ts DESC LIMIT ? OFFSET ?",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_email_list_dict(r) for r in rows]
+
+
+def get_thread_emails(
+    db: Database, thread_id: str, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return every email sharing `thread_id`, oldest first (conversation view)."""
+    clauses = ["e.thread_id = ?"]
+    params: List[Any] = [thread_id]
+    if account:
+        clauses.append("e.account = ?")
+        params.append(account)
+    where = f" WHERE {' AND '.join(clauses)}"
+    rows = db.execute_sql(
+        f"{_EMAIL_LIST_SELECT}{where} ORDER BY e.date_ts ASC",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_email_list_dict(r) for r in rows]

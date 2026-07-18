@@ -222,6 +222,14 @@ def main() -> None:
 
                 if not args.dry_run:
                     db.insert_email(email)
+                    try:
+                        db.insert_attachments(
+                            email.gmail_id, None, getattr(email, "attachments", []) or []
+                        )
+                    except Exception as exc:
+                        LOG.warning(
+                            "Failed to insert attachments for %s: %s", email.gmail_id, exc
+                        )
 
                 newly_fetched_ids.append(msg_id)
                 fetched_count += 1

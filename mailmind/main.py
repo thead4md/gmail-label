@@ -363,6 +363,13 @@ def _process_message_id(
         LOG.warning("Failed to insert email %s: %s", email.gmail_id, exc)
         return
 
+    try:
+        pipeline.db.insert_attachments(
+            email.gmail_id, account, getattr(email, "attachments", []) or []
+        )
+    except Exception as exc:
+        LOG.warning("Failed to insert attachments for %s: %s", email.gmail_id, exc)
+
     # Capture the email's real Gmail labels as training signal (Phase 1a, automatic).
     if label_map is not None:
         try:
@@ -701,6 +708,70 @@ def _maybe_refresh_labels(db: Database, interval_seconds: int = 86400) -> None:
         LOG.warning("label refresh skipped: %s", exc)
 
 
+def _maybe_mirror_mailbox(db: Database, interval_seconds: int = 86400) -> None:
+    """Widen local coverage beyond "recent/unread INBOX mail" once per interval.
+
+    The watch loop only ever fetches label_ids=["INBOX", "UNREAD"] and backfill
+    only fetches label_ids=["INBOX"], so the local SQLite `emails` table is not
+    a full mailbox mirror. This runs a small, classify-only sweep (last 3-7
+    days, INBOX + SENT, capped at 200 messages/account) so a future browse-all-
+    mail UI has more than "recent/unread" to show. classify_only=True means it
+    only stores a prediction — it never enqueues actions or writes to Gmail.
+    Tracked in system_state; failures never take down the watch loop, and the
+    timestamp is only advanced on success.
+    """
+    try:
+        last = db.get_state("last_mailbox_mirror_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+
+        accounts = MailMindConfig.load_accounts() or [None]
+        window_days = 7
+        max_emails = 200
+        total = 0
+        for acct in accounts:
+            auth_account = _auth_account_for(acct) if acct else None
+            label = acct or "primary"
+            try:
+                creds = load_stored_credentials(auth_account)
+                if creds is None:
+                    LOG.debug("Mailbox mirror: no stored credentials for %s — skipping.", label)
+                    continue
+                service = build_gmail_service(creds)
+                fetcher = GmailFetcher(service)
+
+                # dry_run=True + classify_only=True below: this sweep must
+                # never mutate Gmail or enqueue a human-review action.
+                pipeline, queue_manager = _build_components(db, dry_run=True, service=service)
+
+                query = f"newer_than:{window_days}d"
+                message_ids = fetcher.list_message_ids(
+                    label_ids=["INBOX", "SENT"], max_results=max_emails, query=query,
+                )
+                todo = [m for m in message_ids if not pipeline.db.has_prediction(m)]
+                raw_by_id = fetcher.batch_get_messages(todo)
+                processed = 0
+                for mid in todo:
+                    raw = raw_by_id.get(mid)
+                    if raw is None:
+                        continue
+                    _process_message_id(
+                        mid, fetcher, pipeline, queue_manager,
+                        account=acct, classify_only=True, prefetched_raw=raw,
+                    )
+                    processed += 1
+                total += processed
+                LOG.info("Mailbox mirror [%s]: %d new message(s) classified.", label, processed)
+            except Exception as exc:
+                LOG.warning("Mailbox mirror failed for %s: %s", label, exc)
+
+        db.set_state("last_mailbox_mirror_ts", str(now))
+        LOG.info("Mailbox mirror sweep complete: %d total processed.", total)
+    except Exception as exc:
+        LOG.warning("Mailbox mirror skipped: %s", exc)
+
+
 def _maybe_suggest_labels(
     db: Database,
     interval_seconds: int = 45 * 86400,
@@ -800,6 +871,7 @@ def run(
                 _maybe_retrain(db)
                 _maybe_prune(db, retention_days)
                 _maybe_refresh_labels(db)
+                _maybe_mirror_mailbox(db)
                 _maybe_suggest_labels(db, no_llm=no_llm)
                 _record_heartbeat(db)
             except KeyboardInterrupt:

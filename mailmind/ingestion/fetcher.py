@@ -107,6 +107,25 @@ class GmailFetcher:
         time.sleep(self.rate_limit_seconds)
         return resp
 
+    def get_attachment(self, message_id: str, attachment_id: str) -> Dict[str, Any]:
+        """Fetch a single attachment's bytes (base64url-encoded) by id.
+
+        Called on-demand from the dashboard when a user opens an attachment —
+        never during ingestion (attachments are stored as metadata only).
+        """
+        def call():
+            return (
+                self.service.users()
+                .messages()
+                .attachments()
+                .get(userId=self.user_id, messageId=message_id, id=attachment_id)
+                .execute()
+            )
+
+        resp = _retry(call)
+        time.sleep(self.rate_limit_seconds)
+        return resp
+
     def batch_get_messages(self, message_ids, format: str = "full"):
         """Fetch many messages in one HTTP batch (up to 100 per call).
         Returns a dict {message_id: raw_message_dict}. Messages that error are

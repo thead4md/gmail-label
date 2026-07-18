@@ -66,8 +66,9 @@ class Database:
         assert self._conn is not None
         sql = (
             "INSERT OR IGNORE INTO emails"
-            " (gmail_id, thread_id, sender, recipients, subject, snippet, body_text, date_ts, labels, parsed, account, unsubscribe_url)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+            " (gmail_id, thread_id, sender, recipients, subject, snippet, body_text, date_ts, labels, parsed, account, unsubscribe_url,"
+            "  body_html, message_id, in_reply_to, references_header, history_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
         )
         with self.transaction() as cur:
             cur.execute(sql, email.to_db_tuple())
@@ -81,6 +82,45 @@ class Database:
             cur.execute("SELECT id FROM emails WHERE gmail_id = ?", (email.gmail_id,))
             row = cur.fetchone()
             return int(row["id"]) if row else -1
+
+    def insert_attachments(
+        self, email_gmail_id: str, account: Optional[str], attachments: List[dict]
+    ) -> int:
+        """Insert attachment METADATA rows (never the bytes) for an email.
+
+        ``attachments`` is a list of dicts shaped like the Gmail API's part
+        metadata: filename/mimeType/size/attachmentId. Uses INSERT OR IGNORE
+        against the (email_gmail_id, gmail_attachment_id) unique index
+        (migration 0028), so re-ingesting the same email is a no-op. Returns
+        the number of rows actually inserted (not re-seen).
+        """
+        assert self._conn is not None
+        if not attachments:
+            return 0
+        sql = (
+            "INSERT OR IGNORE INTO attachments"
+            " (email_gmail_id, account, gmail_attachment_id, filename, mime_type, size_bytes)"
+            " VALUES (?, ?, ?, ?, ?, ?);"
+        )
+        inserted = 0
+        with self.transaction() as cur:
+            for att in attachments:
+                attachment_id = att.get("attachmentId")
+                if not attachment_id:
+                    continue
+                cur.execute(
+                    sql,
+                    (
+                        email_gmail_id,
+                        account,
+                        attachment_id,
+                        att.get("filename"),
+                        att.get("mimeType"),
+                        att.get("size"),
+                    ),
+                )
+                inserted += cur.rowcount
+        return inserted
 
     def get_email_by_gmail_id(self, gmail_id: str) -> Optional[sqlite3.Row]:
         assert self._conn is not None
