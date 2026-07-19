@@ -1454,3 +1454,282 @@ def get_labeled_predictions(
     ).fetchall()
     return [{"email_gmail_id": r["email_gmail_id"], "primary_label": r["primary_label"]}
             for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 contract: inbox browse / search / thread view (Phase 1 provides the
+# query layer so the dashboard tabs being built in parallel have a stable
+# interface to code against). All three return the same enriched-queue row
+# shape: gmail_id, thread_id, sender, subject, snippet, date_ts, primary_label,
+# channel, confidence — left-joined against the latest (only, per migration
+# 0014's uniqueness) prediction per email, so emails without one yet still
+# show up with nulls for those fields.
+# ---------------------------------------------------------------------------
+
+_EMAIL_LIST_SELECT = """
+    SELECT
+        e.gmail_id,
+        e.thread_id,
+        e.sender,
+        e.subject,
+        e.snippet,
+        e.date_ts,
+        p.primary_label,
+        p.channel,
+        p.confidence
+    FROM emails e
+    LEFT JOIN predictions p ON p.email_gmail_id = e.gmail_id
+"""
+
+
+def _row_to_email_list_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    """Convert an emails+predictions joined row to the shared inbox row shape."""
+    return {
+        "gmail_id": row["gmail_id"],
+        "thread_id": row["thread_id"],
+        "sender": row["sender"],
+        "subject": row["subject"],
+        "snippet": row["snippet"],
+        "date_ts": row["date_ts"],
+        "primary_label": row["primary_label"],
+        "channel": row["channel"],
+        "confidence": row["confidence"],
+    }
+
+
+def get_all_emails(
+    db: Database,
+    account: Optional[str] = None,
+    folder: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return emails (optionally scoped to a mailbox/folder/search term), newest first.
+
+    ``folder`` filters by substring match against ``emails.labels`` OR
+    ``emails.user_labels`` (both comma-separated strings already in the
+    schema) — no schema change needed for folder nav. ``search`` does a light
+    substring match against subject/sender/snippet, for a combined
+    browse+quick-filter UI; for a dedicated search box use `search_emails`
+    instead (it also matches body_text).
+    """
+    clauses: List[str] = []
+    params: List[Any] = []
+    if account:
+        clauses.append("e.account = ?")
+        params.append(account)
+    if folder:
+        clauses.append("(e.labels LIKE ? OR e.user_labels LIKE ?)")
+        like = f"%{folder}%"
+        params.extend([like, like])
+    if search:
+        clauses.append("(e.subject LIKE ? OR e.sender LIKE ? OR e.snippet LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like, like])
+
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.extend([limit, offset])
+    rows = db.execute_sql(
+        f"{_EMAIL_LIST_SELECT}{where} ORDER BY e.date_ts DESC LIMIT ? OFFSET ?",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_email_list_dict(r) for r in rows]
+
+
+def search_emails(
+    db: Database,
+    query_text: str,
+    account: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Full-mailbox substring search across subject/sender/snippet/body_text.
+
+    Uses a parameterized LIKE (SQLite FTS5 is overkill at this row count —
+    see Phase 1 plan); `query_text` is never string-formatted into the SQL,
+    only bound as a placeholder value.
+    """
+    like = f"%{query_text}%"
+    clauses = ["(e.subject LIKE ? OR e.sender LIKE ? OR e.snippet LIKE ? OR e.body_text LIKE ?)"]
+    params: List[Any] = [like, like, like, like]
+    if account:
+        clauses.append("e.account = ?")
+        params.append(account)
+    where = f" WHERE {' AND '.join(clauses)}"
+    params.extend([limit, offset])
+    rows = db.execute_sql(
+        f"{_EMAIL_LIST_SELECT}{where} ORDER BY e.date_ts DESC LIMIT ? OFFSET ?",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_email_list_dict(r) for r in rows]
+
+
+def get_thread_emails(
+    db: Database, thread_id: str, account: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return every email sharing `thread_id`, oldest first (conversation view)."""
+    clauses = ["e.thread_id = ?"]
+    params: List[Any] = [thread_id]
+    if account:
+        clauses.append("e.account = ?")
+        params.append(account)
+    where = f" WHERE {' AND '.join(clauses)}"
+    rows = db.execute_sql(
+        f"{_EMAIL_LIST_SELECT}{where} ORDER BY e.date_ts ASC",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_email_list_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Drafts (Phase 3+): reply/compose drafts awaiting review before send.
+# ---------------------------------------------------------------------------
+
+
+def _row_to_draft_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    """Convert a drafts row to a plain dict (full row -- no body_text redaction;
+    unlike emails, a draft's body is the user's/LLM's own outgoing text)."""
+    return {
+        "id": row["id"],
+        "account": row["account"],
+        "kind": row["kind"],
+        "in_reply_to_gmail_id": row["in_reply_to_gmail_id"],
+        "thread_id": row["thread_id"],
+        "to_addrs": row["to_addrs"],
+        "cc_addrs": row["cc_addrs"],
+        "subject": row["subject"],
+        "body_text": row["body_text"],
+        "generated_by": row["generated_by"],
+        "status": row["status"],
+        "scheduled_at": row["scheduled_at"],
+        "gmail_message_id": row["gmail_message_id"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "sent_at": row["sent_at"],
+    }
+
+
+def create_draft(
+    db: Database,
+    *,
+    account: Optional[str] = None,
+    kind: str = 'reply',
+    in_reply_to_gmail_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    to_addrs: str,
+    cc_addrs: Optional[str] = None,
+    subject: str,
+    body_text: str,
+    generated_by: str = 'human',
+    scheduled_at: Optional[int] = None,
+) -> int:
+    """Insert a new draft row (status always starts 'pending_review'). Returns its id."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO drafts
+                (account, kind, in_reply_to_gmail_id, thread_id, to_addrs, cc_addrs,
+                 subject, body_text, generated_by, status, scheduled_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?, ?)
+            """,
+            (
+                account, kind, in_reply_to_gmail_id, thread_id, to_addrs, cc_addrs,
+                subject, body_text, generated_by, scheduled_at, now,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def get_draft(db: Database, draft_id: int) -> Optional[Dict[str, Any]]:
+    """Return the full draft row as a dict, or None if not found."""
+    row = db.execute_sql("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
+    return _row_to_draft_dict(row) if row else None
+
+
+def update_draft_status(
+    db: Database,
+    draft_id: int,
+    status: str,
+    *,
+    gmail_message_id: Optional[str] = None,
+    sent_at: Optional[int] = None,
+) -> bool:
+    """Update a draft's status (and gmail_message_id/sent_at when given).
+
+    Always stamps updated_at. Returns True if a row was updated.
+    """
+    now = int(time.time())
+    sets = ["status = ?", "updated_at = ?"]
+    params: List[Any] = [status, now]
+    if gmail_message_id is not None:
+        sets.append("gmail_message_id = ?")
+        params.append(gmail_message_id)
+    if sent_at is not None:
+        sets.append("sent_at = ?")
+        params.append(sent_at)
+    params.append(draft_id)
+    with db.transaction() as cur:
+        cur.execute(f"UPDATE drafts SET {', '.join(sets)} WHERE id = ?", tuple(params))
+        return cur.rowcount > 0
+
+
+def get_due_scheduled_drafts(
+    db: Database, now_ts: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Return approved, scheduled drafts whose scheduled_at has passed.
+
+    Plain read query (no side effects) -- used by a scheduler sweep.
+    """
+    ts = now_ts if now_ts is not None else int(time.time())
+    rows = db.execute_sql(
+        "SELECT * FROM drafts WHERE status = 'approved' AND scheduled_at IS NOT NULL"
+        " AND scheduled_at <= ? ORDER BY scheduled_at ASC",
+        (ts,),
+    ).fetchall()
+    return [_row_to_draft_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Action-queue snooze (Phase 3+).
+# ---------------------------------------------------------------------------
+
+
+def snooze_queue_item(db: Database, queue_id: int, snoozed_until: int) -> bool:
+    """Set action_queue.status='snoozed' and snoozed_until for queue_id.
+
+    Returns True if a row was updated.
+    """
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE action_queue SET status = 'snoozed', snoozed_until = ? WHERE id = ?",
+            (snoozed_until, queue_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_due_snoozed_items(
+    db: Database, now_ts: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Return action_queue rows snoozed until at/before now_ts (default: now)."""
+    ts = now_ts if now_ts is not None else int(time.time())
+    rows = db.execute_sql(
+        "SELECT * FROM action_queue WHERE status = 'snoozed' AND snoozed_until <= ?"
+        " ORDER BY snoozed_until ASC",
+        (ts,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def unsnooze_queue_item(db: Database, queue_id: int) -> bool:
+    """Set an action_queue row's status back to 'pending', clearing snoozed_until.
+
+    Returns True if a row was updated.
+    """
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE action_queue SET status = 'pending', snoozed_until = NULL WHERE id = ?",
+            (queue_id,),
+        )
+        return cur.rowcount > 0

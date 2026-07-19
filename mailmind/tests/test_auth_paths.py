@@ -11,7 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from mailmind.ingestion.auth import _app_dir, _credentials_path
+from mailmind.ingestion.auth import SCOPES, _app_dir, _credentials_path
+
+
+class TestScopes:
+    """Pins the Phase 3A scope addition (send, not compose)."""
+
+    def test_gmail_send_scope_present(self):
+        assert "https://www.googleapis.com/auth/gmail.send" in SCOPES
+
+    def test_gmail_compose_scope_absent(self):
+        # Deliberate scope-minimization decision: drafts live only in
+        # MailMind's own `drafts` table, never Gmail's native Drafts folder.
+        assert "https://www.googleapis.com/auth/gmail.compose" not in SCOPES
 
 
 class TestAppDirExpansion:

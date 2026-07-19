@@ -9,8 +9,9 @@ from ..storage.database import Database
 from ..storage.models import Email
 from ..storage.queries import (
     log_correction, update_sender_profile, set_sender_label_rule,
-    set_thread_label_rule,
+    set_thread_label_rule, get_draft, update_draft_status,
 )
+from ..compose.composer import build_reply_mime, build_new_message_mime
 
 LOG = logging.getLogger(__name__)
 
@@ -486,3 +487,97 @@ def handle_label_email(
             LOG.error("Executor raised applying label %s to queue %s: %s", label, queue_id, exc, exc_info=True)
 
     return True
+
+
+def handle_approve_and_send(db: Database, draft_id: int, executor: Any) -> bool:
+    """Send an already-approved draft — the ONLY function permitted to call
+    ``executor.send_message()``.
+
+    This is the two-step send gate's enforcement point: a draft can only be sent if
+    its status is *already* 'approved' in the database, and that transition must have
+    happened via a SEPARATE, PRIOR call to ``update_draft_status(db, draft_id,
+    'approved')`` — a distinct, earlier user interaction (e.g. a previous Streamlit
+    rerun from an earlier "Approve" button click). This function never performs that
+    transition itself; it only reads the draft's current status fresh from the
+    database and refuses to proceed unless it is already 'approved'. Collapsing
+    approve+send into one click here would defeat the entire point of the gate.
+
+    Returns:
+        True if the draft was already sent (or dry-run "sent"), or if the send
+        attempt was correctly processed to a terminal status (including a failed
+        send, which is recorded as 'send_failed' and reported as True here — the
+        *approval step itself* was found valid and processed; the caller should
+        check the draft's status/gmail_message_id if it needs the send outcome).
+        False if the draft doesn't exist, isn't in 'approved' status, or an
+        unexpected exception occurred (never propagated to the caller).
+    """
+    try:
+        draft = get_draft(db, draft_id)
+        if draft is None:
+            LOG.warning("handle_approve_and_send: draft %s not found", draft_id)
+            return False
+
+        # Enforcement point: only a draft ALREADY in 'approved' status (set by a
+        # prior, separate call) may be sent. No parameter or code path here can
+        # perform that transition itself.
+        if draft.get("status") != "approved":
+            LOG.warning(
+                "handle_approve_and_send: draft %s has status %r, not 'approved' — refusing to send",
+                draft_id, draft.get("status"),
+            )
+            return False
+
+        # Build the MIME message from the draft's content.
+        try:
+            if draft.get("kind") == "reply":
+                original = None
+                in_reply_to_gmail_id = draft.get("in_reply_to_gmail_id")
+                if in_reply_to_gmail_id:
+                    original = db.get_email_by_gmail_id(in_reply_to_gmail_id)
+                raw_mime_b64url = build_reply_mime(
+                    to_addr=draft.get("to_addrs") or "",
+                    subject=draft.get("subject") or "",
+                    body_text=draft.get("body_text") or "",
+                    in_reply_to_message_id=(original["message_id"] if original else None),
+                    references=(original["references_header"] if original else None),
+                    cc_addr=draft.get("cc_addrs"),
+                )
+            else:
+                raw_mime_b64url = build_new_message_mime(
+                    to_addr=draft.get("to_addrs") or "",
+                    subject=draft.get("subject") or "",
+                    body_text=draft.get("body_text") or "",
+                    cc_addr=draft.get("cc_addrs"),
+                )
+        except Exception as exc:
+            LOG.error("handle_approve_and_send: failed to build MIME for draft %s: %s",
+                      draft_id, exc, exc_info=True)
+            update_draft_status(db, draft_id, "send_failed")
+            return False
+
+        result = executor.send_message(draft, raw_mime_b64url)
+
+        if result:
+            # A real send marks the draft 'sent' with the returned message id; a
+            # dry-run ("dry_run" sentinel) means nothing was actually sent, so the
+            # draft stays 'approved' rather than falsely claiming it was sent.
+            if result == "dry_run":
+                update_draft_status(db, draft_id, "approved")
+            else:
+                update_draft_status(
+                    db, draft_id, "sent",
+                    gmail_message_id=result,
+                    sent_at=int(time.time()),
+                )
+            return True
+
+        # send_message returned None: refused (rate-limited) or the Gmail API call
+        # failed. Either way, mark it visibly so it can be retried.
+        update_draft_status(db, draft_id, "send_failed")
+        LOG.warning("handle_approve_and_send: send_message returned None for draft %s", draft_id)
+        return False
+
+    except Exception as exc:
+        LOG.error("handle_approve_and_send: unexpected error for draft %s: %s",
+                  draft_id, exc, exc_info=True)
+        return False

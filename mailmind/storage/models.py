@@ -34,6 +34,16 @@ class Email:
     account: Optional[str] = None
     # Unsubscribe URL extracted from List-Unsubscribe header (https preferred over mailto).
     unsubscribe_url: Optional[str] = None
+    # Full decoded HTML body (body_text remains the flattened-to-plain-text
+    # version used for scoring/LLM prompts; this is the raw HTML for display).
+    body_html: Optional[str] = None
+    # RFC 5322 threading headers (Message-ID / In-Reply-To / References),
+    # needed to build a correct reply MIME message (Phase 3).
+    message_id: Optional[str] = None
+    in_reply_to: Optional[str] = None
+    references_header: Optional[str] = None
+    # Gmail mailbox history cursor at the time this message was fetched.
+    history_id: Optional[int] = None
 
     def to_db_tuple(self) -> tuple:
         # Convert lists to JSON-like strings (comma-separated). Keep this simple for now.
@@ -52,6 +62,11 @@ class Email:
             int(bool(self.parsed)),
             self.account,
             self.unsubscribe_url,
+            self.body_html,
+            self.message_id,
+            self.in_reply_to,
+            self.references_header,
+            self.history_id,
         )
 
 
@@ -138,6 +153,33 @@ class SystemState:
     key: str
     value: str
     updated_at: int = field(default_factory=now_ts)
+
+
+@dataclass
+class Draft:
+    """A human- or LLM-composed reply/new message awaiting review before send.
+
+    Mirrors the `drafts` table (migration 0030_create_drafts). Nothing in the
+    query layer constructs this via the ORM-ish pattern QueueItem uses --
+    `queries.create_draft`/`get_draft` deal in dicts directly -- but it gives
+    a typed shape for a future caller to reach for.
+    """
+    to_addrs: str
+    subject: str
+    body_text: str
+    id: Optional[int] = None
+    account: Optional[str] = None
+    kind: str = 'reply'  # 'reply' | 'compose'
+    in_reply_to_gmail_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    cc_addrs: Optional[str] = None
+    generated_by: str = 'human'  # 'human' | 'llm'
+    status: str = 'pending_review'  # 'pending_review' | 'approved' | 'sent' | 'discarded' | 'send_failed'
+    scheduled_at: Optional[int] = None
+    gmail_message_id: Optional[str] = None
+    created_at: int = field(default_factory=now_ts)
+    updated_at: Optional[int] = None
+    sent_at: Optional[int] = None
 
 
 @dataclass

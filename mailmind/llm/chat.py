@@ -24,11 +24,20 @@ def chat_complete(
     temperature: float = 0.2,
     max_tokens: int = 60,
     json_mode: bool = False,
-) -> str:
+    return_usage: bool = False,
+):
     """Run one chat completion against whichever client shape was passed.
 
     Returns the assistant message content ("" when the model returns nothing).
     Raises RuntimeError if the client exposes neither supported shape.
+
+    When ``return_usage=True``, returns ``(content, raw_response, model_name)``
+    instead of just ``content`` — the existing three callers (daily brief,
+    NL-rule parsing, label discovery) don't track cost and are unaffected by
+    this default-False, backward-compatible addition. A cost-sensitive caller
+    (e.g. AI-drafted replies) can pass ``return_usage=True`` to get the raw
+    response object needed for ``mailmind.ml.llm_classifier.log_llm_usage``
+    without duplicating this function's provider-shape dispatch.
     """
     messages = [
         {"role": "system", "content": system},
@@ -43,7 +52,8 @@ def chat_complete(
     model = getattr(llm_client, "model", None)
     if client is not None and model:
         resp = client.chat.completions.create(model=model, messages=messages, **kwargs)
-        return resp.choices[0].message.content or ""
+        content = resp.choices[0].message.content or ""
+        return (content, resp, model) if return_usage else content
 
     # Shape 2: OpenAIAdapter — build the OpenAI client on demand from the wrapped
     # classifier's credentials.
@@ -51,11 +61,13 @@ def chat_complete(
     if inner is not None and getattr(inner, "api_key", None):
         import openai
         oc = openai.OpenAI(api_key=inner.api_key)
+        resolved_model = getattr(inner, "model", "gpt-4o-mini")
         resp = oc.chat.completions.create(
-            model=getattr(inner, "model", "gpt-4o-mini"),
+            model=resolved_model,
             messages=messages,
             **kwargs,
         )
-        return resp.choices[0].message.content or ""
+        content = resp.choices[0].message.content or ""
+        return (content, resp, resolved_model) if return_usage else content
 
     raise RuntimeError("no usable LLM chat interface on client")

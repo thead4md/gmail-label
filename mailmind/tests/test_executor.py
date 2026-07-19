@@ -294,5 +294,10 @@ class TestConfidenceThresholdsContract:
         assert CONFIDENCE_THRESHOLDS["delete"] >= 1.0
 
     def test_archive_is_strictest_executable_threshold(self):
-        executable = {k: v for k, v in CONFIDENCE_THRESHOLDS.items() if k != "delete"}
+        """Among thresholds an action can actually clear (< 1.0 — excludes
+        intentionally-unreachable sentinels like delete=1.00 and send=1.01,
+        the latter a belt-and-suspenders guard since send_message() is never
+        dispatched through this confidence gate at all), archive is
+        strictest."""
+        executable = {k: v for k, v in CONFIDENCE_THRESHOLDS.items() if v < 1.0}
         assert executable["archive"] == max(executable.values())

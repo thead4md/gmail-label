@@ -63,6 +63,31 @@ def _collect_parts(payload: Dict[str, Any], plain_parts: List[str], html_parts: 
         _collect_parts(part, plain_parts, html_parts, mime_types)
 
 
+def _collect_attachments(payload: Dict[str, Any], out_list: List[Dict[str, Any]]) -> None:
+    """Recursively walk `payload`/`payload["parts"]` collecting attachment metadata.
+
+    Any part whose body carries an `attachmentId` (i.e. its content is not
+    inlined in `body.data` and must be fetched separately via
+    GmailFetcher.get_attachment()) is recorded as
+    {filename, mimeType, size, attachmentId}. Metadata only — never fetches
+    or stores attachment bytes here.
+    """
+    body = payload.get("body", {}) or {}
+    attachment_id = body.get("attachmentId")
+    if attachment_id:
+        out_list.append(
+            {
+                "filename": payload.get("filename"),
+                "mimeType": payload.get("mimeType"),
+                "size": body.get("size"),
+                "attachmentId": attachment_id,
+            }
+        )
+
+    for part in payload.get("parts", []) or []:
+        _collect_attachments(part, out_list)
+
+
 def _html_to_text(html_content: str) -> str:
     # Basic conversion: unescape HTML entities and strip tags
     text = html.unescape(html_content)
@@ -164,11 +189,16 @@ def parse_message(resource: Dict[str, Any]) -> Email:
     # Triggering on `if plain_parts:` would then yield an empty body and discard
     # the HTML, so fall back to HTML whenever the joined plain text is empty.
     body_text: Optional[str] = None
+    body_html: Optional[str] = None
     joined_plain = "\n\n".join(plain_parts).strip()
     if joined_plain:
         body_text = joined_plain
     elif html_parts:
         body_text = _html_to_text(html_parts[0])
+    if html_parts:
+        # Keep the raw decoded HTML (in addition to the flattened body_text
+        # above) so a later reply/compose or "view original" UI can render it.
+        body_html = html_parts[0]
 
     # history id
     history_id = None
@@ -183,6 +213,18 @@ def parse_message(resource: Dict[str, Any]) -> Email:
     list_unsubscribe_hdr = hdrs.get("list-unsubscribe", [None])[0]
     unsubscribe_url = _extract_unsubscribe_url(list_unsubscribe_hdr)
 
+    # Threading headers (RFC 5322). _parse_headers lowercases header names, so
+    # look these up in lowercase. Needed later to build a correct reply's
+    # In-Reply-To/References (Phase 3).
+    message_id_hdr = hdrs.get("message-id", [None])[0]
+    in_reply_to_hdr = hdrs.get("in-reply-to", [None])[0]
+    references_hdr = hdrs.get("references", [None])[0]
+
+    # Attachment metadata (never the bytes) — fetched on demand via
+    # GmailFetcher.get_attachment().
+    attachments: List[Dict[str, Any]] = []
+    _collect_attachments(payload, attachments)
+
     email = Email(
         gmail_id=msg_id,
         thread_id=thread_id,
@@ -195,6 +237,11 @@ def parse_message(resource: Dict[str, Any]) -> Email:
         labels=labels,
         parsed=True,
         unsubscribe_url=unsubscribe_url,
+        body_html=body_html,
+        message_id=message_id_hdr,
+        in_reply_to=in_reply_to_hdr,
+        references_header=references_hdr,
+        history_id=history_id,
     )
 
     # Attach additional raw headers if needed in a safe manner
@@ -207,7 +254,7 @@ def parse_message(resource: Dict[str, Any]) -> Email:
         setattr(email, "to_addresses", to_addrs)
         setattr(email, "cc_addresses", cc_addrs)
         setattr(email, "mime_types", list(dict.fromkeys(mime_types)))
-        setattr(email, "history_id", history_id)
+        setattr(email, "attachments", attachments)
     except Exception:
         LOG.debug("Failed to set extended attributes on Email dataclass", exc_info=True)
 

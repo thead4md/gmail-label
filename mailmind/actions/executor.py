@@ -35,6 +35,13 @@ CONFIDENCE_THRESHOLDS = {
     "mark_important": 0.75,
     "archive": 0.85,
     "delete": 1.00,  # Never execute (would require 1.0, which is unreachable due to uncertainty)
+    # Belt-and-suspenders guard: "send" is never dispatched through
+    # execute_action()'s confidence gate (send_message is a separate, direct-call-only
+    # method — see below), but confidence is always in [0, 1], so 1.01 is
+    # mathematically unreachable. If a future change ever accidentally routed "send"
+    # through execute_action(), it would still be rejected here as a second,
+    # independent line of defense beyond "it's not in the dispatch ladder".
+    "send": 1.01,
 }
 
 
@@ -189,6 +196,101 @@ class ActionExecutor:
             LOG.error(f"Unexpected error executing '{action}' on {email.gmail_id}: {e}", exc_info=True)
             self._log_action_executed(email, action, success=False, error=str(e))
             return False
+
+    def send_message(self, draft_row: dict, raw_mime_b64url: str) -> Optional[str]:
+        """Send a fully-composed MIME message via the Gmail API.
+
+        This is the ONLY place in this class that ever calls
+        ``messages().send()`` — it is a real, irreversible send of outgoing mail,
+        distinct from every other method in this file (which only ever modify
+        labels on existing messages). It is intentionally NOT reachable through
+        ``execute_action()``'s dispatch ladder or through
+        ``QueueManager.enqueue_from_prediction()``: the only sanctioned caller is
+        ``mailmind.intelligence.feedback.handle_approve_and_send``, which enforces
+        that a draft must already be in 'approved' status (set by a separate, prior
+        user interaction) before this is ever invoked.
+
+        Args:
+            draft_row: dict-like draft row (as returned by
+                ``mailmind.storage.queries.get_draft``) — used here only for its
+                ``to_addrs`` (logging) and ``thread_id`` (so Gmail threads the sent
+                message correctly when replying).
+            raw_mime_b64url: base64url-encoded RFC 2822 MIME message, as produced by
+                ``mailmind.compose.composer.build_reply_mime`` /
+                ``build_new_message_mime``.
+
+        Returns:
+            - The literal string ``"dry_run"`` if ``safety_policy.dry_run`` is True —
+              a truthy sentinel distinct from any real Gmail message id, so callers can
+              tell a dry-run apart from a real send. The Gmail API is NEVER called in
+              this case.
+            - ``None`` if rate-limited (refused, nothing sent) or if the Gmail API call
+              fails.
+            - The real Gmail message id (str) on a successful send.
+        """
+        # Dry-run check FIRST and unconditionally: there is no way to reach the
+        # Gmail API call below while dry_run is True. This is the single most
+        # important line in this method — "dry_run is the default everywhere" gets
+        # no exception for sending.
+        if self.safety_policy.dry_run:
+            LOG.info(f"DRY RUN: would send message to {draft_row.get('to_addrs')}")
+            return "dry_run"
+
+        if self.safety_policy._is_rate_limited():
+            LOG.warning(
+                f"Send to {draft_row.get('to_addrs')} refused: rate limit exceeded "
+                f"({self.safety_policy.max_actions_per_hour} actions/hour)"
+            )
+            return None
+
+        try:
+            body = {"raw": raw_mime_b64url}
+            thread_id = draft_row.get("thread_id")
+            if thread_id:
+                body["threadId"] = thread_id
+            response = self.service.users().messages().send(
+                userId=self.user_id,
+                body=body,
+            ).execute()
+            message_id = response.get("id") if response else None
+            LOG.info(f"Sent message to {draft_row.get('to_addrs')} (gmail id: {message_id})")
+            self._log_send(draft_row, success=True, gmail_message_id=message_id)
+            time.sleep(self.rate_limit_seconds)
+            return message_id
+        except HttpError as e:
+            LOG.error(f"Gmail API error sending message to {draft_row.get('to_addrs')}: {e}")
+            self._log_send(draft_row, success=False, error=str(e))
+            return None
+        except Exception as e:
+            LOG.error(
+                f"Unexpected error sending message to {draft_row.get('to_addrs')}: {e}",
+                exc_info=True,
+            )
+            self._log_send(draft_row, success=False, error=str(e))
+            return None
+
+    def _log_send(
+        self,
+        draft_row: dict,
+        success: bool,
+        gmail_message_id: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Log a send attempt to the action_applied audit trail (best-effort)."""
+        try:
+            if self.db:
+                action_record = ActionApplied(
+                    email_gmail_id=draft_row.get("in_reply_to_gmail_id") or "",
+                    action="send",
+                    params={"draft_id": draft_row.get("id"), "to_addrs": draft_row.get("to_addrs")},
+                    dry_run=False,
+                    succeeded=success,
+                    details=(f"gmail_message_id={gmail_message_id}" if success else (error or "Failed")),
+                )
+                self.db.log_action(action_record)
+                LOG.debug(f"Logged send attempt for draft {draft_row.get('id')} ({'success' if success else 'failed'})")
+        except Exception as e:
+            LOG.warning(f"Could not log send attempt: {e}", exc_info=True)
 
     def _apply_label(self, message_id: str, label_name: str) -> None:
         """Apply a label to a message (create label if needed)."""
