@@ -772,6 +772,128 @@ def _maybe_mirror_mailbox(db: Database, interval_seconds: int = 86400) -> None:
         LOG.warning("Mailbox mirror skipped: %s", exc)
 
 
+def _maybe_unsnooze(db: Database, interval_seconds: int = 300) -> None:
+    """Re-surface due snoozed action-queue items at most once per interval.
+
+    NOW/REVIEW already read action_queue by status, so flipping a due snoozed
+    row's status back to 'pending' via unsnooze_queue_item() is all that's
+    needed for it to reappear there — no further wiring. Tracked in
+    system_state; failures never take down the watch loop.
+    """
+    from mailmind.storage.queries import get_due_snoozed_items, unsnooze_queue_item
+
+    try:
+        last = db.get_state("last_unsnooze_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+
+        due = get_due_snoozed_items(db, now_ts=now)
+        count = 0
+        for item in due:
+            try:
+                if unsnooze_queue_item(db, item["id"]):
+                    count += 1
+            except Exception as exc:
+                LOG.warning("Unsnooze failed for queue item %s: %s", item.get("id"), exc)
+
+        db.set_state("last_unsnooze_ts", str(now))
+        LOG.info("Unsnooze sweep complete: %d item(s) re-surfaced.", count)
+    except Exception as exc:
+        LOG.warning("Unsnooze sweep skipped: %s", exc)
+
+
+def _maybe_send_scheduled_drafts(
+    db: Database, dry_run: bool = False, interval_seconds: int = 60,
+) -> None:
+    """Send due, already-approved scheduled drafts at most once per interval.
+
+    get_due_scheduled_drafts() only ever returns drafts with status='approved'
+    AND scheduled_at <= now — the human-approval gate (a prior, separate
+    click) has already fired by the time this sweep sees a draft, so this only
+    executes a decision a person already made. Every due draft is handed to
+    feedback.handle_approve_and_send(), the sole sanctioned caller of
+    executor.send_message(), which re-checks the 'approved' status itself
+    before sending.
+
+    Builds one per-account Gmail service + ActionExecutor per cycle, mirroring
+    the same credential-resolution path _run_once/_backfill_one_account use
+    elsewhere in this file (load_stored_credentials(auth_account) ->
+    build_gmail_service(creds)), and reuses it across every due draft for that
+    account this cycle instead of re-authenticating per draft. An account with
+    no valid stored credentials (not yet connected, or needing re-consent) has
+    its due drafts skipped for this cycle with a warning, rather than crashing
+    the whole sweep. Tracked in system_state; timestamp only advances once the
+    sweep completes.
+    """
+    from mailmind.intelligence import feedback
+    from mailmind.storage.queries import get_due_scheduled_drafts
+
+    try:
+        last = db.get_state("last_send_scheduled_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+
+        due = get_due_scheduled_drafts(db, now_ts=now)
+        sent = 0
+        failed = 0
+        # account -> ActionExecutor, or None when that account has no usable
+        # stored credentials this cycle (cached so we authenticate at most
+        # once per account per sweep, not once per due draft).
+        executors: dict = {}
+
+        for draft in due:
+            account = draft.get("account")
+            if account not in executors:
+                label = account or "primary"
+                auth_account = _auth_account_for(account) if account else None
+                try:
+                    creds = load_stored_credentials(auth_account)
+                    if creds is None:
+                        LOG.warning(
+                            "Scheduled send: no valid stored credentials for "
+                            "mailbox %s — skipping its due draft(s) this cycle.",
+                            label,
+                        )
+                        executors[account] = None
+                    else:
+                        service = build_gmail_service(creds)
+                        executors[account] = ActionExecutor(
+                            service=service, db=db,
+                            safety_policy=SafetyPolicy(dry_run=dry_run),
+                        )
+                except Exception as exc:
+                    LOG.warning(
+                        "Scheduled send: failed to build executor for mailbox %s: %s",
+                        label, exc,
+                    )
+                    executors[account] = None
+
+            executor = executors[account]
+            if executor is None:
+                continue
+
+            try:
+                ok = feedback.handle_approve_and_send(db, draft["id"], executor)
+            except Exception as exc:
+                LOG.error(
+                    "Scheduled send: handle_approve_and_send raised for draft %s: %s",
+                    draft["id"], exc, exc_info=True,
+                )
+                ok = False
+
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+
+        db.set_state("last_send_scheduled_ts", str(now))
+        LOG.info("Scheduled-send sweep complete: %d sent, %d failed.", sent, failed)
+    except Exception as exc:
+        LOG.warning("Scheduled-send sweep skipped: %s", exc)
+
+
 def _maybe_suggest_labels(
     db: Database,
     interval_seconds: int = 45 * 86400,
@@ -872,6 +994,8 @@ def run(
                 _maybe_prune(db, retention_days)
                 _maybe_refresh_labels(db)
                 _maybe_mirror_mailbox(db)
+                _maybe_unsnooze(db)
+                _maybe_send_scheduled_drafts(db, dry_run=dry_run)
                 _maybe_suggest_labels(db, no_llm=no_llm)
                 _record_heartbeat(db)
             except KeyboardInterrupt:

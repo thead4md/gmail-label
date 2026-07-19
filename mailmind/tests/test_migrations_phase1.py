@@ -1,5 +1,6 @@
 """Tests for Phase 1 migrations 0027-0029 (content/threading columns,
-attachments table, account column on sender/label tables).
+attachments table, account column on sender/label tables), plus Phase 3+
+migrations 0030-0031 (drafts table, action_queue snooze column).
 """
 from __future__ import annotations
 
@@ -95,4 +96,72 @@ def test_migrations_idempotent_full_suite(db):
     apply_migrations(db._conn)
     # Sanity: schema still intact and queryable after the extra re-application.
     cur = db._conn.execute("SELECT COUNT(*) FROM attachments")
+    assert cur.fetchone()[0] == 0
+
+
+def test_0030_drafts_table_columns(db):
+    cols = _columns(db, "drafts")
+    for col in (
+        "id", "account", "kind", "in_reply_to_gmail_id", "thread_id",
+        "to_addrs", "cc_addrs", "subject", "body_text", "generated_by",
+        "status", "scheduled_at", "gmail_message_id", "created_at",
+        "updated_at", "sent_at",
+    ):
+        assert col in cols, f"missing drafts.{col}"
+
+
+def test_0030_drafts_indexes_exist(db):
+    names = {r[0] for r in db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+    assert "idx_drafts_status" in names
+    assert "idx_drafts_account" in names
+
+
+def test_0030_drafts_defaults(db):
+    db._conn.execute(
+        "INSERT INTO drafts (to_addrs, subject, body_text) VALUES ('a@b.com', 'hi', 'body')"
+    )
+    db._conn.commit()
+    row = db._conn.execute("SELECT * FROM drafts WHERE to_addrs = 'a@b.com'").fetchone()
+    assert row["kind"] == "reply"
+    assert row["generated_by"] == "human"
+    assert row["status"] == "pending_review"
+
+
+def test_0031_action_queue_snoozed_until_column_added(db):
+    assert "snoozed_until" in _columns(db, "action_queue")
+
+
+def test_0031_snoozed_until_nullable_and_settable(db):
+    db._conn.execute(
+        "INSERT INTO action_queue (email_gmail_id, action, action_fingerprint) "
+        "VALUES ('e1', 'archive', 'fp1')"
+    )
+    db._conn.commit()
+    row = db._conn.execute(
+        "SELECT snoozed_until FROM action_queue WHERE action_fingerprint = 'fp1'"
+    ).fetchone()
+    assert row["snoozed_until"] is None
+
+    db._conn.execute(
+        "UPDATE action_queue SET status = 'snoozed', snoozed_until = 12345"
+        " WHERE action_fingerprint = 'fp1'"
+    )
+    db._conn.commit()
+    row = db._conn.execute(
+        "SELECT status, snoozed_until FROM action_queue WHERE action_fingerprint = 'fp1'"
+    ).fetchone()
+    assert row["status"] == "snoozed"
+    assert row["snoozed_until"] == 12345
+
+
+def test_migrations_0030_0031_idempotent(db):
+    """Re-running apply_migrations() after 0030/0031 already applied is a no-op."""
+    apply_migrations(db._conn)
+    apply_migrations(db._conn)
+    cols = _columns(db, "drafts")
+    assert "id" in cols
+    assert "snoozed_until" in _columns(db, "action_queue")
+    # No duplicate index/table errors, and the table is still empty/queryable.
+    cur = db._conn.execute("SELECT COUNT(*) FROM drafts")
     assert cur.fetchone()[0] == 0

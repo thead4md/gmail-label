@@ -156,6 +156,33 @@ class SystemState:
 
 
 @dataclass
+class Draft:
+    """A human- or LLM-composed reply/new message awaiting review before send.
+
+    Mirrors the `drafts` table (migration 0030_create_drafts). Nothing in the
+    query layer constructs this via the ORM-ish pattern QueueItem uses --
+    `queries.create_draft`/`get_draft` deal in dicts directly -- but it gives
+    a typed shape for a future caller to reach for.
+    """
+    to_addrs: str
+    subject: str
+    body_text: str
+    id: Optional[int] = None
+    account: Optional[str] = None
+    kind: str = 'reply'  # 'reply' | 'compose'
+    in_reply_to_gmail_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    cc_addrs: Optional[str] = None
+    generated_by: str = 'human'  # 'human' | 'llm'
+    status: str = 'pending_review'  # 'pending_review' | 'approved' | 'sent' | 'discarded' | 'send_failed'
+    scheduled_at: Optional[int] = None
+    gmail_message_id: Optional[str] = None
+    created_at: int = field(default_factory=now_ts)
+    updated_at: Optional[int] = None
+    sent_at: Optional[int] = None
+
+
+@dataclass
 class QueueItem:
     email_gmail_id: str
     action: str

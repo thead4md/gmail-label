@@ -358,6 +358,44 @@ MIGRATIONS: List[Tuple[str, str]] = [
         -- sender_profiles/sender_reputation/label_priority/user_corrections,
         -- backfilled via _primary_account() like migration 0015.""",
     ),
+    (
+        "0030_create_drafts",
+        """
+        -- Drafts (Phase 3+): human- or LLM-composed replies/new messages awaiting
+        -- review before send. A draft is never sent directly by this migration or
+        -- any query helper — status transitions ('pending_review' -> 'approved' ->
+        -- 'sent'/'send_failed'/'discarded') are driven by the compose UI / send
+        -- gate / scheduler sweep built on top of this table.
+        CREATE TABLE IF NOT EXISTS drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account TEXT,
+            kind TEXT NOT NULL DEFAULT 'reply',
+            in_reply_to_gmail_id TEXT,
+            thread_id TEXT,
+            to_addrs TEXT,
+            cc_addrs TEXT,
+            subject TEXT,
+            body_text TEXT,
+            generated_by TEXT DEFAULT 'human',
+            status TEXT DEFAULT 'pending_review',
+            scheduled_at INTEGER,
+            gmail_message_id TEXT,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER,
+            sent_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_drafts_status ON drafts(status);
+        CREATE INDEX IF NOT EXISTS idx_drafts_account ON drafts(account);
+        """,
+    ),
+    (
+        "0031_add_snooze_to_action_queue",
+        """-- Handled in apply_migrations: adds nullable snoozed_until INTEGER
+        -- column to action_queue. No new status-value CHECK constraint is
+        -- added -- action_queue.status is a plain TEXT column, so the
+        -- 'snoozed' status value is just written by callers (see
+        -- queries.snooze_queue_item / unsnooze_queue_item).""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -425,6 +463,12 @@ ACCOUNT_SCOPED_TABLES = (
     "label_priority",
     "user_corrections",
 )
+
+# Snooze support (Phase 3+): a nullable `snoozed_until` unix timestamp on
+# action_queue. When status='snoozed', the scheduler sweep's
+# get_due_snoozed_items() surfaces the row again once snoozed_until has
+# passed. No CHECK constraint change needed -- action_queue.status has none.
+ACTION_QUEUE_SNOOZE_COLUMN: List[Tuple[str, str]] = [("snoozed_until", "INTEGER")]
 
 
 def _apply_sender_and_label_account_dimension(conn: sqlite3.Connection) -> None:
@@ -561,6 +605,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             )
         elif name == "0029_add_account_to_sender_and_label_tables":
             _apply_sender_and_label_account_dimension(conn)
+        elif name == "0031_add_snooze_to_action_queue":
+            _ensure_columns(conn, "action_queue", ACTION_QUEUE_SNOOZE_COLUMN)
         else:
             cur.executescript(sql)
         cur.execute(
