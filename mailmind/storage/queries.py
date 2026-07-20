@@ -1507,12 +1507,18 @@ def get_all_emails(
 ) -> List[Dict[str, Any]]:
     """Return emails (optionally scoped to a mailbox/folder/search term), newest first.
 
-    ``folder`` filters by substring match against ``emails.labels`` OR
-    ``emails.user_labels`` (both comma-separated strings already in the
-    schema) — no schema change needed for folder nav. ``search`` does a light
-    substring match against subject/sender/snippet, for a combined
-    browse+quick-filter UI; for a dedicated search box use `search_emails`
-    instead (it also matches body_text).
+    ``folder`` filters by substring match against ``emails.user_labels`` (a
+    human-typed, comma-separated string) OR ``emails.labels``. The latter is
+    Gmail's own label column, and Gmail mirrors it as OPAQUE label IDs (e.g.
+    "Label_25"), not display names — a plain substring match of a human name
+    like "Work" against it only ever matches by coincidence, for the handful
+    of built-in system labels whose id and name are textually identical
+    (INBOX, IMPORTANT, SENT, ...). So ``folder`` is also resolved through
+    ``gmail_label_map`` (name -> label_id) and matched against those ids,
+    which is what makes custom Gmail labels actually find their mail here.
+    ``search`` does a light substring match against subject/sender/snippet,
+    for a combined browse+quick-filter UI; for a dedicated search box use
+    `search_emails` instead (it also matches body_text).
     """
     clauses: List[str] = []
     params: List[Any] = []
@@ -1520,9 +1526,21 @@ def get_all_emails(
         clauses.append("e.account = ?")
         params.append(account)
     if folder:
-        clauses.append("(e.labels LIKE ? OR e.user_labels LIKE ?)")
+        label_id_where = "account = ? AND name = ?" if account else "name = ?"
+        label_id_params = [account, folder] if account else [folder]
+        label_ids = [
+            r["label_id"] for r in db.execute_sql(
+                f"SELECT label_id FROM gmail_label_map WHERE {label_id_where}",
+                tuple(label_id_params),
+            ).fetchall()
+        ]
+        or_terms = ["e.labels LIKE ?", "e.user_labels LIKE ?"]
         like = f"%{folder}%"
         params.extend([like, like])
+        for label_id in label_ids:
+            or_terms.append("e.labels LIKE ?")
+            params.append(f"%{label_id}%")
+        clauses.append("(" + " OR ".join(or_terms) + ")")
     if search:
         clauses.append("(e.subject LIKE ? OR e.sender LIKE ? OR e.snippet LIKE ?)")
         like = f"%{search}%"

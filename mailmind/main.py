@@ -665,6 +665,43 @@ def _record_heartbeat(db: Database) -> None:
         LOG.warning("Heartbeat write failed: %s", exc)
 
 
+def get_heartbeat_status(
+    last_heartbeat_ts: Optional[int],
+    *,
+    expected_interval_seconds: int = 120,
+    stale_after_intervals: int = 3,
+) -> dict:
+    """Read the watch loop's heartbeat (HEARTBEAT_KEY) and classify its freshness.
+
+    Returns a dict with:
+      status: 'never' | 'fresh' | 'stale'
+      seconds_ago: int | None
+      human: str — short label for display
+    Stale = no heartbeat for more than ``stale_after_intervals * expected_interval_seconds``
+    (default: 3 missed cycles at the default 120s poll = ~6 minutes silent).
+    """
+    if last_heartbeat_ts is None:
+        return {"status": "never", "seconds_ago": None, "human": "no heartbeat yet"}
+    now = int(time.time())
+    age = max(0, now - int(last_heartbeat_ts))
+    threshold = expected_interval_seconds * stale_after_intervals
+    if age > threshold:
+        return {"status": "stale", "seconds_ago": age, "human": f"silent for {_time_ago_str(age)}"}
+    return {"status": "fresh", "seconds_ago": age, "human": f"active {_time_ago_str(age)}"}
+
+
+def _time_ago_str(delta_seconds: int) -> str:
+    """Matches the dashboard's old get_time_ago_str formatting exactly
+    (always suffixed "ago"), so heartbeat display text is unchanged."""
+    if delta_seconds < 60:
+        return "< 1 min ago"
+    if delta_seconds < 3600:
+        return f"{delta_seconds // 60} min ago"
+    if delta_seconds < 86400:
+        return f"{delta_seconds // 3600}h ago"
+    return f"{delta_seconds // 86400}d ago"
+
+
 def _maybe_prune(db: Database, retention_days: int, interval_seconds: int = 86400) -> None:
     """Run a retention sweep at most once per ``interval_seconds``.
 

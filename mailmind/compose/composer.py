@@ -30,7 +30,20 @@ __all__ = [
     "build_reply_mime",
     "build_new_message_mime",
     "quote_original_body",
+    "reply_subject",
 ]
+
+
+def reply_subject(subject: str) -> str:
+    """Prefix *subject* with "Re: " unless it already starts with that
+    (case-insensitive), matching normal mail-client behavior. Shared by
+    build_reply_mime and the dashboard's reply-compose UI so a reply to an
+    already-"Re:"-prefixed subject never doubles up into "Re: Re: ...".
+    """
+    subject = subject or ""
+    if subject.lower().startswith("re:"):
+        return subject
+    return f"Re: {subject}"
 
 
 def _encode_header(value: str) -> Header:
@@ -147,10 +160,7 @@ def build_reply_mime(
     - ``from_addr`` is optional and normally omitted so Gmail's API auto-fills the
       authenticated user's own address on send.
     """
-    if not subject.lower().startswith("re:"):
-        final_subject = f"Re: {subject}"
-    else:
-        final_subject = subject
+    final_subject = reply_subject(subject)
 
     msg = _build_mime_message(
         to_addr=to_addr,
