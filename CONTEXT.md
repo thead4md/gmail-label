@@ -233,6 +233,6 @@ None found.
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 8 complete. 763 tests passing.
+Pass 8 complete. 641 tests passing.
 Next: Pass 9 — TBD
 <!-- AUTO:END:current_pass_notes -->
