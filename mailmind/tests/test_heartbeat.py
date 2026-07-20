@@ -1,7 +1,7 @@
 """Tests for P2D-1: watch-loop heartbeat.
 
 The watch loop writes last_heartbeat_ts to system_state every cycle. The
-dashboard reads it and shows "Watcher silent for X min" when stale, so a
+frontend reads it and shows "Watcher silent for X min" when stale, so a
 silently hung watcher is visible instead of mysterious. Heartbeat write
 errors must never propagate (a heartbeat that crashes the loop would
 defeat the whole point).
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import mailmind.main as main_mod
-from mailmind.dashboard.helpers import get_heartbeat_status
+from mailmind.main import get_heartbeat_status
 from mailmind.storage.database import Database
 
 

@@ -1,3 +1,11 @@
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+
 FROM python:3.11-slim
 
 # Install system deps + Litestream
@@ -18,6 +26,10 @@ COPY mailmind/ ./mailmind/
 COPY litestream.yml /etc/litestream.yml
 COPY mailmind/fly-start.sh /fly-start.sh
 RUN chmod +x /fly-start.sh
+
+# Built React SPA — served by mailmind/api/main.py's StaticFiles mount +
+# catch-all route.
+COPY --from=frontend-builder /app/frontend/dist ./mailmind/api/static
 
 # Default to the Fly worker startup
 CMD ["/fly-start.sh"]

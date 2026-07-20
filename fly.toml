@@ -46,13 +46,13 @@ primary_region = "ams"
   min_machines_running = 1
   processes = ["app"]
 
-  # Streamlit takes a few seconds to bind 8501 on boot. Without an explicit
-  # check, fly-proxy probes the socket immediately and logs a spurious
+  # uvicorn takes a moment to bind 8501 on boot. Without an explicit check,
+  # fly-proxy probes the socket immediately and logs a spurious
   # "not listening on 8501" warning on every deploy. The grace_period holds
-  # the first probe until Streamlit's own health endpoint is up.
+  # the first probe until the app's own /healthz endpoint is up.
   [[http_service.checks]]
     grace_period = "20s"
     interval = "15s"
     timeout = "5s"
     method = "GET"
-    path = "/_stcore/health"
+    path = "/healthz"
