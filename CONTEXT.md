@@ -49,7 +49,7 @@ graph TD
 | `mailmind/api/deps.py` | Shared FastAPI dependencies: DB singleton, per-account executor cache, LLM client. | get_db(), get_action_executor(), get_llm_client(), get_accounts() |
 | `mailmind/api/main.py` | FastAPI app entry point. Run with: | healthz() |
 | `mailmind/api/routers/automate.py` |  | automate(), AutopilotBody, set_autopilot(), LabelPriorityBody, set_label_priority(), NlRuleBody, create_rule_from_nl(), decide_label_suggestion() |
-| `mailmind/api/routers/drafts.py` | Reply/compose drafts — a deliberate three-step gate: Save Draft, Approve, | CreateDraftBody, create(), read(), reply_defaults(), ai_draft(), approve(), discard(), SendBody, … +1 more |
+| `mailmind/api/routers/drafts.py` | Reply/compose drafts — a deliberate three-step gate: Save Draft, Approve, | CreateDraftBody, create(), read(), reply_defaults(), AiDraftPreviewBody, ai_draft_preview(), approve(), discard(), … +2 more |
 | `mailmind/api/routers/folders.py` |  | list_folders(), folder_emails() |
 | `mailmind/api/routers/history.py` |  | executed(), corrections() |
 | `mailmind/api/routers/inbox.py` |  | list_inbox(), thread(), BulkActionBody, bulk_action(), labels() |
