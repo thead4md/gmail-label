@@ -32,9 +32,18 @@ export function useDailyBrief(account: string | null) {
 }
 
 function invalidateQueueViews(qc: ReturnType<typeof useQueryClient>) {
+  // Must match the actual queryKey prefixes used by useReview/useHistory
+  // ('review-pending'/'review-new-senders', 'history-executed'/
+  // 'history-corrections') — invalidating the bare strings 'review'/'history'
+  // here doesn't match any real key (React Query matches by exact prefix
+  // elements), so approve/reject/label/correct silently left the Review and
+  // History pages showing stale data until an unrelated remount or
+  // window-focus refetch.
   qc.invalidateQueries({ queryKey: ['now'] })
-  qc.invalidateQueries({ queryKey: ['review'] })
-  qc.invalidateQueries({ queryKey: ['history'] })
+  qc.invalidateQueries({ queryKey: ['review-pending'] })
+  qc.invalidateQueries({ queryKey: ['review-new-senders'] })
+  qc.invalidateQueries({ queryKey: ['history-executed'] })
+  qc.invalidateQueries({ queryKey: ['history-corrections'] })
   qc.invalidateQueries({ queryKey: ['automate'] })
   qc.invalidateQueries({ queryKey: ['insights'] })
 }

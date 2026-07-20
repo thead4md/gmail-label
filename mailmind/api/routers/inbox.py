@@ -37,6 +37,8 @@ class BulkActionBody(BaseModel):
 def bulk_action(body: BulkActionBody) -> dict:
     if body.action not in ("label", "archive"):
         raise HTTPException(status_code=422, detail="action must be 'label' or 'archive'")
+    if body.action == "label" and not body.label:
+        raise HTTPException(status_code=422, detail="label is required for action='label'")
     db = get_db()
     executor = get_action_executor(body.account)
     if executor is None:

@@ -71,25 +71,28 @@ def reply_defaults(gmail_id: str) -> dict:
     }
 
 
-@router.post("/{draft_id}/ai-draft")
-def ai_draft(draft_id: int) -> dict:
+class AiDraftPreviewBody(BaseModel):
+    gmail_id: str
+
+
+@router.post("/ai-draft")
+def ai_draft_preview(body: AiDraftPreviewBody) -> dict:
+    """Generate an AI reply body from the ORIGINAL message being replied to —
+    callable before a draft row exists, matching the compose UI's "Draft with
+    AI" step, which happens on the initial compose form (Step 1), not after
+    Save Draft. Takes gmail_id directly rather than a draft_id for that reason."""
     from mailmind.intelligence.draft_reply import draft_reply
 
     db = get_db()
-    draft = get_draft(db, draft_id)
-    if draft is None:
-        raise HTTPException(status_code=404, detail="Draft not found.")
     llm_client = get_llm_client()
     if llm_client is None:
         raise HTTPException(status_code=409, detail="AI drafting isn't configured for this deployment.")
 
-    email_row = None
-    if draft.get("in_reply_to_gmail_id"):
-        email_row = db.get_email_by_gmail_id(draft["in_reply_to_gmail_id"])
-    item = dict(email_row) if email_row is not None else {
-        "subject": draft.get("subject"), "sender": draft.get("to_addrs"), "body_text": "", "snippet": "",
-    }
-    drafted = draft_reply(db, llm_client, item)
+    email_row = db.get_email_by_gmail_id(body.gmail_id)
+    if email_row is None:
+        raise HTTPException(status_code=404, detail="Email not found.")
+
+    drafted = draft_reply(db, llm_client, dict(email_row))
     if drafted is None:
         raise HTTPException(
             status_code=409,

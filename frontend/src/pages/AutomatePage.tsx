@@ -181,8 +181,12 @@ export function AutomatePage() {
                       size="sm"
                       variant="success"
                       onClick={async () => {
-                        await decideSuggestion.mutateAsync({ id: s.id, decision: 'accepted' })
-                        toast.success(`Adopted '${s.suggested_label}'`)
+                        try {
+                          await decideSuggestion.mutateAsync({ id: s.id, decision: 'accepted' })
+                          toast.success(`Adopted '${s.suggested_label}'`)
+                        } catch (e) {
+                          toast.error(e instanceof ApiError ? e.message : 'Error adopting suggestion.')
+                        }
                       }}
                     >
                       Adopt
@@ -191,8 +195,12 @@ export function AutomatePage() {
                       size="sm"
                       variant="ghost"
                       onClick={async () => {
-                        await decideSuggestion.mutateAsync({ id: s.id, decision: 'dismissed' })
-                        toast('Suggestion dismissed.')
+                        try {
+                          await decideSuggestion.mutateAsync({ id: s.id, decision: 'dismissed' })
+                          toast('Suggestion dismissed.')
+                        } catch (e) {
+                          toast.error(e instanceof ApiError ? e.message : 'Error dismissing suggestion.')
+                        }
                       }}
                     >
                       Dismiss

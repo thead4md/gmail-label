@@ -32,7 +32,7 @@ export function ComposeSheet() {
 
   const replyDefaults = useReplyDefaults(target?.mode === 'reply' ? target.gmailId : undefined)
   const createDraft = useCreateDraft()
-  const aiDraft = useAiDraft(draftId)
+  const aiDraft = useAiDraft()
   const draftQuery = useDraft(draftId)
   const approve = useApproveDraft(draftId)
   const discard = useDiscardDraft(draftId)
@@ -79,8 +79,9 @@ export function ComposeSheet() {
   }
 
   async function handleAiDraft() {
+    if (target?.mode !== 'reply' || !target.gmailId) return
     try {
-      const res = await aiDraft.mutateAsync()
+      const res = await aiDraft.mutateAsync(target.gmailId)
       setBody(res.body_text)
     } catch (e) {
       toast.error(draftErrorMessage(e))

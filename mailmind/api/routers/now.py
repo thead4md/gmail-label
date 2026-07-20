@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 
 from mailmind.api.auth import require_auth
-from mailmind.api.deps import get_db
+from mailmind.api.deps import get_db, get_llm_client
 from mailmind.processing.queue_manager import QueueManager, filter_now_items
 from mailmind.storage.queries import build_digest, get_gmail_labels, get_pending_queue_enriched
 from mailmind.taxonomy import ALL_LABELS
@@ -54,17 +54,8 @@ def get_daily_brief(account: Optional[str] = None) -> dict:
     """Separate, slower endpoint (may call the LLM) so the frontend can render
     the feed immediately and stream the brief in once ready, instead of
     blocking the whole NOW payload on it."""
-    from mailmind.config import MailMindConfig
     from mailmind.intelligence.brief import build_daily_brief
-    from mailmind.llm.deepseek import DeepSeekClient
 
     db = get_db()
-    config = MailMindConfig.from_env()
-    llm_client = None
-    if config.llm_enabled and config.deepseek_api_key:
-        try:
-            llm_client = DeepSeekClient(config)
-        except Exception:
-            llm_client = None
-    brief = build_daily_brief(db, account=account, llm_client=llm_client)
+    brief = build_daily_brief(db, account=account, llm_client=get_llm_client())
     return {"brief": brief}

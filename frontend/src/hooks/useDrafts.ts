@@ -53,9 +53,12 @@ export function useCreateDraft() {
   })
 }
 
-export function useAiDraft(draftId: number | null) {
+export function useAiDraft() {
+  // Takes gmail_id, not a draft_id: "Draft with AI" happens on the initial
+  // compose form (Step 1, before Save Draft), so there is no draft row yet
+  // to key off of — the endpoint reads the original message directly.
   return useMutation({
-    mutationFn: () => api.post<{ body_text: string }>(`/api/drafts/${draftId}/ai-draft`),
+    mutationFn: (gmailId: string) => api.post<{ body_text: string }>('/api/drafts/ai-draft', { gmail_id: gmailId }),
   })
 }
 
