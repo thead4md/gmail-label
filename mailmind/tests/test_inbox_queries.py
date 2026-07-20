@@ -93,6 +93,22 @@ class TestGetAllEmails:
         rows = get_all_emails(db, folder="Finance")
         assert [r["gmail_id"] for r in rows] == ["e1"]
 
+    def test_folder_filter_resolves_custom_label_name_to_gmail_label_id(self, db):
+        # Real Gmail custom labels are mirrored onto emails.labels as opaque
+        # ids (e.g. "Label_99"), never as their human display name — only
+        # gmail_label_map knows "Label_99" means "Work". A folder lookup by
+        # display name must resolve through that map, not substring-match
+        # the name directly against the id column. Passing account= here
+        # (as the dashboard always does) exercises the account-scoped
+        # gmail_label_map lookup branch, not just the unscoped one.
+        _seed_email(db, "e1", "t1", "a@x.com", "Subj1", "s1", 100,
+                     account="acct1", labels=["INBOX", "Label_99"])
+        _seed_email(db, "e2", "t2", "b@x.com", "Subj2", "s2", 200,
+                     account="acct1", labels=["INBOX", "Label_50"])
+        db.upsert_label_map("acct1", {"Label_99": "Work", "Label_50": "Finance"})
+        rows = get_all_emails(db, account="acct1", folder="Work")
+        assert [r["gmail_id"] for r in rows] == ["e1"]
+
     def test_pagination_limit_and_offset(self, db):
         for i in range(5):
             _seed_email(db, f"e{i}", f"t{i}", "a@x.com", f"Subj{i}", "s", 100 + i)

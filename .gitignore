@@ -52,6 +52,9 @@ Updating
 tmp/
 Volumes/
 package-lock.json
+# ...except frontend/'s — npm ci in the Dockerfile needs it committed for
+# reproducible builds.
+!frontend/package-lock.json
 mailmind/.pytest_cache/
 mailmind/__pycache__/
 mailmind/.env

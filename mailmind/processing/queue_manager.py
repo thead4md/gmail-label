@@ -319,3 +319,40 @@ class QueueManager:
         count = supersede_old_queue_items(db, email.gmail_id, fingerprint)
         LOG.debug("Superseded %d old items for email %s", count, email.gmail_id)
         return "queued" if result else None
+
+
+def filter_now_items(
+    items: list,
+    queue_threshold: Optional[float] = None,
+) -> list:
+    """Return items relevant for a "needs attention now" view (formerly the
+    dashboard's NOW tab; also used by the FastAPI /api/now route).
+
+    Criteria:
+    - reason_json.reply_needed == True, OR
+    - priority_score > queue_threshold (stored as int 0-100, threshold as 0.0-1.0)
+
+    Sorted by priority_score DESC, created_at ASC.
+    """
+    if queue_threshold is None:
+        queue_threshold = QueueManager.QUEUE_THRESHOLD
+
+    result = []
+    for it in items:
+        reason = it.get('reason_json') or it.get('reason') or {}
+        if isinstance(reason, str):
+            try:
+                reason = json.loads(reason)
+            except Exception:
+                reason = {}
+        keep = False
+        if reason.get('reply_needed'):
+            keep = True
+        score = it.get('priority_score')
+        if score is not None and score > int(queue_threshold * 100):
+            keep = True
+        if keep:
+            result.append(it)
+
+    result.sort(key=lambda x: (-(x.get('priority_score') or 0), x.get('created_at') or 0))
+    return result

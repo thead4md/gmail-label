@@ -4,7 +4,7 @@ A privacy-first Gmail classification and automation assistant. MailMind fetches 
 
 **Bilingual:** all heuristic detection (channels, reply-needed, action items, deadlines) works in **English and Hungarian**.
 
-**Live dashboard:** [mailmind-adam.fly.dev](https://mailmind-adam.fly.dev) (Fly.io, Streamlit)
+**Live app:** [mailmind-adam.fly.dev](https://mailmind-adam.fly.dev) (Fly.io — FastAPI + React)
 
 ---
 
@@ -13,16 +13,16 @@ A privacy-first Gmail classification and automation assistant. MailMind fetches 
 - **Three-tier hybrid pipeline** — deterministic rules → local scikit-learn ML → DeepSeek LLM. Each tier only activates when the previous one isn't confident; when the ML tier handles an email, the paid LLM call is skipped.
 - **Closed learning loop** — your corrections in the Review tab override the model's past predictions as training labels; the watch loop auto-retrains weekly (or after N corrections) and hot-reloads the new model with no restart.
 - **Earned autopilot** — auto-execute requires BOTH high confidence AND an explicit per-sender opt-in (`auto_action_eligible`). Newly-seen senders always queue for review.
-- **Multi-mailbox support** — one dashboard, one watch loop, multiple Gmail accounts. Sidebar mailbox switcher; emails/predictions/queue scoped per account; sender trust shared.
-- **Human-in-the-loop review queue** — Approve in the dashboard actually mutates Gmail (executes the suggested label/star/archive); SHA-256 fingerprints prevent duplicate queue entries.
-- **Watch-loop heartbeat** — the dashboard sidebar shows when the watcher last ran; goes red after ~6 min of silence so a hung loop is visible instead of mysterious.
-- **Activity digest** — dashboard panel + `mailmind digest` CLI: classified / executed / pending / corrections / top labels over any window.
+- **Multi-mailbox support** — one app, one watch loop, multiple Gmail accounts. Mailbox switcher; emails/predictions/queue scoped per account; sender trust shared.
+- **Human-in-the-loop review queue** — Approve in the app actually mutates Gmail (executes the suggested label/star/archive); SHA-256 fingerprints prevent duplicate queue entries.
+- **Watch-loop heartbeat** — the sidebar shows when the watcher last ran; goes red after ~6 min of silence so a hung loop is visible instead of mysterious.
+- **Activity digest** — an Automate-page panel + `mailmind digest` CLI: classified / executed / pending / corrections / top labels over any window.
 - **Self-maintaining** — daily retention sweep prunes old cached emails + VACUUMs the SQLite file; predictions table is upserted (one row per email, latest wins) so storage stays bounded.
 - **Sender memory** — tracks per-sender trust (trusted / neutral / watchlist) and approval/rejection counts; updates automatically from your decisions; shared across mailboxes.
 - **Channel detection** — every email is classified into a communication channel (newsletter / transactional / team / personal / marketing / automated) by fast bilingual heuristics, surfaced as colour chips in the UI and charted in INSIGHTS.
 - **Thread intelligence** — detects reply-needed emails, waiting-on-other-party, open questions, extracts thread summaries, and pulls out **action items** and **deadlines** (e.g. "by Friday", "péntekig", `2026.06.15`).
 - **New-sender screening** — first-time senders surface in a dedicated REVIEW section with one-click **Know / Mute / Block** (Block also rejects all their pending items).
-- **Analytics (INSIGHTS tab)** — Altair charts: label distribution, channel volume, channel × weekday heatmap, top senders by approval rate, and time-to-decision histogram.
+- **Analytics (INSIGHTS tab)** — charts for label distribution, channel volume, channel × weekday heatmap, top senders by approval rate, and time-to-decision histogram.
 - **Modern dark UI** — card-based dark theme, sender avatars, confidence bars + rules→ML→LLM sparkline, animated watcher heartbeat, and a mobile-responsive layout.
 - **Explainability** — every queued action stores a full `reason_json` payload (label, confidence, score breakdown, rule matches, trust tier, thread context, action items) shown in the Review tab.
 - **Safe by construction** — dry-run mode default everywhere; `delete` action requires 1.00 confidence (unreachable); URGENT/FINANCE/PERSONAL emails cannot be auto-archived; ActionExecutor + SafetyPolicy fully tested.
@@ -89,24 +89,31 @@ python -m mailmind.main digest --days 7
 python -m mailmind.main prune --retention-days 90
 ```
 
-### Review dashboard
+### Web app
+
+The web app is a FastAPI backend (`mailmind/api/`) plus a React frontend (`frontend/`). For local development, run both:
 
 ```bash
-streamlit run mailmind/dashboard/app.py
+# Terminal 1 — API
+uvicorn mailmind.api.main:app --reload --port 8000
+
+# Terminal 2 — frontend dev server (proxies /api to :8000)
+cd frontend && npm install && npm run dev
 ```
 
-Open [http://localhost:8501](http://localhost:8501) in your browser.
+Open [http://localhost:5173](http://localhost:5173) in your browser. For production, `npm run build` outputs static assets that the FastAPI app serves directly (see `mailmind/api/main.py`) — this is what the Dockerfile does.
 
 ---
 
-## Dashboard tabs
+## App pages
 
-| Tab | Purpose |
+| Page | Purpose |
 |---|---|
-| **NOW** | High-priority and reply-needed items as cards — sender avatar, label/channel chips, confidence bar, action-item + deadline chips, single Approve per item |
-| **REVIEW** | New-sender screening (Know / Mute / Block) + recent predictions + pending actions with full reasoning (Why this?), confidence sparkline, and Approve / Reject / Edit Label |
-| **INSIGHTS** | Analytics charts — label distribution, channel volume, channel × weekday heatmap, top senders, time-to-decision |
-| **AUTOMATE** | Activity digest, sender trust profiles, **per-sender autopilot toggles**, model health, queue statistics |
+| **Now** | High-priority and reply-needed items as cards — sender avatar, label/channel chips, confidence bar, action-item + deadline chips, single Approve per item |
+| **Review** | New-sender screening (Know / Mute / Block) + recent predictions + pending actions with full reasoning (Why this?), and Approve / Reject / Edit Label |
+| **Inbox / Search / Folders** | Master-detail mail browsing — message list + reading pane, thread view, bulk label/archive, and the three-step reply compose gate (Save Draft → Approve → Send) |
+| **Insights** | Analytics charts — label distribution, channel volume, channel × weekday heatmap, top senders, time-to-decision |
+| **Automate** | Activity digest, sender trust profiles, **per-sender autopilot toggles**, model health, queue statistics |
 
 The sidebar shows:
 - **Mailbox switcher** (when >1 account is configured)
@@ -145,7 +152,7 @@ The sidebar shows:
 | `DEEPSEEK_API_KEY` | — | DeepSeek API key; absent → LLM stage disabled |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek model name |
 | `DEEPSEEK_MAX_CALLS_PER_RUN` | `10` | Max LLM calls per cycle (cost cap) |
-| `DASHBOARD_PASSWORD` | — | If set, dashboard requires this password |
+| `DASHBOARD_PASSWORD` | — | If set, the web app requires this password |
 | `DASHBOARD_SECRET` | — | Random key (e.g. `openssl rand -hex 32`) used to sign the auth cookie; falls back to DASHBOARD_PASSWORD if unset |
 | `GMAIL_TOKEN` | — | Headless OAuth token for primary mailbox (Fly secret) |
 | `GMAIL_TOKEN_<SLUG>` | — | Headless token for secondary mailbox, e.g. `GMAIL_TOKEN_ALICE_SECONDARY_ORG` |
@@ -198,11 +205,11 @@ mailmind/
 │   ├── explainer.py         # ReasonPayload builder → reason_json in queue
 │   └── feedback.py          # Approve (executes!) / reject / correct + Know/Mute/Block
 │
-├── dashboard/               # Four-tab Streamlit review UI (dark theme)
-│   ├── app.py               # NOW / REVIEW / INSIGHTS / AUTOMATE + switcher + heartbeat
-│   ├── helpers.py           # Pure formatting + HTML/SVG card helpers (testable)
-│   ├── theme.py             # CSS design system, colour maps, mobile breakpoints
-│   └── charts.py            # Altair chart builders for the INSIGHTS tab
+├── api/                     # FastAPI backend — thin HTTP wrapper over the
+│   ├── main.py              #   modules above (no business logic of its own);
+│   ├── auth.py              #   also serves the built React SPA in production
+│   └── routers/             # one router per page: now, review, inbox, search,
+│                             #   folders, history, insights, automate, drafts
 │
 ├── ml/
 │   ├── model.py             # scikit-learn model wrapper
@@ -245,7 +252,7 @@ Tests use in-memory SQLite — no network, no Gmail API, no LLM calls. The Actio
 
 ## Fly.io deployment
 
-The app runs on [Fly.io](https://fly.io) as `mailmind-adam`. Single machine, persistent volume at `/data`, Streamlit dashboard exposed on port 443.
+The app runs on [Fly.io](https://fly.io) as `mailmind-adam`. Single machine, persistent volume at `/data`, the FastAPI app (serving both the API and the built React frontend) exposed on port 443.
 
 ### Required Fly secrets
 
@@ -270,7 +277,7 @@ fly deploy --app mailmind-adam
 
 The container starts via `fly-start.sh` which:
 1. Optionally restores the DB from S3 via Litestream (when `LITESTREAM_*` secrets are set)
-2. Launches the Streamlit dashboard on `:8501`
+2. Launches the FastAPI web app (`uvicorn mailmind.api.main:app`) on `:8501`
 3. Starts the MailMind polling daemon (`run --watch`)
 
 ### Operational commands
@@ -286,12 +293,12 @@ fly ssh console --app mailmind-adam -C "sqlite3 /data/mailmind.db 'SELECT COUNT(
 
 ## Security notes
 
-- No email body text is logged to stdout or shown in the dashboard tables
+- No email body text is logged to stdout or shown in the UI's tables
 - OAuth tokens are stored in macOS Keychain locally; on Fly via per-account `GMAIL_TOKEN[_<SLUG>]` secrets (encrypted at rest)
 - `credentials.json` lives at `~/.mailmind/credentials.json`, **never** in the repo
 - All SQLite writes use parameterised queries
 - The `delete` action is hard-blocked in `SafetyPolicy` regardless of confidence
 - Auto-execute requires explicit per-sender opt-in — high confidence alone is not sufficient
 - Protected categories (`URGENT`, `FINANCE`, `PERSONAL`) cannot be auto-archived
-- Dashboard is password-protected when `DASHBOARD_PASSWORD` is set
+- The web app is password-protected when `DASHBOARD_PASSWORD` is set
 - The auth cookie is signed with `DASHBOARD_SECRET` (independent of the password); login attempts are rate-limited to 5 failures per 5 minutes
