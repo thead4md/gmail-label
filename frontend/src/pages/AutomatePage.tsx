@@ -12,6 +12,7 @@ import {
   useAutomate,
   useCreateNlRule,
   useDecideLabelSuggestion,
+  useSetAutoNudge,
   useSetAutopilot,
   useSetLabelPriority,
 } from '../hooks/useAutomate'
@@ -36,6 +37,7 @@ export function AutomatePage() {
   const [days, setDays] = useState(7)
   const { data, isLoading } = useAutomate(account, days)
   const setAutopilot = useSetAutopilot()
+  const setAutoNudge = useSetAutoNudge()
   const setPriority = useSetLabelPriority()
   const createRule = useCreateNlRule(account)
   const decideSuggestion = useDecideLabelSuggestion()
@@ -104,7 +106,7 @@ export function AutomatePage() {
                       )}
                     </div>
                   </div>
-                  <label className="flex items-center gap-1.5 text-[11px] text-text-muted">
+                  <label className="flex items-center gap-1.5 text-[11px] text-text-muted" title="Auto-execute labels/star/archive for this sender">
                     <span>Autopilot</span>
                     <input
                       type="checkbox"
@@ -112,6 +114,21 @@ export function AutomatePage() {
                       onChange={(e) => {
                         setAutopilot.mutate({ email: p.sender_email, enabled: e.target.checked })
                         toast(e.target.checked ? `Autopilot on — ${p.sender_email}` : `Autopilot off — ${p.sender_email}`)
+                      }}
+                      className="accent-[var(--accent)]"
+                    />
+                  </label>
+                  <label
+                    className="flex items-center gap-1.5 text-[11px] text-text-muted"
+                    title="Let Loop Radar send follow-up nudges to this contact autonomously, without a click each time — a separate, more consequential grant from label Autopilot"
+                  >
+                    <span>Auto-nudge</span>
+                    <input
+                      type="checkbox"
+                      checked={!!p.auto_nudge_eligible}
+                      onChange={(e) => {
+                        setAutoNudge.mutate({ email: p.sender_email, enabled: e.target.checked })
+                        toast(e.target.checked ? `Auto-nudge on — ${p.sender_email}` : `Auto-nudge off — ${p.sender_email}`)
                       }}
                       className="accent-[var(--accent)]"
                     />

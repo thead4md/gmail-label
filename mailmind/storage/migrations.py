@@ -433,6 +433,17 @@ MIGRATIONS: List[Tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_loops_account ON loops(account);
         """,
     ),
+    (
+        "0033_add_auto_nudge_eligible_to_sender_profiles",
+        """-- Handled in apply_migrations: adds auto_nudge_eligible column to
+        -- sender_profiles. Deliberately a SEPARATE flag from
+        -- auto_action_eligible (earned label/star/archive autopilot,
+        -- migration 0013): composing and sending a new outbound follow-up is
+        -- a materially more consequential, harder-to-reverse action than
+        -- applying a label, so trusting a sender for one must never silently
+        -- grant the other. Default 0 -- off, opt-in per contact, exactly like
+        -- auto_action_eligible.""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -480,6 +491,7 @@ SENDER_RULE_PATTERN_COLUMN: List[Tuple[str, str]] = [("match_pattern", "TEXT")]
 # rejection stats) or 'manual' (forced via Know/Mute). A manual tier must not be
 # silently overwritten by the next auto-recompute. Existing rows default to 'auto'.
 SENDER_TIER_SOURCE_COLUMN: List[Tuple[str, str]] = [("tier_source", "TEXT DEFAULT 'auto'")]
+SENDER_AUTO_NUDGE_COLUMN: List[Tuple[str, str]] = [("auto_nudge_eligible", "INTEGER DEFAULT 0")]
 
 # Content/threading fields (Phase 1): full HTML body, RFC 5322 threading
 # headers, and the mailbox history cursor. Promoted from dynamic setattr on
@@ -635,6 +647,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             _ensure_columns(conn, "sender_label_rules", SENDER_RULE_PATTERN_COLUMN)
         elif name == "0025_add_tier_source_to_sender_profiles":
             _ensure_columns(conn, "sender_profiles", SENDER_TIER_SOURCE_COLUMN)
+        elif name == "0033_add_auto_nudge_eligible_to_sender_profiles":
+            _ensure_columns(conn, "sender_profiles", SENDER_AUTO_NUDGE_COLUMN)
         elif name == "0027_extend_emails_for_content_and_threading":
             _ensure_columns(conn, "emails", EMAIL_CONTENT_THREADING_COLUMNS)
             conn.execute(

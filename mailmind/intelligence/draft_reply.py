@@ -29,6 +29,8 @@ LOG = logging.getLogger(__name__)
 _MAX_BODY_CHARS = 500
 _MAX_SUBJECT_CHARS = 200
 _MAX_THREAD_SUMMARY_CHARS = 300
+_MAX_VOICE_EXAMPLES = 2
+_MAX_VOICE_EXAMPLE_CHARS = 250
 
 # Cheap heuristic, not real language detection — Hungarian diacritics/words
 # appear routinely in this real mailbox's content (a scouting organization's
@@ -43,6 +45,38 @@ _HU_HINTS = (
 def _looks_hungarian(*texts: Optional[str]) -> bool:
     combined = " ".join(t for t in texts if t).lower()
     return any(hint in combined for hint in _HU_HINTS)
+
+
+def _voice_examples_block(
+    db: Database, contact_raw: Optional[str], account: Optional[str] = None,
+) -> str:
+    """Build a "here's how I've written to this person before" block from
+    the user's own past SENT mail to *contact_raw* (a raw contact string,
+    e.g. "Alice <alice@x.com>" or a bare address), or "" if there's no
+    history. Conditions drafting on how the user has actually written to
+    THIS specific person, not a generic tone. Best-effort: any failure
+    (including "no such contact") returns "" rather than blocking drafting.
+    """
+    try:
+        from .loops import _split_addr
+        from ..storage.queries import get_sent_replies_to_contact
+
+        contact_email, _ = _split_addr(contact_raw)
+        if not contact_email:
+            return ""
+        examples = get_sent_replies_to_contact(
+            db, contact_email, account=account, limit=_MAX_VOICE_EXAMPLES,
+        )
+    except Exception:
+        LOG.debug("_voice_examples_block: lookup failed (non-fatal)", exc_info=True)
+        return ""
+
+    if not examples:
+        return ""
+    lines = ["Examples of how I've written to this person before (match this tone and style):"]
+    for i, ex in enumerate(examples, 1):
+        lines.append(f"{i}. {ex[:_MAX_VOICE_EXAMPLE_CHARS]}")
+    return "\n".join(lines)
 
 
 def _day_start_ts() -> int:
@@ -119,6 +153,9 @@ def draft_reply(
         user_parts += ["", "Open action items in this thread: " + "; ".join(action_items[:5])]
     if deadlines:
         user_parts += ["", "Mentioned deadlines: " + "; ".join(deadlines[:5])]
+    voice_block = _voice_examples_block(db, sender, account=email.get("account"))
+    if voice_block:
+        user_parts += ["", voice_block]
     user_parts += ["", "Draft a concise reply."]
     user = "\n".join(user_parts)
 

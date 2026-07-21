@@ -56,6 +56,9 @@ export interface Loop {
   last_sent_ts: number | null
   last_activity_ts: number | null
   due_ts: number | null
+  nudge_count: number
+  last_nudge_ts: number | null
+  draft_id: number | null
   // Annotated by the /api/now route:
   waiting_days: number | null
   slipping: boolean
@@ -86,4 +89,5 @@ export interface SenderProfile {
   total_rejected: number
   approval_rate: number
   auto_action_eligible: number | boolean
+  auto_nudge_eligible: number | boolean
 }

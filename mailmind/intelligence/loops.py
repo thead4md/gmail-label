@@ -52,11 +52,18 @@ def _labels_list(email: Dict[str, Any]) -> List[str]:
 
 
 def _is_outbound(email: Dict[str, Any], user_addresses: Set[str]) -> bool:
-    """A message is outbound if Gmail tagged it SENT or its sender is the user."""
+    """A message is outbound if Gmail tagged it SENT or its sender is the user.
+
+    Compares the *parsed* sender address for exact equality against
+    ``user_addresses`` rather than testing substring containment — a raw
+    ``addr in sender`` check would misclassify an unrelated inbound sender
+    whose address happens to contain the user's address as a substring (e.g.
+    user "me@x.com" vs. sender "awesome@x.com", which contains "me@x.com").
+    """
     if "SENT" in _labels_list(email):
         return True
-    sender = (email.get("sender") or "").lower()
-    return any(addr and addr in sender for addr in user_addresses)
+    sender_addr, _ = _split_addr(email.get("sender"))
+    return bool(sender_addr) and sender_addr in user_addresses
 
 
 def _other_party(

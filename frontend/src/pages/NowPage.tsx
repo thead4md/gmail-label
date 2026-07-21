@@ -54,6 +54,13 @@ export function NowPage() {
     openCompose({ mode: 'reply', gmailId: item.email_gmail_id })
   }
   function doNudge(loop: Loop) {
+    if (loop.state === 'nudge_drafted' && loop.draft_id) {
+      // Loop Radar already drafted a nudge for this contact and it's
+      // awaiting human review — open that exact draft (Approve → Send),
+      // never create a second one alongside it.
+      openCompose({ mode: 'new', draftId: loop.draft_id })
+      return
+    }
     // A waiting-on loop has no inbound message to "reply" to, so open a fresh
     // message prefilled with the contact + Re: subject as a follow-up nudge.
     openCompose({
@@ -340,17 +347,42 @@ function YouOweCard({
 function WaitingCard({ loop, onNudge }: { loop: Loop; onNudge: () => void }) {
   const name = loop.contact_name || loop.contact_email || 'someone'
   const days = loop.waiting_days ?? 0
+  const state = loop.state || 'open'
+
+  let stateBadge: React.ReactNode = null
+  if (state === 'escalated') {
+    stateBadge = (
+      <span className="shrink-0 rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
+        🚨 no reply after {loop.nudge_count} nudge{loop.nudge_count === 1 ? '' : 's'}
+      </span>
+    )
+  } else if (state === 'nudge_drafted') {
+    stateBadge = (
+      <span className="shrink-0 rounded-full border border-accent/40 bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent">
+        ✨ nudge drafted — review to send
+      </span>
+    )
+  } else if (state === 'nudged') {
+    stateBadge = (
+      <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-text-muted">
+        nudged {loop.nudge_count}×{loop.last_nudge_ts ? ` · ${timeAgo(loop.last_nudge_ts)}` : ''}
+      </span>
+    )
+  } else if (loop.slipping) {
+    stateBadge = (
+      <span className="shrink-0 rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
+        about to slip
+      </span>
+    )
+  }
+
   return (
     <div className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
       <Avatar sender={loop.contact_name || loop.contact_email} size={32} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-[13px] font-semibold text-text">{name}</span>
-          {loop.slipping && (
-            <span className="shrink-0 rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
-              about to slip
-            </span>
-          )}
+          {stateBadge}
         </div>
         <div className="truncate text-[12px] text-text-muted">{loop.subject || '(no subject)'}</div>
       </div>
@@ -359,7 +391,7 @@ function WaitingCard({ loop, onNudge }: { loop: Loop; onNudge: () => void }) {
         {loop.last_sent_ts ? <span className="hidden sm:inline">· sent {timeAgo(loop.last_sent_ts)}</span> : null}
       </div>
       <Button variant="ghost" size="sm" onClick={onNudge}>
-        <CornerUpLeft size={13} /> Nudge
+        <CornerUpLeft size={13} /> {state === 'nudge_drafted' ? 'Review' : 'Nudge'}
       </Button>
     </div>
   )
