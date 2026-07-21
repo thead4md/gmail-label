@@ -44,6 +44,23 @@ export interface QueueItem {
   was_auto?: boolean
 }
 
+export interface Loop {
+  id: number
+  account: string | null
+  thread_id: string
+  contact_email: string | null
+  contact_name: string | null
+  side: string
+  state: string
+  subject: string | null
+  last_sent_ts: number | null
+  last_activity_ts: number | null
+  due_ts: number | null
+  // Annotated by the /api/now route:
+  waiting_days: number | null
+  slipping: boolean
+}
+
 export interface EmailListItem {
   gmail_id: string
   thread_id: string | null

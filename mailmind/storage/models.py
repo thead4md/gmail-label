@@ -200,3 +200,33 @@ class QueueItem:
     account: Optional[str] = None
     reviewed_at: Optional[int] = None
     executed_at: Optional[int] = None
+
+
+@dataclass
+class Loop:
+    """An open commitment on an email thread — the product's primary object
+    in the client-strategy reframe. Mirrors the `loops` table (migration
+    0032_create_loops).
+
+    V1 only persists the ``side='waiting_on'`` case: a thread whose newest
+    message is outbound with no reply back, i.e. someone owes the user a
+    response. The ``you_owe`` side is derived on read from the action queue
+    and is not stored here. ``nudge_count``/``last_nudge_ts``/``draft_id`` are
+    reserved for the autonomous follow-up feature and unused in V1.
+    """
+    thread_id: str
+    side: str = 'waiting_on'   # 'waiting_on' (V1) | 'you_owe' (reserved)
+    state: str = 'open'        # 'open' | 'nudged' | 'closed' | 'snoozed'
+    id: Optional[int] = None
+    account: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_name: Optional[str] = None
+    subject: Optional[str] = None
+    last_sent_ts: Optional[int] = None
+    last_activity_ts: Optional[int] = None
+    due_ts: Optional[int] = None
+    nudge_count: int = 0
+    last_nudge_ts: Optional[int] = None
+    draft_id: Optional[int] = None
+    created_at: int = field(default_factory=now_ts)
+    updated_at: Optional[int] = None

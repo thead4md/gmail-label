@@ -50,8 +50,10 @@ export function ComposeSheet() {
       setTo(replyDefaults.data.to_addrs)
       setSubject(replyDefaults.data.subject)
     } else if (target.mode === 'new') {
-      setTo('')
-      setSubject('')
+      // Honor a prefilled recipient/subject (e.g. a "Nudge" from a waiting-on
+      // loop); falls back to blank for a plain Compose.
+      setTo(target.toAddrs ?? '')
+      setSubject(target.subject ?? '')
     }
     setBody('')
     setDraftId(null)
