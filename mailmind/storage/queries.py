@@ -1780,6 +1780,15 @@ def upsert_loop(
     and draft_id (reserved for the follow-up feature) on update.
     """
     now = int(time.time())
+    # SQLite's UNIQUE index treats every NULL as distinct from every other
+    # NULL, so a NULL account (the watch loop's fallback when no mailbox is
+    # configured at all — see main._maybe_detect_loops) would never satisfy
+    # ON CONFLICT: each sweep would INSERT a fresh duplicate row for the same
+    # thread instead of updating the existing one. Normalize to '' so the
+    # constraint actually dedupes; '' is falsy everywhere account is checked
+    # on read (get_open_loops, the account filter in intelligence/loops.py),
+    # so this is behaviorally a no-op for every other code path.
+    account_key = account if account is not None else ''
     with db.transaction() as cur:
         cur.execute(
             """
@@ -1798,13 +1807,13 @@ def upsert_loop(
                 updated_at      = excluded.updated_at
             """,
             (
-                account, thread_id, side, contact_email, contact_name, subject,
+                account_key, thread_id, side, contact_email, contact_name, subject,
                 last_sent_ts, last_activity_ts, due_ts, now, now,
             ),
         )
         row = cur.execute(
             "SELECT id FROM loops WHERE account IS ? AND thread_id = ? AND side = ?",
-            (account, thread_id, side),
+            (account_key, thread_id, side),
         ).fetchone()
         return int(row[0]) if row else int(cur.lastrowid)
 

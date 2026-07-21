@@ -80,6 +80,13 @@ class TestAddressHelpers:
     def test_inbound_is_not_outbound(self):
         assert not _is_outbound({"labels": "INBOX", "sender": "bob@y.com"}, USERS)
 
+    def test_unrelated_sender_containing_user_address_as_substring_is_not_outbound(self):
+        # "awesome@x.com" contains the literal substring "me@x.com" — a raw
+        # `addr in sender` check would misclassify this unrelated inbound
+        # sender as outbound. Exact parsed-address match must reject it.
+        assert "me@x.com" in "awesome@x.com"  # sanity-check the collision is real
+        assert not _is_outbound({"labels": "INBOX", "sender": "awesome@x.com"}, USERS)
+
 
 # --------------------------------------------------------------------------- #
 # Pure core
@@ -147,6 +154,20 @@ class TestLoopQueries:
         assert get_open_loops(db, account=USER) == []
         assert close_loop(db, lid) is False  # already closed
 
+    def test_upsert_is_idempotent_with_no_account_configured(self, db):
+        # SQLite's UNIQUE index treats NULL as distinct from every other NULL,
+        # so account=None (the watch loop's fallback when no mailbox is
+        # configured at all) must be normalized before it reaches the
+        # UNIQUE(account, thread_id, side) constraint, or every repeated
+        # detection would insert a fresh duplicate row instead of updating.
+        id1 = upsert_loop(db, account=None, thread_id="t1", last_activity_ts=100)
+        id2 = upsert_loop(db, account=None, thread_id="t1", last_activity_ts=200)
+        id3 = upsert_loop(db, account=None, thread_id="t1", last_activity_ts=300)
+        assert id1 == id2 == id3
+        loops = get_open_loops(db, account=None)
+        assert len(loops) == 1
+        assert loops[0]["last_activity_ts"] == 300
+
 
 # --------------------------------------------------------------------------- #
 # End-to-end detector
@@ -178,3 +199,24 @@ class TestDetectWaitingOnLoops:
         detect_waiting_on_loops(db, account=USER, now_ts=1000 + 10 * DAY)
         loops = get_open_loops(db, account=USER)
         assert loops[0]["due_ts"] < 1000 + 10 * DAY  # due date is in the past => slipping
+
+    def test_reply_from_substring_colliding_sender_still_closes_loop(self, db):
+        # USER is "me@x.com"; "awesome@x.com" contains "me@x.com" as a literal
+        # substring. A raw substring-based outbound check would misclassify
+        # Bob's reply as outbound and the loop would never close.
+        assert "me@x.com" in "awesome@x.com"
+        _seed_email(db, gmail_id="m2", thread_id="t1", sender=USER, date_ts=1000, labels="SENT", recipients="awesome@x.com")
+        detect_waiting_on_loops(db, account=USER, now_ts=2000)
+        assert len(get_open_loops(db, account=USER)) == 1
+
+        _seed_email(db, gmail_id="m3", thread_id="t1", sender="awesome@x.com", date_ts=3000, labels="INBOX")
+        res = detect_waiting_on_loops(db, account=USER, now_ts=4000)
+        assert res["closed"] == 1
+        assert get_open_loops(db, account=USER) == []
+
+    def test_repeated_sweeps_with_no_account_configured_do_not_duplicate(self, db):
+        _seed_email(db, gmail_id="m2", thread_id="t1", sender=USER, date_ts=1000, labels="SENT", recipients="bob@y.com", account=None)
+        for _ in range(3):
+            detect_waiting_on_loops(db, account=None, user_addresses=USERS, now_ts=2000)
+        loops = get_open_loops(db, account=None)
+        assert len(loops) == 1
