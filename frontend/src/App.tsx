@@ -4,6 +4,7 @@ import { useAuthStatus } from './hooks/useAuth'
 import { ComposeProvider, useCompose } from './hooks/useCompose'
 import { Sidebar } from './components/layout/Sidebar'
 import { CommandPalette } from './components/layout/CommandPalette'
+import { ShortcutsHelp } from './components/layout/ShortcutsHelp'
 import { ComposeSheet } from './components/mail/ComposeSheet'
 import { LoginPage } from './pages/LoginPage'
 import { NowPage } from './pages/NowPage'
@@ -35,6 +36,7 @@ function Shell() {
         </Routes>
       </main>
       <CommandPalette onCompose={() => openCompose({ mode: 'new' })} />
+      <ShortcutsHelp />
       <ComposeSheet />
     </div>
   )

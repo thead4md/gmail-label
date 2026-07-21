@@ -11,10 +11,11 @@ import {
   BarChart3,
   Settings,
   PenSquare,
+  Keyboard,
 } from 'lucide-react'
 
 const PAGES = [
-  { to: '/now', label: 'Go to Now', icon: Sparkles },
+  { to: '/now', label: 'Go to Loops', icon: Sparkles },
   { to: '/review', label: 'Go to Review', icon: ClipboardCheck },
   { to: '/inbox', label: 'Go to Inbox', icon: Inbox },
   { to: '/search', label: 'Go to Search', icon: Search },
@@ -68,6 +69,15 @@ export function CommandPalette({ onCompose }: { onCompose: () => void }) {
               className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-text data-[selected=true]:bg-accent-soft data-[selected=true]:text-accent"
             >
               <PenSquare size={15} /> Compose new message
+            </Command.Item>
+            <Command.Item
+              onSelect={() => {
+                window.dispatchEvent(new Event('mm:shortcuts'))
+                setOpen(false)
+              }}
+              className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-text data-[selected=true]:bg-accent-soft data-[selected=true]:text-accent"
+            >
+              <Keyboard size={15} /> Keyboard shortcuts
             </Command.Item>
           </Command.Group>
           <Command.Group heading="Navigate" className="px-1 text-[10px] font-bold uppercase tracking-wider text-text-faint [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5">

@@ -396,6 +396,43 @@ MIGRATIONS: List[Tuple[str, str]] = [
         -- 'snoozed' status value is just written by callers (see
         -- queries.snooze_queue_item / unsnooze_queue_item).""",
     ),
+    (
+        "0032_create_loops",
+        """
+        -- Open Loops (client-strategy reframe): the product's primary object.
+        -- A 'loop' is an outstanding commitment on a thread. V1 populates only
+        -- the 'waiting_on' side: a thread where the user sent the last message
+        -- and no reply has come back (someone owes the user a response). The
+        -- 'you_owe' side is still derived on read from the action_queue, so it
+        -- is intentionally not persisted here.
+        --
+        -- Detection is deterministic (intelligence/loops.py, no LLM). The
+        -- nudge_count / last_nudge_ts / draft_id columns are unused in V1 and
+        -- reserved for the autonomous follow-up ('Loop Radar') feature so it
+        -- needs no further migration.
+        CREATE TABLE IF NOT EXISTS loops (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account TEXT,
+            thread_id TEXT,
+            contact_email TEXT,
+            contact_name TEXT,
+            side TEXT NOT NULL DEFAULT 'waiting_on',
+            state TEXT NOT NULL DEFAULT 'open',
+            subject TEXT,
+            last_sent_ts INTEGER,
+            last_activity_ts INTEGER,
+            due_ts INTEGER,
+            nudge_count INTEGER DEFAULT 0,
+            last_nudge_ts INTEGER,
+            draft_id INTEGER,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER,
+            UNIQUE(account, thread_id, side)
+        );
+        CREATE INDEX IF NOT EXISTS idx_loops_state ON loops(state);
+        CREATE INDEX IF NOT EXISTS idx_loops_account ON loops(account);
+        """,
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [

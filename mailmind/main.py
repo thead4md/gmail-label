@@ -840,6 +840,42 @@ def _maybe_unsnooze(db: Database, interval_seconds: int = 300) -> None:
         LOG.warning("Unsnooze sweep skipped: %s", exc)
 
 
+def _maybe_detect_loops(db: Database, interval_seconds: int = 900) -> None:
+    """Refresh 'waiting_on' open loops (someone owes the user a reply) at most
+    once per interval.
+
+    Deterministic and cheap: it reads the locally-mirrored INBOX+SENT mail
+    (see _maybe_mirror_mailbox) — no LLM, no Gmail calls. NOW reads the loops
+    table directly, so upserting/closing rows is all the wiring needed. Tracked
+    in system_state; failures never take down the watch loop.
+    """
+    from mailmind.intelligence.loops import detect_waiting_on_loops
+
+    try:
+        last = db.get_state("last_loop_detect_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+
+        accounts = MailMindConfig.load_accounts() or [None]
+        total_open = total_closed = 0
+        for account in accounts:
+            try:
+                res = detect_waiting_on_loops(db, account=account, now_ts=now)
+                total_open += res.get("open", 0)
+                total_closed += res.get("closed", 0)
+            except Exception as exc:
+                LOG.warning("Loop detection failed for %s: %s", account, exc)
+
+        db.set_state("last_loop_detect_ts", str(now))
+        LOG.info(
+            "Loop detection sweep complete: %d waiting-on open, %d closed.",
+            total_open, total_closed,
+        )
+    except Exception as exc:
+        LOG.warning("Loop detection sweep skipped: %s", exc)
+
+
 def _maybe_send_scheduled_drafts(
     db: Database, dry_run: bool = False, interval_seconds: int = 60,
 ) -> None:
@@ -1031,6 +1067,7 @@ def run(
                 _maybe_prune(db, retention_days)
                 _maybe_refresh_labels(db)
                 _maybe_mirror_mailbox(db)
+                _maybe_detect_loops(db)
                 _maybe_unsnooze(db)
                 _maybe_send_scheduled_drafts(db, dry_run=dry_run)
                 _maybe_suggest_labels(db, no_llm=no_llm)

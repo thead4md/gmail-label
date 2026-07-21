@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { QueueItem } from '../lib/types'
+import type { Loop, QueueItem } from '../lib/types'
 
 interface Kpi {
   icon: string
@@ -9,9 +9,19 @@ interface Kpi {
   delta: number | null
 }
 
+export interface LoopCounts {
+  you_owe: number
+  waiting_on: number
+  slipping: number
+}
+
 interface NowResponse {
   kpis: Kpi[]
-  items: QueueItem[]
+  items: QueueItem[] // backward-compat alias of you_owe
+  you_owe: QueueItem[]
+  waiting_on: Loop[]
+  handled: QueueItem[]
+  counts: LoopCounts
   gmail_labels: string[]
 }
 

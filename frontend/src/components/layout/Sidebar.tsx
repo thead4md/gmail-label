@@ -18,7 +18,7 @@ import { useAccount, useMeta } from '../../hooks/useAccount'
 import { useTheme } from '../../hooks/useTheme'
 
 const NAV = [
-  { to: '/now', label: 'Now', icon: Sparkles },
+  { to: '/now', label: 'Loops', icon: Sparkles },
   { to: '/review', label: 'Review', icon: ClipboardCheck },
   { to: '/inbox', label: 'Inbox', icon: Inbox },
   { to: '/search', label: 'Search', icon: Search },
