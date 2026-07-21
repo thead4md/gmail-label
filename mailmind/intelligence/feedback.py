@@ -569,6 +569,17 @@ def handle_approve_and_send(db: Database, draft_id: int, executor: Any) -> bool:
                     gmail_message_id=result,
                     sent_at=int(time.time()),
                 )
+            # If this draft is a Loop Radar nudge (loops.draft_id references
+            # it), record that the nudge went out. Dry-run counts too --
+            # dry-run only suppresses the literal Gmail write, not the rest of
+            # this system's bookkeeping, matching how QueueManager/executor
+            # already behave. A no-op for the vast majority of drafts, which
+            # have no loop attached at all.
+            try:
+                from ..storage.queries import mark_loop_nudged_from_draft
+                mark_loop_nudged_from_draft(db, draft_id)
+            except Exception:
+                LOG.debug("handle_approve_and_send: loop nudge bookkeeping failed (non-fatal)", exc_info=True)
             return True
 
         # send_message returned None: refused (rate-limited) or the Gmail API call

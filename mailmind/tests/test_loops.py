@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 
 from mailmind.storage.database import Database
-from mailmind.storage.queries import upsert_loop, get_open_loops, close_loop
+from mailmind.storage.queries import (
+    upsert_loop, get_open_loops, close_loop,
+    link_loop_draft, mark_loop_nudged_from_draft, escalate_loop,
+    is_sender_auto_nudge_eligible, toggle_sender_auto_nudge,
+)
 from mailmind.intelligence.loops import (
     compute_thread_states,
     detect_waiting_on_loops,
@@ -220,3 +224,110 @@ class TestDetectWaitingOnLoops:
             detect_waiting_on_loops(db, account=None, user_addresses=USERS, now_ts=2000)
         loops = get_open_loops(db, account=None)
         assert len(loops) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Loop Radar state machine: link_loop_draft / mark_loop_nudged_from_draft /
+# escalate_loop, and the passive detector's interaction with active states.
+# --------------------------------------------------------------------------- #
+class TestLoopRadarStateMachine:
+    def test_link_loop_draft_sets_draft_id_and_state(self, db):
+        lid = upsert_loop(db, account=USER, thread_id="t1", last_activity_ts=100)
+        assert link_loop_draft(db, lid, draft_id=42, state="nudge_drafted") is True
+        loop = get_open_loops(db, account=USER)[0]
+        assert loop["draft_id"] == 42
+        assert loop["state"] == "nudge_drafted"
+
+    def test_mark_loop_nudged_from_draft_updates_state_and_count(self, db):
+        lid = upsert_loop(db, account=USER, thread_id="t1", last_activity_ts=100)
+        link_loop_draft(db, lid, draft_id=42, state="nudge_drafted")
+        assert mark_loop_nudged_from_draft(db, draft_id=42) is True
+        loop = get_open_loops(db, account=USER)[0]
+        assert loop["state"] == "nudged"
+        assert loop["nudge_count"] == 1
+        assert loop["last_nudge_ts"] is not None
+
+    def test_mark_loop_nudged_from_draft_is_noop_for_unlinked_draft(self, db):
+        upsert_loop(db, account=USER, thread_id="t1", last_activity_ts=100)
+        assert mark_loop_nudged_from_draft(db, draft_id=999) is False
+
+    def test_escalate_loop(self, db):
+        lid = upsert_loop(db, account=USER, thread_id="t1", last_activity_ts=100)
+        assert escalate_loop(db, lid) is True
+        loop = get_open_loops(db, account=USER)[0]
+        assert loop["state"] == "escalated"
+
+    def test_escalate_loop_is_noop_once_closed(self, db):
+        lid = upsert_loop(db, account=USER, thread_id="t1", last_activity_ts=100)
+        close_loop(db, lid)
+        assert escalate_loop(db, lid) is False
+
+    def test_get_open_loops_includes_active_non_open_states(self, db):
+        # nudge_drafted/nudged/escalated must still surface as "active" so the
+        # UI keeps showing them and the passive detector keeps scanning them
+        # for a reply — only closed/snoozed should disappear.
+        lid = upsert_loop(db, account=USER, thread_id="t1", last_activity_ts=100)
+        link_loop_draft(db, lid, draft_id=1, state="nudged")
+        loops = get_open_loops(db, account=USER)
+        assert len(loops) == 1 and loops[0]["state"] == "nudged"
+
+    def test_passive_detector_does_not_reset_nudged_state_to_open(self, db):
+        # A loop already in an active Radar state must not be silently reset
+        # to 'open' just because its own outbound nudge is now the thread's
+        # newest message — that would erase the Radar's tracking every sweep.
+        _seed_email(db, gmail_id="m1", thread_id="t1", sender="bob@y.com", date_ts=1000, labels="INBOX")
+        _seed_email(db, gmail_id="m2", thread_id="t1", sender=USER, date_ts=2000, labels="SENT", recipients="bob@y.com")
+        detect_waiting_on_loops(db, account=USER, now_ts=3000)
+        lid = get_open_loops(db, account=USER)[0]["id"]
+        link_loop_draft(db, lid, draft_id=1, state="nudged")
+
+        # Our own nudge lands as a new SENT message in the same thread — the
+        # detector re-scans and would normally re-upsert this thread.
+        _seed_email(db, gmail_id="m3", thread_id="t1", sender=USER, date_ts=4000, labels="SENT", recipients="bob@y.com")
+        detect_waiting_on_loops(db, account=USER, now_ts=5000)
+
+        loop = get_open_loops(db, account=USER)[0]
+        assert loop["state"] == "nudged"  # NOT reset to 'open'
+
+    def test_passive_detector_reopens_a_closed_loop_as_open(self, db):
+        # A genuinely NEW commitment cycle (closed, then the user sends
+        # another outbound message later) should reopen as 'open', not
+        # inherit the stale 'closed' state.
+        _seed_email(db, gmail_id="m1", thread_id="t1", sender=USER, date_ts=1000, labels="SENT", recipients="bob@y.com")
+        detect_waiting_on_loops(db, account=USER, now_ts=2000)
+        lid = get_open_loops(db, account=USER)[0]["id"]
+        _seed_email(db, gmail_id="m2", thread_id="t1", sender="bob@y.com", date_ts=3000, labels="INBOX")
+        detect_waiting_on_loops(db, account=USER, now_ts=4000)
+        assert get_open_loops(db, account=USER) == []  # closed by the reply
+
+        _seed_email(db, gmail_id="m3", thread_id="t1", sender=USER, date_ts=5000, labels="SENT", recipients="bob@y.com")
+        detect_waiting_on_loops(db, account=USER, now_ts=6000)
+        loops = get_open_loops(db, account=USER)
+        assert len(loops) == 1
+        assert loops[0]["id"] == lid
+        assert loops[0]["state"] == "open"
+
+
+class TestAutoNudgeEligibility:
+    def test_default_is_not_eligible(self, db):
+        assert is_sender_auto_nudge_eligible(db, "bob@y.com") is False
+
+    def test_toggle_on_then_off(self, db):
+        toggle_sender_auto_nudge(db, "bob@y.com", True)
+        assert is_sender_auto_nudge_eligible(db, "bob@y.com") is True
+        toggle_sender_auto_nudge(db, "bob@y.com", False)
+        assert is_sender_auto_nudge_eligible(db, "bob@y.com") is False
+
+    def test_auto_nudge_is_independent_of_label_autopilot(self, db):
+        # Granting one must never silently grant the other -- they're
+        # deliberately separate flags for a reason: sending new outbound
+        # content is materially more consequential than applying a label.
+        from mailmind.storage.queries import toggle_sender_auto_action, is_sender_auto_action_eligible
+
+        toggle_sender_auto_action(db, "bob@y.com", True)
+        assert is_sender_auto_action_eligible(db, "bob@y.com") is True
+        assert is_sender_auto_nudge_eligible(db, "bob@y.com") is False
+
+    def test_no_sender_email_is_not_eligible(self, db):
+        assert is_sender_auto_nudge_eligible(db, None) is False
+        assert is_sender_auto_nudge_eligible(db, "") is False

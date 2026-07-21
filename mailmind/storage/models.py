@@ -216,7 +216,7 @@ class Loop:
     """
     thread_id: str
     side: str = 'waiting_on'   # 'waiting_on' (V1) | 'you_owe' (reserved)
-    state: str = 'open'        # 'open' | 'nudged' | 'closed' | 'snoozed'
+    state: str = 'open'        # 'open' | 'nudge_drafted' | 'nudged' | 'escalated' | 'closed' | 'snoozed'
     id: Optional[int] = None
     account: Optional[str] = None
     contact_email: Optional[str] = None

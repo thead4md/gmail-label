@@ -6,6 +6,9 @@ export interface ComposeTarget {
   threadId?: string | null
   toAddrs?: string
   subject?: string
+  /** Open directly into this existing draft (e.g. a Loop Radar nudge already
+   * awaiting human review) instead of starting a fresh compose form. */
+  draftId?: number
 }
 
 interface ComposeCtx {

@@ -644,6 +644,7 @@ def get_sender_profiles(db: Database, coverage: float = 0.75) -> List[Dict[str, 
             sp.last_action_ts,
             COALESCE(sp.trust_tier, 'neutral')   AS trust_tier,
             COALESCE(sp.auto_action_eligible, 0) AS auto_action_eligible,
+            COALESCE(sp.auto_nudge_eligible, 0) AS auto_nudge_eligible,
             r.email_count
         FROM ranked r
         LEFT JOIN sender_profiles sp ON sp.sender_email = r.sender
@@ -665,6 +666,7 @@ def get_sender_profiles(db: Database, coverage: float = 0.75) -> List[Dict[str, 
             'approval_rate':        approval_rate,
             'trust_tier':           r['trust_tier'] or 'neutral',
             'auto_action_eligible': bool(r['auto_action_eligible']),
+            'auto_nudge_eligible':  bool(r['auto_nudge_eligible']),
             'email_count':          r['email_count'] or 0,
         })
 
@@ -700,6 +702,44 @@ def is_sender_auto_action_eligible(db: Database, sender_email: Optional[str]) ->
     if row is None:
         return False
     return bool(row["auto_action_eligible"])
+
+
+def toggle_sender_auto_nudge(db: Database, sender_email: str, enabled: bool) -> None:
+    """Toggle auto-nudge eligibility for a sender, creating the row if absent.
+
+    Deliberately separate from toggle_sender_auto_action: granting label
+    autopilot for a sender must never silently grant autonomous follow-up
+    sending too.
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO sender_profiles (sender_email, last_action_ts) VALUES (?, ?)",
+            (sender_email, now),
+        )
+        cur.execute(
+            "UPDATE sender_profiles SET auto_nudge_eligible = ? WHERE sender_email = ?",
+            (int(bool(enabled)), sender_email),
+        )
+
+
+def is_sender_auto_nudge_eligible(db: Database, sender_email: Optional[str]) -> bool:
+    """Return True iff the sender has been explicitly granted auto-nudge.
+
+    The default for any sender (no profile or auto_nudge_eligible=0) is
+    False -- earned, opt-in per sender, same philosophy as
+    is_sender_auto_action_eligible but for a materially more consequential
+    action (sending new outbound content) and tracked by its own flag.
+    """
+    if not sender_email:
+        return False
+    row = db.execute_sql(
+        "SELECT auto_nudge_eligible FROM sender_profiles WHERE sender_email = ?",
+        (sender_email,),
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row["auto_nudge_eligible"])
 
 
 def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, int]:
@@ -1583,6 +1623,42 @@ def search_emails(
     return [_row_to_email_list_dict(r) for r in rows]
 
 
+def get_sent_replies_to_contact(
+    db: Database, contact_email: str, account: Optional[str] = None, limit: int = 3,
+) -> List[str]:
+    """Return up to *limit* of the user's own past SENT message bodies to
+    *contact_email*, most recent first.
+
+    Used as few-shot style/voice exemplars for AI drafting (see
+    intelligence/draft_reply.py, intelligence/loop_radar.py) -- conditioning
+    a draft on how the user has actually written to THIS person before, not
+    a generic tone. Draws on the same locally-mirrored SENT mail the
+    'waiting_on' loop detector already reads (main._maybe_mirror_mailbox).
+    Best-effort: returns [] on no history; never raises.
+    """
+    if not contact_email:
+        return []
+    account_clause = " AND account = ?" if account else ""
+    params: List[Any] = [f"%{contact_email}%"]
+    if account:
+        params.append(account)
+    params.append(limit)
+    try:
+        rows = db.execute_sql(
+            f"""
+            SELECT body_text FROM emails
+            WHERE labels LIKE '%SENT%' AND recipients LIKE ?{account_clause}
+              AND body_text IS NOT NULL AND body_text != ''
+            ORDER BY date_ts DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    except Exception:
+        return []
+    return [r["body_text"] for r in rows if r["body_text"]]
+
+
 def get_thread_emails(
     db: Database, thread_id: str, account: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -1797,7 +1873,15 @@ def upsert_loop(
                  subject, last_sent_ts, last_activity_ts, due_ts, created_at, updated_at)
             VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account, thread_id, side) DO UPDATE SET
-                state           = 'open',
+                -- Only reopen a *closed* loop (a reply arrived, then the user
+                -- sent a new outbound message -- a fresh commitment cycle).
+                -- An active Loop Radar state ('nudge_drafted' / 'nudged' /
+                -- 'escalated') must NOT be reset back to 'open' here: our own
+                -- nudge is itself a new outbound message, so this same
+                -- detector will see it as "newest message is outbound" on the
+                -- very next sweep and would otherwise silently erase the
+                -- Radar's tracking every cycle.
+                state           = CASE WHEN state = 'closed' THEN 'open' ELSE state END,
                 contact_email   = excluded.contact_email,
                 contact_name    = excluded.contact_name,
                 subject         = excluded.subject,
@@ -1824,12 +1908,17 @@ def get_open_loops(
     side: Optional[str] = 'waiting_on',
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
-    """Return open loops, stalest first (oldest last_activity_ts).
+    """Return active (not closed/snoozed) loops, stalest first.
 
-    When *account*/*side* are given they filter the result; pass side=None to
-    return every side. Ordered so the loops most likely to slip surface first.
+    "Active" deliberately includes every Loop Radar state ('open',
+    'nudge_drafted', 'nudged', 'escalated') so a loop stays visible — and
+    stays in detect_waiting_on_loops' close-detection scan — for its whole
+    lifecycle, not just while untouched. Only 'closed' and 'snoozed' are
+    excluded. When *account*/*side* are given they filter the result; pass
+    side=None to return every side. Ordered so the loops most likely to slip
+    surface first.
     """
-    clauses = ["state = 'open'"]
+    clauses = ["state NOT IN ('closed', 'snoozed')"]
     params: List[Any] = []
     if side:
         clauses.append("side = ?")
@@ -1844,6 +1933,55 @@ def get_open_loops(
         tuple(params),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def mark_loop_nudged_from_draft(db: Database, draft_id: int) -> bool:
+    """If *draft_id* is linked to an open loop (loops.draft_id), record that
+    the nudge was sent: state='nudged', nudge_count+=1, last_nudge_ts=now.
+
+    No-op (returns False) if no loop references this draft -- most drafts are
+    plain replies/compose messages with no loop involved at all, so this is
+    safe to call unconditionally from the send path.
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            UPDATE loops
+            SET state = 'nudged', nudge_count = nudge_count + 1,
+                last_nudge_ts = ?, updated_at = ?
+            WHERE draft_id = ? AND state != 'closed'
+            """,
+            (now, now, draft_id),
+        )
+        return cur.rowcount > 0
+
+
+def link_loop_draft(db: Database, loop_id: int, draft_id: int, state: str) -> bool:
+    """Attach a freshly-created nudge draft to its loop and set the loop's
+    state (typically 'nudge_drafted' pending human approval, or left for the
+    caller to advance to 'nudged' after an autonomous send).
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE loops SET draft_id = ?, state = ?, updated_at = ? WHERE id = ?",
+            (draft_id, state, now, loop_id),
+        )
+        return cur.rowcount > 0
+
+
+def escalate_loop(db: Database, loop_id: int) -> bool:
+    """Mark a loop 'escalated' -- Loop Radar has nudged it the maximum number
+    of times with no reply; further automated nudging stops and the user
+    needs to intervene by hand."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE loops SET state = 'escalated', updated_at = ? WHERE id = ? AND state != 'closed'",
+            (now, loop_id),
+        )
+        return cur.rowcount > 0
 
 
 def close_loop(db: Database, loop_id: int) -> bool:
