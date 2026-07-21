@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends
 from mailmind.api.auth import require_auth
 from mailmind.api.deps import get_db, get_llm_client
 from mailmind.processing.queue_manager import QueueManager, filter_now_items
-from mailmind.storage.queries import build_digest, get_gmail_labels, get_pending_queue_enriched
+from mailmind.storage.queries import (
+    build_digest,
+    get_executed_queue_enriched,
+    get_gmail_labels,
+    get_open_loops,
+    get_pending_queue_enriched,
+)
 from mailmind.taxonomy import ALL_LABELS
 
 router = APIRouter(prefix="/api/now", tags=["now"], dependencies=[Depends(require_auth)])
@@ -38,13 +44,46 @@ def _kpis(account: Optional[str]) -> list[dict]:
 
 @router.get("")
 def get_now(account: Optional[str] = None) -> dict:
+    """The reframed NOW payload: three lanes of open loops.
+
+    - ``you_owe``    — pending queue items needing a reply/decision from the
+      user (derived on read from the action queue via ``filter_now_items``).
+    - ``waiting_on`` — durable loops where someone owes the user a reply
+      (populated by the watch-loop detector; see intelligence/loops.py). Each is
+      annotated with ``waiting_days`` and a ``slipping`` flag (past its due_ts).
+    - ``handled``    — recently executed/auto-labeled items (what MailMind did),
+      shown collapsed.
+
+    ``items`` is kept as an alias of ``you_owe`` for backward compatibility.
+    """
     db = get_db()
     all_items = get_pending_queue_enriched(db, limit=200, account=account)
-    now_items = filter_now_items(all_items, queue_threshold=QueueManager.QUEUE_THRESHOLD)
+    you_owe = filter_now_items(all_items, queue_threshold=QueueManager.QUEUE_THRESHOLD)
+
+    now = int(datetime.now().timestamp())
+    waiting_on = get_open_loops(db, account=account, side="waiting_on", limit=100)
+    slipping = 0
+    for lp in waiting_on:
+        last = lp.get("last_activity_ts") or lp.get("last_sent_ts")
+        lp["waiting_days"] = int((now - last) / 86400) if last else None
+        due = lp.get("due_ts")
+        lp["slipping"] = bool(due and due <= now)
+        if lp["slipping"]:
+            slipping += 1
+
+    handled = get_executed_queue_enriched(db, limit=25, account=account)
     gmail_labels = get_gmail_labels(db, account=account) or list(ALL_LABELS)
     return {
         "kpis": _kpis(account),
-        "items": now_items,
+        "items": you_owe,  # backward-compat alias
+        "you_owe": you_owe,
+        "waiting_on": waiting_on,
+        "handled": handled,
+        "counts": {
+            "you_owe": len(you_owe),
+            "waiting_on": len(waiting_on),
+            "slipping": slipping,
+        },
         "gmail_labels": gmail_labels,
     }
 

@@ -1751,3 +1751,98 @@ def unsnooze_queue_item(db: Database, queue_id: int) -> bool:
             (queue_id,),
         )
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Open Loops (client-strategy reframe). See migration 0032_create_loops and
+# intelligence/loops.py. V1 only writes the 'waiting_on' side.
+# ---------------------------------------------------------------------------
+
+
+def upsert_loop(
+    db: Database,
+    *,
+    account: Optional[str],
+    thread_id: str,
+    side: str = 'waiting_on',
+    contact_email: Optional[str] = None,
+    contact_name: Optional[str] = None,
+    subject: Optional[str] = None,
+    last_sent_ts: Optional[int] = None,
+    last_activity_ts: Optional[int] = None,
+    due_ts: Optional[int] = None,
+) -> int:
+    """Insert or refresh an open loop for (account, thread_id, side).
+
+    Idempotent via the UNIQUE(account, thread_id, side) constraint: a repeated
+    detection updates the timestamps/contact/subject and (re)opens the loop.
+    Returns the loop's row id. Preserves created_at, nudge_count, last_nudge_ts
+    and draft_id (reserved for the follow-up feature) on update.
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO loops
+                (account, thread_id, side, state, contact_email, contact_name,
+                 subject, last_sent_ts, last_activity_ts, due_ts, created_at, updated_at)
+            VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account, thread_id, side) DO UPDATE SET
+                state           = 'open',
+                contact_email   = excluded.contact_email,
+                contact_name    = excluded.contact_name,
+                subject         = excluded.subject,
+                last_sent_ts    = excluded.last_sent_ts,
+                last_activity_ts= excluded.last_activity_ts,
+                due_ts          = excluded.due_ts,
+                updated_at      = excluded.updated_at
+            """,
+            (
+                account, thread_id, side, contact_email, contact_name, subject,
+                last_sent_ts, last_activity_ts, due_ts, now, now,
+            ),
+        )
+        row = cur.execute(
+            "SELECT id FROM loops WHERE account IS ? AND thread_id = ? AND side = ?",
+            (account, thread_id, side),
+        ).fetchone()
+        return int(row[0]) if row else int(cur.lastrowid)
+
+
+def get_open_loops(
+    db: Database,
+    account: Optional[str] = None,
+    side: Optional[str] = 'waiting_on',
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Return open loops, stalest first (oldest last_activity_ts).
+
+    When *account*/*side* are given they filter the result; pass side=None to
+    return every side. Ordered so the loops most likely to slip surface first.
+    """
+    clauses = ["state = 'open'"]
+    params: List[Any] = []
+    if side:
+        clauses.append("side = ?")
+        params.append(side)
+    if account:
+        clauses.append("account = ?")
+        params.append(account)
+    params.append(limit)
+    rows = db.execute_sql(
+        f"SELECT * FROM loops WHERE {' AND '.join(clauses)}"
+        " ORDER BY (last_activity_ts IS NULL), last_activity_ts ASC LIMIT ?",
+        tuple(params),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def close_loop(db: Database, loop_id: int) -> bool:
+    """Mark a loop 'closed' (e.g. a reply arrived). Returns True if it changed."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE loops SET state = 'closed', updated_at = ? WHERE id = ? AND state != 'closed'",
+            (now, loop_id),
+        )
+        return cur.rowcount > 0
