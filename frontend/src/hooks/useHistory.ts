@@ -23,3 +23,20 @@ export function useCorrections() {
     queryFn: () => api.get<Correction[]>('/api/history/corrections', { limit: 50 }),
   })
 }
+
+export interface AuditLogEntry {
+  kind: 'label' | 'sent' | 'calendar'
+  ref_id: number
+  when_ts: number
+  summary: string | null
+  detail: string | null
+  account: string | null
+  was_auto: number
+}
+
+export function useAuditLog(account: string | null, days: number) {
+  return useQuery({
+    queryKey: ['history-audit', account, days],
+    queryFn: () => api.get<{ items: AuditLogEntry[] }>('/api/history/audit', { account, days, limit: 100 }),
+  })
+}

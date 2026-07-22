@@ -9,9 +9,10 @@ import { Button } from '../components/ui/Button'
 import { Avatar } from '../components/ui/Avatar'
 import { MessageCard } from '../components/mail/MessageCard'
 import { useAccount } from '../hooks/useAccount'
-import { useApproveQueueItem, useDailyBrief, useNow, useRejectQueueItem } from '../hooks/useQueue'
+import { useApproveQueueItem, useDailyBrief, useNow, useRejectQueueItem, useWeeklySimulation } from '../hooks/useQueue'
+import { useApproveCalendarHold, useDiscardCalendarHold } from '../hooks/useCalendarHolds'
 import { useCompose } from '../hooks/useCompose'
-import { truncate, timeAgo, extractDisplayName } from '../lib/format'
+import { truncate, timeAgo, extractDisplayName, formatTs } from '../lib/format'
 import { ApiError } from '../lib/api'
 import type { Loop, QueueItem } from '../lib/types'
 
@@ -19,10 +20,13 @@ export function NowPage() {
   const [account] = useAccount()
   const { data, isLoading } = useNow(account)
   const brief = useDailyBrief(account)
+  const simulation = useWeeklySimulation(account)
   const { openCompose } = useCompose()
 
   const approve = useApproveQueueItem(account)
   const reject = useRejectQueueItem()
+  const approveCalendarHold = useApproveCalendarHold(account)
+  const discardCalendarHold = useDiscardCalendarHold()
 
   const youOwe = data?.you_owe ?? data?.items ?? []
   const waitingOn = data?.waiting_on ?? []
@@ -53,7 +57,30 @@ export function NowPage() {
   function doReply(item: QueueItem) {
     openCompose({ mode: 'reply', gmailId: item.email_gmail_id })
   }
+  async function doApproveCalendarHold(holdId: number) {
+    try {
+      await approveCalendarHold.mutateAsync(holdId)
+      toast.success('Added to your calendar')
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Failed to create the event')
+    }
+  }
+  async function doDiscardCalendarHold(holdId: number) {
+    try {
+      await discardCalendarHold.mutateAsync(holdId)
+      toast('Calendar hold discarded')
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Failed to discard')
+    }
+  }
   function doNudge(loop: Loop) {
+    if (loop.state === 'nudge_drafted' && loop.draft_id) {
+      // Loop Radar already drafted a nudge for this contact and it's
+      // awaiting human review — open that exact draft (Approve → Send),
+      // never create a second one alongside it.
+      openCompose({ mode: 'new', draftId: loop.draft_id })
+      return
+    }
     // A waiting-on loop has no inbound message to "reply" to, so open a fresh
     // message prefilled with the contact + Re: subject as a follow-up nudge.
     openCompose({
@@ -154,6 +181,34 @@ export function NowPage() {
           </details>
         )}
 
+        {!!simulation.data?.items.length && (
+          <details className="mb-5 rounded-xl border border-border bg-surface px-4 py-3">
+            <summary className="cursor-pointer text-[13px] font-semibold text-text-muted">
+              📉 What breaks this week ({simulation.data.items.length})
+            </summary>
+            <div className="mt-2 flex flex-col divide-y divide-border">
+              {simulation.data.items.map((s) => (
+                <div key={`${s.kind}-${s.ref_id}`} className="flex items-center gap-2 py-2 text-[12px]">
+                  {s.vip && <VipBadge />}
+                  <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-text-faint">
+                    {s.kind === 'you_owe' ? 'you owe' : 'waiting on'}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-text">{s.subject || '(no subject)'}</span>
+                  <span className="shrink-0 text-text-faint">{s.contact}</span>
+                  <span className="shrink-0 font-semibold text-text-muted">
+                    {s.breaks_in_days <= 0 ? 'today' : `in ${s.breaks_in_days}d`}
+                    {s.is_estimated && ' (est.)'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-text-faint">
+              A 7-day forward projection, not a real deadline for every row — items marked "(est.)"
+              have no detected deadline and are projected from how long they've been pending.
+            </p>
+          </details>
+        )}
+
         {allClear ? (
           <EmptyState icon="✅" title="All loops closed" subtitle="Nothing you owe, nobody kept waiting. Enjoy it." />
         ) : (
@@ -176,6 +231,8 @@ export function NowPage() {
                       onApprove={(label) => doApprove(item, label)}
                       onReject={() => doReject(item)}
                       onReply={() => doReply(item)}
+                      onApproveCalendarHold={doApproveCalendarHold}
+                      onDiscardCalendarHold={doDiscardCalendarHold}
                       busy={approve.isPending || reject.isPending}
                     />
                   ))}
@@ -226,6 +283,17 @@ export function NowPage() {
   )
 }
 
+function VipBadge() {
+  return (
+    <span
+      className="shrink-0 rounded-full border border-accent/40 bg-accent-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-accent"
+      title="Ranked highly by the relationship graph — trust, approval rate, and how fast they reply (see Insights)"
+    >
+      VIP
+    </span>
+  )
+}
+
 function LaneHeader({ icon, title, count, hint }: { icon: string; title: string; count: number; hint: string }) {
   return (
     <div className="mb-2.5 flex items-baseline gap-2">
@@ -250,6 +318,8 @@ function YouOweCard({
   onApprove,
   onReject,
   onReply,
+  onApproveCalendarHold,
+  onDiscardCalendarHold,
   busy,
 }: {
   item: QueueItem
@@ -260,6 +330,8 @@ function YouOweCard({
   onApprove: (correctedLabel?: string) => void
   onReject: () => void
   onReply: () => void
+  onApproveCalendarHold: (holdId: number) => void
+  onDiscardCalendarHold: (holdId: number) => void
   busy: boolean
 }) {
   const [chosenLabel, setChosenLabel] = useState(item.primary_label || labels[0] || '')
@@ -283,9 +355,33 @@ function YouOweCard({
         threadSummary={reason.thread_summary}
         footer={
           <div className="mt-2.5 flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {item.vip && <VipBadge />}
             {reason.deadlines?.[0] && (
               <span className="rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
                 ⏰ {reason.deadlines[0]}
+              </span>
+            )}
+            {item.calendar_hold?.status === 'created' && (
+              <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-text-muted">
+                📅 Scheduled {formatTs(item.calendar_hold.start_ts)}
+              </span>
+            )}
+            {(item.calendar_hold?.status === 'proposed' || item.calendar_hold?.status === 'create_failed') && (
+              <span className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-text-muted">
+                📅 {formatTs(item.calendar_hold.start_ts)}
+                <button
+                  className="text-accent hover:underline"
+                  onClick={() => onApproveCalendarHold(item.calendar_hold!.id)}
+                >
+                  Add
+                </button>
+                ·
+                <button
+                  className="text-text-faint hover:underline"
+                  onClick={() => onDiscardCalendarHold(item.calendar_hold!.id)}
+                >
+                  Discard
+                </button>
               </span>
             )}
             {!!reason.action_items?.length && (
@@ -340,17 +436,43 @@ function YouOweCard({
 function WaitingCard({ loop, onNudge }: { loop: Loop; onNudge: () => void }) {
   const name = loop.contact_name || loop.contact_email || 'someone'
   const days = loop.waiting_days ?? 0
+  const state = loop.state || 'open'
+
+  let stateBadge: React.ReactNode = null
+  if (state === 'escalated') {
+    stateBadge = (
+      <span className="shrink-0 rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
+        🚨 no reply after {loop.nudge_count} nudge{loop.nudge_count === 1 ? '' : 's'}
+      </span>
+    )
+  } else if (state === 'nudge_drafted') {
+    stateBadge = (
+      <span className="shrink-0 rounded-full border border-accent/40 bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent">
+        ✨ nudge drafted — review to send
+      </span>
+    )
+  } else if (state === 'nudged') {
+    stateBadge = (
+      <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-text-muted">
+        nudged {loop.nudge_count}×{loop.last_nudge_ts ? ` · ${timeAgo(loop.last_nudge_ts)}` : ''}
+      </span>
+    )
+  } else if (loop.slipping) {
+    stateBadge = (
+      <span className="shrink-0 rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
+        about to slip
+      </span>
+    )
+  }
+
   return (
     <div className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
       <Avatar sender={loop.contact_name || loop.contact_email} size={32} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
+          {loop.vip && <VipBadge />}
           <span className="truncate text-[13px] font-semibold text-text">{name}</span>
-          {loop.slipping && (
-            <span className="shrink-0 rounded-full border border-danger/40 bg-danger-soft px-2 py-0.5 text-[10px] font-bold text-danger">
-              about to slip
-            </span>
-          )}
+          {stateBadge}
         </div>
         <div className="truncate text-[12px] text-text-muted">{loop.subject || '(no subject)'}</div>
       </div>
@@ -359,7 +481,7 @@ function WaitingCard({ loop, onNudge }: { loop: Loop; onNudge: () => void }) {
         {loop.last_sent_ts ? <span className="hidden sm:inline">· sent {timeAgo(loop.last_sent_ts)}</span> : null}
       </div>
       <Button variant="ghost" size="sm" onClick={onNudge}>
-        <CornerUpLeft size={13} /> Nudge
+        <CornerUpLeft size={13} /> {state === 'nudge_drafted' ? 'Review' : 'Nudge'}
       </Button>
     </div>
   )

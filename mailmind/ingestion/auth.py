@@ -51,6 +51,19 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
+    # calendar.events (not the broader "calendar" scope) -- create/manage
+    # events only, no read/write access to calendar settings or other
+    # calendars. Used by actions/calendar.py for deadline -> calendar hold
+    # auto-scheduling (client-strategy reframe §4.4).
+    #
+    # NOTE: adding a scope here only affects a FRESH auth()/consent flow.
+    # Any token already stored (this deployment's included) keeps whatever
+    # scope it was originally granted under -- it does NOT retroactively
+    # gain calendar access. Every caller of the Calendar API must therefore
+    # tolerate an insufficient-scope failure the same way it tolerates any
+    # other Google API failure (fail-safe, never crash) until the user
+    # re-runs `mailmind auth` to re-consent.
+    "https://www.googleapis.com/auth/calendar.events",
 ]
 
 
@@ -291,5 +304,20 @@ def build_gmail_service(creds: Credentials):
     from googleapiclient.discovery import build
 
     service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+    return service
+
+
+def build_calendar_service(creds: Credentials):
+    """Return a googleapiclient discovery service for Calendar.
+
+    Caller should pass valid credentials (authenticate()). See SCOPES'
+    calendar.events comment: a token stored before this scope was added
+    will fail Calendar API calls with an insufficient-scope error until the
+    user re-runs `mailmind auth` -- callers must handle that failure
+    gracefully, exactly like every other Google API failure in this app.
+    """
+    from googleapiclient.discovery import build
+
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
     return service
 

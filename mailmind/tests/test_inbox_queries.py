@@ -11,7 +11,9 @@ import pytest
 
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email, Prediction
-from mailmind.storage.queries import get_all_emails, search_emails, get_thread_emails
+from mailmind.storage.queries import (
+    get_all_emails, search_emails, get_thread_emails, get_sent_replies_to_contact,
+)
 
 
 @pytest.fixture
@@ -189,3 +191,50 @@ class TestGetThreadEmails:
         row = get_thread_emails(db, "thread-a")[0]
         assert row["primary_label"] == "URGENT"
         assert row["confidence"] == 0.95
+
+
+def _seed_sent_email(db, gmail_id, recipients, body_text, date_ts, account=None):
+    db.insert_email(Email(
+        gmail_id=gmail_id, thread_id=gmail_id, sender="me@x.com", recipients=recipients,
+        subject="s", snippet="s", body_text=body_text, date_ts=date_ts,
+        labels=["SENT"], account=account,
+    ))
+
+
+class TestGetSentRepliesToContact:
+    def test_empty_when_no_history(self, db):
+        assert get_sent_replies_to_contact(db, "bob@y.com") == []
+
+    def test_no_contact_email_returns_empty(self, db):
+        assert get_sent_replies_to_contact(db, "") == []
+        assert get_sent_replies_to_contact(db, None) == []
+
+    def test_returns_bodies_most_recent_first(self, db):
+        _seed_sent_email(db, "m1", ["bob@y.com"], "First reply.", date_ts=100)
+        _seed_sent_email(db, "m2", ["bob@y.com"], "Second reply.", date_ts=200)
+        result = get_sent_replies_to_contact(db, "bob@y.com")
+        assert result == ["Second reply.", "First reply."]
+
+    def test_respects_limit(self, db):
+        for i in range(5):
+            _seed_sent_email(db, f"m{i}", ["bob@y.com"], f"Reply {i}", date_ts=i)
+        assert len(get_sent_replies_to_contact(db, "bob@y.com", limit=2)) == 2
+
+    def test_ignores_mail_to_other_contacts(self, db):
+        _seed_sent_email(db, "m1", ["carol@y.com"], "For Carol.", date_ts=100)
+        assert get_sent_replies_to_contact(db, "bob@y.com") == []
+
+    def test_ignores_inbound_mail_from_the_contact(self, db):
+        # Only the user's OWN outbound (SENT) mail counts as a voice exemplar.
+        _seed_email(db, "m1", "t1", "bob@y.com", "Hi", "s", 100, body_text="Bob's own words.")
+        assert get_sent_replies_to_contact(db, "bob@y.com") == []
+
+    def test_account_filter(self, db):
+        _seed_sent_email(db, "m1", ["bob@y.com"], "Acct1 reply.", date_ts=100, account="acct1")
+        _seed_sent_email(db, "m2", ["bob@y.com"], "Acct2 reply.", date_ts=200, account="acct2")
+        assert get_sent_replies_to_contact(db, "bob@y.com", account="acct1") == ["Acct1 reply."]
+
+    def test_skips_empty_bodies(self, db):
+        _seed_sent_email(db, "m1", ["bob@y.com"], None, date_ts=100)
+        _seed_sent_email(db, "m2", ["bob@y.com"], "Real reply.", date_ts=200)
+        assert get_sent_replies_to_contact(db, "bob@y.com") == ["Real reply."]

@@ -876,6 +876,147 @@ def _maybe_detect_loops(db: Database, interval_seconds: int = 900) -> None:
         LOG.warning("Loop detection sweep skipped: %s", exc)
 
 
+def _maybe_run_loop_radar(
+    db: Database, dry_run: bool = False, no_llm: bool = False, interval_seconds: int = 3600,
+) -> None:
+    """Loop Radar: draft (and, only for opted-in contacts, autonomously send)
+    follow-up nudges for stale 'waiting_on' loops, at most once per interval.
+
+    Drafting and eligibility gating happen inside
+    intelligence.loop_radar.run_loop_radar_sweep; this wrapper only resolves
+    the LLM client (mirrors _maybe_suggest_labels) and builds one per-account
+    Gmail service + ActionExecutor per cycle (mirrors
+    _maybe_send_scheduled_drafts), passed in as a callback so the sweep never
+    authenticates anything itself. An account with no valid stored
+    credentials has its executor resolve to None -- run_loop_radar_sweep
+    treats that as "queue for human review" rather than crashing. Tracked in
+    system_state; failures never take down the watch loop.
+    """
+    from mailmind.intelligence.loop_radar import run_loop_radar_sweep
+
+    try:
+        last = db.get_state("last_loop_radar_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+
+        llm_client = None
+        if not no_llm:
+            try:
+                config = MailMindConfig.from_env()
+                llm_client = _build_llm_client(config, no_llm=False)
+            except Exception as exc:
+                LOG.debug("Loop Radar: no LLM client (%s); nudging disabled this cycle.", exc)
+
+        executors: dict = {}
+
+        def _executor_for_account(account):
+            if account in executors:
+                return executors[account]
+            label = account or "primary"
+            try:
+                auth_account = _auth_account_for(account) if account else None
+                creds = load_stored_credentials(auth_account)
+                if creds is None:
+                    LOG.warning("Loop Radar: no valid stored credentials for mailbox %s.", label)
+                    executors[account] = None
+                else:
+                    service = build_gmail_service(creds)
+                    executors[account] = ActionExecutor(
+                        service=service, db=db,
+                        safety_policy=SafetyPolicy(dry_run=dry_run),
+                    )
+            except Exception as exc:
+                LOG.warning("Loop Radar: failed to build executor for mailbox %s: %s", label, exc)
+                executors[account] = None
+            return executors[account]
+
+        accounts = MailMindConfig.load_accounts() or [None]
+        totals = {"drafted": 0, "auto_sent": 0, "escalated": 0, "skipped": 0}
+        for acct in accounts:
+            try:
+                res = run_loop_radar_sweep(db, llm_client, _executor_for_account, account=acct, now_ts=now)
+                for k in totals:
+                    totals[k] += res.get(k, 0)
+            except Exception as exc:
+                LOG.warning("Loop Radar sweep failed for %s: %s", acct or "primary", exc)
+
+        db.set_state("last_loop_radar_ts", str(now))
+        LOG.info(
+            "Loop Radar sweep complete: %d drafted, %d auto-sent, %d escalated, %d skipped.",
+            totals["drafted"], totals["auto_sent"], totals["escalated"], totals["skipped"],
+        )
+    except Exception as exc:
+        LOG.warning("Loop Radar sweep skipped: %s", exc)
+
+
+def _maybe_propose_calendar_holds(
+    db: Database, dry_run: bool = False, interval_seconds: int = 3600,
+) -> None:
+    """Deadline -> calendar hold auto-scheduling (§4.4): propose (and, only
+    for opted-in senders, immediately create) calendar holds for detected
+    deadlines, at most once per interval.
+
+    Resolution and eligibility gating happen inside
+    intelligence.calendar_scheduler.run_calendar_propose_sweep; this wrapper
+    only builds one per-account Gmail-credentialed Calendar service per
+    cycle (mirrors _maybe_run_loop_radar's executor-building), passed in as
+    a callback so the sweep never authenticates anything itself. An account
+    with no valid stored credentials resolves to None -- the sweep treats
+    that as "leave it proposed for a human to create later" rather than
+    crashing. Tracked in system_state; failures never take down the watch
+    loop.
+    """
+    from mailmind.intelligence.calendar_scheduler import run_calendar_propose_sweep
+
+    try:
+        last = db.get_state("last_calendar_propose_ts")
+        now = int(time.time())
+        if last is not None and now - int(last) < interval_seconds:
+            return
+
+        clients: dict = {}
+
+        def _calendar_client_for_account(account):
+            if account in clients:
+                return clients[account]
+            label = account or "primary"
+            try:
+                auth_account = _auth_account_for(account) if account else None
+                creds = load_stored_credentials(auth_account)
+                if creds is None:
+                    LOG.warning("Calendar propose: no valid stored credentials for mailbox %s.", label)
+                    clients[account] = None
+                else:
+                    from mailmind.ingestion.auth import build_calendar_service
+                    from mailmind.actions.calendar import CalendarClient
+
+                    service = build_calendar_service(creds)
+                    clients[account] = CalendarClient(service, SafetyPolicy(dry_run=dry_run))
+            except Exception as exc:
+                LOG.warning("Calendar propose: failed to build client for mailbox %s: %s", label, exc)
+                clients[account] = None
+            return clients[account]
+
+        accounts = MailMindConfig.load_accounts() or [None]
+        totals = {"proposed": 0, "auto_created": 0, "create_failed": 0}
+        for acct in accounts:
+            try:
+                res = run_calendar_propose_sweep(db, _calendar_client_for_account, account=acct, now_ts=now)
+                for k in totals:
+                    totals[k] += res.get(k, 0)
+            except Exception as exc:
+                LOG.warning("Calendar propose sweep failed for %s: %s", acct or "primary", exc)
+
+        db.set_state("last_calendar_propose_ts", str(now))
+        LOG.info(
+            "Calendar propose sweep complete: %d proposed, %d auto-created, %d failed.",
+            totals["proposed"], totals["auto_created"], totals["create_failed"],
+        )
+    except Exception as exc:
+        LOG.warning("Calendar propose sweep skipped: %s", exc)
+
+
 def _maybe_send_scheduled_drafts(
     db: Database, dry_run: bool = False, interval_seconds: int = 60,
 ) -> None:
@@ -1070,6 +1211,8 @@ def run(
                 _maybe_detect_loops(db)
                 _maybe_unsnooze(db)
                 _maybe_send_scheduled_drafts(db, dry_run=dry_run)
+                _maybe_run_loop_radar(db, dry_run=dry_run, no_llm=no_llm)
+                _maybe_propose_calendar_holds(db, dry_run=dry_run)
                 _maybe_suggest_labels(db, no_llm=no_llm)
                 _record_heartbeat(db)
             except KeyboardInterrupt:

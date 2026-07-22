@@ -148,6 +148,33 @@ export function InsightsPage() {
           )}
         </Section>
 
+        <Section icon="🤝" title="Relationships">
+          {data.relationships.length === 0 ? (
+            <EmptyState icon="🤝" title="No ranked contacts yet" subtitle="Rankings build up as you approve, reject, and reply to senders." />
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {data.relationships.slice(0, 10).map((r) => (
+                <div key={r.sender_email} className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-[12px]">
+                  {r.vip && (
+                    <span className="shrink-0 rounded-full border border-accent/40 bg-accent-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-accent">
+                      VIP
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{r.display_name || r.sender_email}</span>
+                  {r.reciprocity_days !== null && (
+                    <span className="text-text-faint">replies in ~{r.reciprocity_days.toFixed(1)}d</span>
+                  )}
+                  <span className="w-10 text-right text-text-muted">{Math.round(r.rank_score)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-text-faint">
+            Learned from trust tier, approval rate, and how quickly each contact actually replies —
+            not a manually-curated VIP list. Feeds the VIP badge on Loops.
+          </p>
+        </Section>
+
         <Section icon="🎯" title="Classification quality by tier">
           {data.tier_quality.length === 0 ? (
             <EmptyState icon="🎯" title="No predictions in this window yet" />

@@ -42,20 +42,23 @@ graph TD
 | `mailmind/__init__.py` | MailMind package root. | — |
 | `mailmind/actions/__init__.py` | Actions layer for MailMind: safe Gmail action execution. | — |
 | `mailmind/actions/bulk.py` | Bulk label/archive over arbitrary browsed mail — shared by every UI surface | resolve_email_for_action(), synthetic_score(), run_bulk_action() |
+| `mailmind/actions/calendar.py` | Deadline -> calendar hold creation (client-strategy reframe §4.4). | CalendarClient |
 | `mailmind/actions/executor.py` | Safe Gmail action executor for MailMind. | ActionExecutor |
 | `mailmind/actions/safety.py` | Safety policy checks for MailMind action execution. | SafetyDecision, SafetyPolicy |
 | `mailmind/api/__init__.py` | MailMind REST API — FastAPI backend for the React frontend. | — |
 | `mailmind/api/auth.py` | Session auth for the API — ported byte-for-byte from the Streamlit | required_password(), make_auth_token(), valid_auth_token(), lockout_remaining(), record_auth_failure(), reset_auth_failures(), get_or_set_client_id(), is_authenticated(), … +5 more |
-| `mailmind/api/deps.py` | Shared FastAPI dependencies: DB singleton, per-account executor cache, LLM client. | get_db(), get_action_executor(), get_llm_client(), get_accounts() |
+| `mailmind/api/deps.py` | Shared FastAPI dependencies: DB singleton, per-account executor cache, LLM client. | get_db(), get_action_executor(), get_calendar_client(), get_llm_client(), get_accounts() |
 | `mailmind/api/main.py` | FastAPI app entry point. Run with: | healthz() |
-| `mailmind/api/routers/automate.py` |  | automate(), AutopilotBody, set_autopilot(), LabelPriorityBody, set_label_priority(), NlRuleBody, create_rule_from_nl(), decide_label_suggestion() |
+| `mailmind/api/routers/automate.py` |  | automate(), AutopilotBody, set_autopilot(), set_auto_nudge(), set_auto_calendar(), LabelPriorityBody, set_label_priority(), NlRuleBody, … +2 more |
+| `mailmind/api/routers/calendar_holds.py` |  | ApproveCalendarHoldBody, list_calendar_holds(), approve_calendar_hold(), discard_calendar_hold() |
 | `mailmind/api/routers/drafts.py` | Reply/compose drafts — a deliberate three-step gate: Save Draft, Approve, | CreateDraftBody, create(), read(), reply_defaults(), AiDraftPreviewBody, ai_draft_preview(), approve(), discard(), … +2 more |
 | `mailmind/api/routers/folders.py` |  | list_folders(), folder_emails() |
-| `mailmind/api/routers/history.py` |  | executed(), corrections() |
+| `mailmind/api/routers/history.py` |  | executed(), corrections(), audit() |
 | `mailmind/api/routers/inbox.py` |  | list_inbox(), thread(), BulkActionBody, bulk_action(), labels() |
 | `mailmind/api/routers/insights.py` |  | insights() |
 | `mailmind/api/routers/meta.py` |  | get_meta() |
-| `mailmind/api/routers/now.py` |  | get_now(), get_daily_brief() |
+| `mailmind/api/routers/now.py` |  | get_now(), get_weekly_simulation(), get_daily_brief() |
+| `mailmind/api/routers/projects.py` |  | list_projects(), read_project(), PromoteThreadBody, promote_thread(), close() |
 | `mailmind/api/routers/queue.py` | Actions on action_queue rows — shared by the NOW and REVIEW pages, which | ApproveBody, RejectBody, LabelBody, CorrectBody, approve(), reject(), label(), correct() |
 | `mailmind/api/routers/review.py` |  | new_senders(), know_sender(), mute_sender(), block_sender(), recent_predictions(), pending() |
 | `mailmind/api/routers/search.py` |  | search() |
@@ -63,21 +66,27 @@ graph TD
 | `mailmind/compose/composer.py` | MIME composer for MailMind (Phase 3B). | reply_subject(), build_reply_mime(), build_new_message_mime(), quote_original_body() |
 | `mailmind/config.py` | Configuration management for MailMind Pass 7+. | load_env_file(), MailMindConfig |
 | `mailmind/ingestion/__init__.py` | Ingestion package: Gmail auth, fetching, and parsing. | — |
-| `mailmind/ingestion/auth.py` | Gmail OAuth2 authentication helpers for MailMind. | load_stored_credentials(), authenticate(), build_gmail_service() |
+| `mailmind/ingestion/auth.py` | Gmail OAuth2 authentication helpers for MailMind. | load_stored_credentials(), authenticate(), build_gmail_service(), build_calendar_service() |
 | `mailmind/ingestion/fetcher.py` | Gmail fetcher wrapper for MailMind. | GmailFetcher |
 | `mailmind/ingestion/gmail_label_colors.py` | Map a label name to a Gmail-allowed colour, deterministically. | gmail_color_for() |
 | `mailmind/ingestion/parser.py` | Parser converting Gmail API message payloads into MailMind Email models. | parse_message(), GmailMessageParser |
 | `mailmind/intelligence/brief.py` | MailMind — daily brief generation from top-priority items. | build_daily_brief() |
+| `mailmind/intelligence/calendar_scheduler.py` | MailMind — deadline -> calendar hold auto-scheduling (client-strategy | propose_holds_for_email(), run_calendar_propose_sweep() |
 | `mailmind/intelligence/channels.py` | MailMind — email channel detection. | detect_channel(), enrich_prediction_with_channel() |
+| `mailmind/intelligence/deadline_parser.py` | MailMind — best-effort deadline-string → timestamp parser. | parse_deadline_string() |
 | `mailmind/intelligence/draft_reply.py` | AI-drafted reply generation for MailMind's compose UI (Phase 4). | draft_reply() |
 | `mailmind/intelligence/explainer.py` |  | ReasonPayload, build_reason_payload() |
 | `mailmind/intelligence/feedback.py` |  | handle_approve(), handle_reject(), handle_correction(), handle_know_sender(), handle_mute_sender(), handle_block_sender(), handle_label_email(), handle_approve_and_send() |
 | `mailmind/intelligence/label_discovery.py` | Periodic label discovery. | suggest_labels() |
 | `mailmind/intelligence/labels.py` | Decide which Gmail labels count as user 'ground truth' for learning. | truth_label_policy(), is_truth_label(), resolve_truth_labels() |
-| `mailmind/intelligence/loops.py` | MailMind — open-loop detection. | compute_thread_states(), detect_waiting_on_loops() |
+| `mailmind/intelligence/loop_radar.py` | MailMind — Loop Radar: the autonomous follow-up closer. | draft_nudge(), run_loop_radar_sweep() |
+| `mailmind/intelligence/loops.py` | MailMind — open-loop detection. | split_addr(), compute_thread_states(), detect_waiting_on_loops() |
 | `mailmind/intelligence/nl_rules.py` | Parse natural language sentences into sender->label rules. | parse_rule_nl() |
 | `mailmind/intelligence/patterns.py` | Canonical detection patterns shared across features, rules, and channel detection. | — |
+| `mailmind/intelligence/projects.py` | MailMind — thread -> project conversion (client-strategy reframe §4.5). | promote_thread_to_project() |
+| `mailmind/intelligence/relationships.py` | MailMind — relationship graph / contact ranking (client-strategy reframe §4.3). | score_contact(), compute_contact_rank(), get_contact_rank_map() |
 | `mailmind/intelligence/sender_memory.py` |  | SenderProfileSummary, get_sender_profile(), get_sender_trust_tier(), update_from_outcome(), get_similar_sender_history() |
+| `mailmind/intelligence/simulation.py` | MailMind — inbox simulation: "what breaks if I ignore this week?" | simulate_week(), compute_weekly_simulation() |
 | `mailmind/intelligence/thread_analyzer.py` | MailMind — thread and reply-needed intelligence. | ThreadContext, ThreadAnalyzer |
 | `mailmind/llm/__init__.py` | LLM module for MailMind Pass 7+. | — |
 | `mailmind/llm/base.py` | Base protocol and result types for LLM classifiers. | LLMResult, LLMClassifier |
@@ -103,7 +112,7 @@ graph TD
 | `mailmind/storage/database.py` | Database abstraction for MailMind using SQLite. | Database, open_database_from_config_path() |
 | `mailmind/storage/migrations.py` | Migration definitions and application helpers for MailMind SQLite schema. | apply_migrations() |
 | `mailmind/storage/models.py` | Data models for MailMind storage layer. | now_ts(), Email, Prediction, ActionApplied, Feedback, SenderReputation, SystemState, Draft, … +2 more |
-| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), … +52 more |
+| `mailmind/storage/queries.py` | Query helpers for the review dashboard. | get_recent_predictions(), get_predictions_for_email(), get_recent_actions(), get_sender_reputations(), get_summary_metrics(), get_queue_item_by_fingerprint(), upsert_queue_item(), supersede_old_queue_items(), … +71 more |
 | `mailmind/taxonomy.py` | Canonical email-label taxonomy — the single source of truth for MailMind. | base_score(), is_known() |
 | `mailmind/utils/fingerprint.py` |  | make_action_fingerprint() |
 <!-- AUTO:END:module_map -->
@@ -234,6 +243,6 @@ None found.
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 8 complete. 657 tests passing.
+Pass 8 complete. 792 tests passing.
 Next: Pass 9 — TBD
 <!-- AUTO:END:current_pass_notes -->

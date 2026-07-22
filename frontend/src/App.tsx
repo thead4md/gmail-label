@@ -15,6 +15,7 @@ import { FoldersPage } from './pages/FoldersPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { InsightsPage } from './pages/InsightsPage'
 import { AutomatePage } from './pages/AutomatePage'
+import { ProjectsPage } from './pages/ProjectsPage'
 
 function Shell() {
   const { openCompose } = useCompose()
@@ -31,6 +32,7 @@ function Shell() {
           <Route path="/folders" element={<FoldersPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/insights" element={<InsightsPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/automate" element={<AutomatePage />} />
           <Route path="*" element={<Navigate to="/now" replace />} />
         </Routes>

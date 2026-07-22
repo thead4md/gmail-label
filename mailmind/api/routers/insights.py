@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 
 from mailmind.api.auth import require_auth
 from mailmind.api.deps import get_db
+from mailmind.intelligence.relationships import compute_contact_rank
 from mailmind.storage.queries import (
     analytics_autopilot_precision,
     analytics_channel_distribution,
@@ -50,6 +51,11 @@ def insights(account: Optional[str] = None, days: int = 30) -> dict:
         autopilot = {"auto_executed": 0, "later_corrected": 0, "precision": None}
 
     try:
+        relationships = compute_contact_rank(db, account=account, limit=25)
+    except Exception:
+        relationships = []
+
+    try:
         cost_raw = analytics_llm_cost(db, since) or {}
         by_kind = [
             {"model": str(r.get("model") or ""), "kind": str(r.get("kind") or ""),
@@ -75,4 +81,5 @@ def insights(account: Optional[str] = None, days: int = 30) -> dict:
         "tier_quality": tiers,
         "autopilot_precision": autopilot,
         "llm_cost": llm_cost,
+        "relationships": relationships,
     }
