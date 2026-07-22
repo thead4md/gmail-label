@@ -1,4 +1,5 @@
-import { Reply } from 'lucide-react'
+import { Reply, FolderKanban } from 'lucide-react'
+import { toast } from 'sonner'
 import type { EmailListItem } from '../../lib/types'
 import { extractDisplayName, formatTs, timeAgo } from '../../lib/format'
 import { Avatar } from '../ui/Avatar'
@@ -9,10 +10,23 @@ import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { useThread } from '../../hooks/useMail'
 import { useCompose } from '../../hooks/useCompose'
+import { usePromoteThreadToProject } from '../../hooks/useProjects'
+import { ApiError } from '../../lib/api'
 
 export function ReadingPane({ item, account }: { item: EmailListItem | null; account: string | null }) {
   const thread = useThread(account, item?.thread_id)
   const { openCompose } = useCompose()
+  const promote = usePromoteThreadToProject(account)
+
+  async function onPromote() {
+    if (!item?.thread_id) return
+    try {
+      const project = await promote.mutateAsync(item.thread_id)
+      toast.success(`Promoted to project: ${project.title || 'Untitled'}`)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Failed to promote thread')
+    }
+  }
 
   if (!item) {
     return (
@@ -49,14 +63,21 @@ export function ReadingPane({ item, account }: { item: EmailListItem | null; acc
           </div>
         ))}
 
-        <Button
-          variant="default"
-          onClick={() =>
-            openCompose({ mode: 'reply', gmailId: item.gmail_id, threadId: item.thread_id, toAddrs: item.sender ?? undefined, subject: item.subject ?? undefined })
-          }
-        >
-          <Reply size={14} /> Reply
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="default"
+            onClick={() =>
+              openCompose({ mode: 'reply', gmailId: item.gmail_id, threadId: item.thread_id, toAddrs: item.sender ?? undefined, subject: item.subject ?? undefined })
+            }
+          >
+            <Reply size={14} /> Reply
+          </Button>
+          {item.thread_id && (
+            <Button variant="ghost" onClick={onPromote} disabled={promote.isPending}>
+              <FolderKanban size={14} /> Promote to project
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )

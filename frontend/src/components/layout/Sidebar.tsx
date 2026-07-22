@@ -8,6 +8,7 @@ import {
   Search,
   FolderOpen,
   BarChart3,
+  FolderKanban,
   Settings,
   Moon,
   Sun,
@@ -25,6 +26,7 @@ const NAV = [
   { to: '/folders', label: 'Folders', icon: FolderOpen },
   { to: '/history', label: 'History', icon: History },
   { to: '/insights', label: 'Insights', icon: BarChart3 },
+  { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/automate', label: 'Automate', icon: Settings },
 ]
 

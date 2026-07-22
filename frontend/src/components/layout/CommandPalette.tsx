@@ -9,6 +9,7 @@ import {
   Search,
   FolderOpen,
   BarChart3,
+  FolderKanban,
   Settings,
   PenSquare,
   Keyboard,
@@ -22,6 +23,7 @@ const PAGES = [
   { to: '/folders', label: 'Go to Folders', icon: FolderOpen },
   { to: '/history', label: 'Go to History', icon: History },
   { to: '/insights', label: 'Go to Insights', icon: BarChart3 },
+  { to: '/projects', label: 'Go to Projects', icon: FolderKanban },
   { to: '/automate', label: 'Go to Automate', icon: Settings },
 ]
 

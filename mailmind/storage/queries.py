@@ -644,6 +644,8 @@ def get_sender_profiles(db: Database, coverage: float = 0.75) -> List[Dict[str, 
             sp.last_action_ts,
             COALESCE(sp.trust_tier, 'neutral')   AS trust_tier,
             COALESCE(sp.auto_action_eligible, 0) AS auto_action_eligible,
+            COALESCE(sp.auto_nudge_eligible, 0) AS auto_nudge_eligible,
+            COALESCE(sp.auto_calendar_eligible, 0) AS auto_calendar_eligible,
             r.email_count
         FROM ranked r
         LEFT JOIN sender_profiles sp ON sp.sender_email = r.sender
@@ -664,8 +666,10 @@ def get_sender_profiles(db: Database, coverage: float = 0.75) -> List[Dict[str, 
             'total_rejected':       r['total_rejected'] or 0,
             'approval_rate':        approval_rate,
             'trust_tier':           r['trust_tier'] or 'neutral',
-            'auto_action_eligible': bool(r['auto_action_eligible']),
-            'email_count':          r['email_count'] or 0,
+            'auto_action_eligible':   bool(r['auto_action_eligible']),
+            'auto_nudge_eligible':    bool(r['auto_nudge_eligible']),
+            'auto_calendar_eligible': bool(r['auto_calendar_eligible']),
+            'email_count':            r['email_count'] or 0,
         })
 
     return result
@@ -700,6 +704,44 @@ def is_sender_auto_action_eligible(db: Database, sender_email: Optional[str]) ->
     if row is None:
         return False
     return bool(row["auto_action_eligible"])
+
+
+def toggle_sender_auto_nudge(db: Database, sender_email: str, enabled: bool) -> None:
+    """Toggle auto-nudge eligibility for a sender, creating the row if absent.
+
+    Deliberately separate from toggle_sender_auto_action: granting label
+    autopilot for a sender must never silently grant autonomous follow-up
+    sending too.
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO sender_profiles (sender_email, last_action_ts) VALUES (?, ?)",
+            (sender_email, now),
+        )
+        cur.execute(
+            "UPDATE sender_profiles SET auto_nudge_eligible = ? WHERE sender_email = ?",
+            (int(bool(enabled)), sender_email),
+        )
+
+
+def is_sender_auto_nudge_eligible(db: Database, sender_email: Optional[str]) -> bool:
+    """Return True iff the sender has been explicitly granted auto-nudge.
+
+    The default for any sender (no profile or auto_nudge_eligible=0) is
+    False -- earned, opt-in per sender, same philosophy as
+    is_sender_auto_action_eligible but for a materially more consequential
+    action (sending new outbound content) and tracked by its own flag.
+    """
+    if not sender_email:
+        return False
+    row = db.execute_sql(
+        "SELECT auto_nudge_eligible FROM sender_profiles WHERE sender_email = ?",
+        (sender_email,),
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row["auto_nudge_eligible"])
 
 
 def get_queue_stats(db: Database, account: Optional[str] = None) -> Dict[str, int]:
@@ -1583,6 +1625,42 @@ def search_emails(
     return [_row_to_email_list_dict(r) for r in rows]
 
 
+def get_sent_replies_to_contact(
+    db: Database, contact_email: str, account: Optional[str] = None, limit: int = 3,
+) -> List[str]:
+    """Return up to *limit* of the user's own past SENT message bodies to
+    *contact_email*, most recent first.
+
+    Used as few-shot style/voice exemplars for AI drafting (see
+    intelligence/draft_reply.py, intelligence/loop_radar.py) -- conditioning
+    a draft on how the user has actually written to THIS person before, not
+    a generic tone. Draws on the same locally-mirrored SENT mail the
+    'waiting_on' loop detector already reads (main._maybe_mirror_mailbox).
+    Best-effort: returns [] on no history; never raises.
+    """
+    if not contact_email:
+        return []
+    account_clause = " AND account = ?" if account else ""
+    params: List[Any] = [f"%{contact_email}%"]
+    if account:
+        params.append(account)
+    params.append(limit)
+    try:
+        rows = db.execute_sql(
+            f"""
+            SELECT body_text FROM emails
+            WHERE labels LIKE '%SENT%' AND recipients LIKE ?{account_clause}
+              AND body_text IS NOT NULL AND body_text != ''
+            ORDER BY date_ts DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    except Exception:
+        return []
+    return [r["body_text"] for r in rows if r["body_text"]]
+
+
 def get_thread_emails(
     db: Database, thread_id: str, account: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -1780,6 +1858,15 @@ def upsert_loop(
     and draft_id (reserved for the follow-up feature) on update.
     """
     now = int(time.time())
+    # SQLite's UNIQUE index treats every NULL as distinct from every other
+    # NULL, so a NULL account (the watch loop's fallback when no mailbox is
+    # configured at all — see main._maybe_detect_loops) would never satisfy
+    # ON CONFLICT: each sweep would INSERT a fresh duplicate row for the same
+    # thread instead of updating the existing one. Normalize to '' so the
+    # constraint actually dedupes; '' is falsy everywhere account is checked
+    # on read (get_open_loops, the account filter in intelligence/loops.py),
+    # so this is behaviorally a no-op for every other code path.
+    account_key = account if account is not None else ''
     with db.transaction() as cur:
         cur.execute(
             """
@@ -1788,7 +1875,15 @@ def upsert_loop(
                  subject, last_sent_ts, last_activity_ts, due_ts, created_at, updated_at)
             VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account, thread_id, side) DO UPDATE SET
-                state           = 'open',
+                -- Only reopen a *closed* loop (a reply arrived, then the user
+                -- sent a new outbound message -- a fresh commitment cycle).
+                -- An active Loop Radar state ('nudge_drafted' / 'nudged' /
+                -- 'escalated') must NOT be reset back to 'open' here: our own
+                -- nudge is itself a new outbound message, so this same
+                -- detector will see it as "newest message is outbound" on the
+                -- very next sweep and would otherwise silently erase the
+                -- Radar's tracking every cycle.
+                state           = CASE WHEN state = 'closed' THEN 'open' ELSE state END,
                 contact_email   = excluded.contact_email,
                 contact_name    = excluded.contact_name,
                 subject         = excluded.subject,
@@ -1798,13 +1893,13 @@ def upsert_loop(
                 updated_at      = excluded.updated_at
             """,
             (
-                account, thread_id, side, contact_email, contact_name, subject,
+                account_key, thread_id, side, contact_email, contact_name, subject,
                 last_sent_ts, last_activity_ts, due_ts, now, now,
             ),
         )
         row = cur.execute(
             "SELECT id FROM loops WHERE account IS ? AND thread_id = ? AND side = ?",
-            (account, thread_id, side),
+            (account_key, thread_id, side),
         ).fetchone()
         return int(row[0]) if row else int(cur.lastrowid)
 
@@ -1815,12 +1910,17 @@ def get_open_loops(
     side: Optional[str] = 'waiting_on',
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
-    """Return open loops, stalest first (oldest last_activity_ts).
+    """Return active (not closed/snoozed) loops, stalest first.
 
-    When *account*/*side* are given they filter the result; pass side=None to
-    return every side. Ordered so the loops most likely to slip surface first.
+    "Active" deliberately includes every Loop Radar state ('open',
+    'nudge_drafted', 'nudged', 'escalated') so a loop stays visible — and
+    stays in detect_waiting_on_loops' close-detection scan — for its whole
+    lifecycle, not just while untouched. Only 'closed' and 'snoozed' are
+    excluded. When *account*/*side* are given they filter the result; pass
+    side=None to return every side. Ordered so the loops most likely to slip
+    surface first.
     """
-    clauses = ["state = 'open'"]
+    clauses = ["state NOT IN ('closed', 'snoozed')"]
     params: List[Any] = []
     if side:
         clauses.append("side = ?")
@@ -1837,6 +1937,55 @@ def get_open_loops(
     return [dict(r) for r in rows]
 
 
+def mark_loop_nudged_from_draft(db: Database, draft_id: int) -> bool:
+    """If *draft_id* is linked to an open loop (loops.draft_id), record that
+    the nudge was sent: state='nudged', nudge_count+=1, last_nudge_ts=now.
+
+    No-op (returns False) if no loop references this draft -- most drafts are
+    plain replies/compose messages with no loop involved at all, so this is
+    safe to call unconditionally from the send path.
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            UPDATE loops
+            SET state = 'nudged', nudge_count = nudge_count + 1,
+                last_nudge_ts = ?, updated_at = ?
+            WHERE draft_id = ? AND state != 'closed'
+            """,
+            (now, now, draft_id),
+        )
+        return cur.rowcount > 0
+
+
+def link_loop_draft(db: Database, loop_id: int, draft_id: int, state: str) -> bool:
+    """Attach a freshly-created nudge draft to its loop and set the loop's
+    state (typically 'nudge_drafted' pending human approval, or left for the
+    caller to advance to 'nudged' after an autonomous send).
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE loops SET draft_id = ?, state = ?, updated_at = ? WHERE id = ?",
+            (draft_id, state, now, loop_id),
+        )
+        return cur.rowcount > 0
+
+
+def escalate_loop(db: Database, loop_id: int) -> bool:
+    """Mark a loop 'escalated' -- Loop Radar has nudged it the maximum number
+    of times with no reply; further automated nudging stops and the user
+    needs to intervene by hand."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE loops SET state = 'escalated', updated_at = ? WHERE id = ? AND state != 'closed'",
+            (now, loop_id),
+        )
+        return cur.rowcount > 0
+
+
 def close_loop(db: Database, loop_id: int) -> bool:
     """Mark a loop 'closed' (e.g. a reply arrived). Returns True if it changed."""
     now = int(time.time())
@@ -1846,3 +1995,331 @@ def close_loop(db: Database, loop_id: int) -> bool:
             (now, loop_id),
         )
         return cur.rowcount > 0
+
+
+def get_contact_reciprocity(db: Database, account: Optional[str] = None) -> Dict[str, float]:
+    """Return {contact_email: avg_days_to_close} across every CLOSED
+    'waiting_on' loop, per contact -- how quickly this person actually
+    replies once the user sends them something. Lower is more reciprocal.
+
+    Used by intelligence/relationships.py's contact ranking (§4.3 of the
+    client-strategy reframe). A contact with no closed loops has no entry
+    (absence of data, not a zero/perfect score).
+    """
+    account_clause = " AND account = ?" if account else ""
+    params: tuple = (account,) if account else ()
+    rows = db.execute_sql(
+        f"""
+        SELECT contact_email, AVG(updated_at - last_sent_ts) AS avg_secs
+        FROM loops
+        WHERE state = 'closed' AND side = 'waiting_on'
+          AND contact_email IS NOT NULL AND contact_email != ''
+          AND last_sent_ts IS NOT NULL AND updated_at IS NOT NULL
+          AND updated_at >= last_sent_ts{account_clause}
+        GROUP BY contact_email
+        """,
+        params,
+    ).fetchall()
+    return {
+        r["contact_email"]: round((r["avg_secs"] or 0) / 86400.0, 2)
+        for r in rows
+    }
+
+
+# ---------------------------------------------------------------------------
+# Thread -> project conversion (client-strategy reframe §4.5). See migration
+# 0034_create_projects and intelligence/projects.py.
+# ---------------------------------------------------------------------------
+
+
+def _row_to_project_dict(row) -> Dict[str, Any]:
+    d = dict(row)
+    d["participants"] = json.loads(d.pop("participants_json") or "[]")
+    d["action_items"] = json.loads(d.pop("action_items_json") or "[]")
+    return d
+
+
+def create_project(
+    db: Database,
+    *,
+    account: Optional[str],
+    thread_id: str,
+    title: Optional[str],
+    participants: List[Dict[str, Optional[str]]],
+    action_items: List[str],
+    deadline_ts: Optional[int],
+) -> int:
+    """Insert (or refresh, if this thread was already promoted) a project.
+
+    Idempotent via UNIQUE(account, thread_id): promoting the same thread
+    twice updates the existing project rather than creating a duplicate.
+    Account is normalized to '' before it reaches the UNIQUE constraint --
+    same NULL-uniqueness fix as upsert_loop (see migration 0034's comment).
+    """
+    now = int(time.time())
+    account_key = account if account is not None else ''
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO projects
+                (account, thread_id, title, participants_json, action_items_json,
+                 deadline_ts, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            ON CONFLICT(account, thread_id) DO UPDATE SET
+                title              = excluded.title,
+                participants_json  = excluded.participants_json,
+                action_items_json  = excluded.action_items_json,
+                deadline_ts        = excluded.deadline_ts,
+                updated_at         = excluded.updated_at
+            """,
+            (
+                account_key, thread_id, title, json.dumps(participants), json.dumps(action_items),
+                deadline_ts, now, now,
+            ),
+        )
+        row = cur.execute(
+            "SELECT id FROM projects WHERE account IS ? AND thread_id = ?",
+            (account_key, thread_id),
+        ).fetchone()
+        return int(row[0]) if row else int(cur.lastrowid)
+
+
+def get_project(db: Database, project_id: int) -> Optional[Dict[str, Any]]:
+    row = db.execute_sql("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return _row_to_project_dict(row) if row else None
+
+
+def get_projects(
+    db: Database, account: Optional[str] = None, status: Optional[str] = 'active', limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Return projects, most-recently-updated first. status=None returns every status."""
+    clauses = []
+    params: List[Any] = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if account:
+        clauses.append("account = ?")
+        params.append(account)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    rows = db.execute_sql(
+        f"SELECT * FROM projects{where}"
+        " ORDER BY (updated_at IS NULL), updated_at DESC, created_at DESC LIMIT ?",
+        tuple(params),
+    ).fetchall()
+    return [_row_to_project_dict(r) for r in rows]
+
+
+def close_project(db: Database, project_id: int) -> bool:
+    """Mark a project 'done'. Returns True if it changed."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE projects SET status = 'done', updated_at = ? WHERE id = ? AND status != 'done'",
+            (now, project_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Deadline -> calendar hold auto-scheduling (client-strategy reframe §4.4).
+# See migration 0035_create_calendar_holds and actions/calendar.py.
+# ---------------------------------------------------------------------------
+
+
+def create_calendar_hold(
+    db: Database,
+    *,
+    account: Optional[str],
+    email_gmail_id: str,
+    deadline_text: str,
+    summary: Optional[str],
+    start_ts: int,
+    end_ts: int,
+) -> int:
+    """Insert (or return the existing) proposed calendar hold for this
+    (account, email, deadline phrase). Idempotent -- the watch-loop sweep
+    re-scans the same emails on every cycle, so re-proposing the same
+    deadline mention must be a no-op, not a duplicate row. Account is
+    normalized to '' before it reaches the UNIQUE constraint, same
+    NULL-uniqueness fix as upsert_loop/create_project.
+    """
+    now = int(time.time())
+    account_key = account if account is not None else ''
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO calendar_holds
+                (account, email_gmail_id, deadline_text, summary, start_ts, end_ts,
+                 status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?, ?)
+            ON CONFLICT(account, email_gmail_id, deadline_text) DO NOTHING
+            """,
+            (account_key, email_gmail_id, deadline_text, summary, start_ts, end_ts, now, now),
+        )
+        row = cur.execute(
+            "SELECT id FROM calendar_holds WHERE account IS ? AND email_gmail_id = ? AND deadline_text = ?",
+            (account_key, email_gmail_id, deadline_text),
+        ).fetchone()
+        return int(row[0])
+
+
+def get_calendar_hold(db: Database, hold_id: int) -> Optional[Dict[str, Any]]:
+    row = db.execute_sql("SELECT * FROM calendar_holds WHERE id = ?", (hold_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_calendar_hold_for_email(db: Database, email_gmail_id: str) -> Optional[Dict[str, Any]]:
+    """Most recent non-discarded hold proposed for this email, if any --
+    used to annotate a "you owe" item's card with its calendar-hold state.
+
+    Ties on created_at (two holds proposed within the same wall-clock
+    second -- created_at has only 1-second resolution) are broken by id
+    DESC, since a higher autoincrement id is unambiguously more recent.
+    """
+    row = db.execute_sql(
+        "SELECT * FROM calendar_holds WHERE email_gmail_id = ? AND status != 'discarded'"
+        " ORDER BY created_at DESC, id DESC LIMIT 1",
+        (email_gmail_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_pending_calendar_holds(
+    db: Database, account: Optional[str] = None, limit: int = 100,
+) -> List[Dict[str, Any]]:
+    account_clause = " AND account = ?" if account else ""
+    params: tuple = (account, limit) if account else (limit,)
+    rows = db.execute_sql(
+        f"SELECT * FROM calendar_holds WHERE status = 'proposed'{account_clause}"
+        " ORDER BY start_ts ASC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_calendar_hold_status(
+    db: Database,
+    hold_id: int,
+    status: str,
+    gcal_event_id: Optional[str] = None,
+    created_by: Optional[str] = None,
+) -> bool:
+    """*created_by* ('human' | 'auto') should be passed whenever *status*
+    becomes 'created' -- it's the only way to tell a human Approve click
+    apart from an autonomous earned-eligible-sender creation afterward (see
+    get_unified_audit_log); both paths otherwise leave identical columns.
+    """
+    now = int(time.time())
+    with db.transaction() as cur:
+        sets = ["status = ?", "updated_at = ?"]
+        params: List[Any] = [status, now]
+        if gcal_event_id is not None:
+            sets.append("gcal_event_id = ?")
+            params.append(gcal_event_id)
+        if created_by is not None:
+            sets.append("created_by = ?")
+            params.append(created_by)
+        params.append(hold_id)
+        cur.execute(f"UPDATE calendar_holds SET {', '.join(sets)} WHERE id = ?", tuple(params))
+        return cur.rowcount > 0
+
+
+def toggle_sender_auto_calendar(db: Database, sender_email: str, enabled: bool) -> None:
+    """Toggle auto-calendar eligibility for a sender, creating the row if
+    absent. A third separate earned-autopilot flag -- see migration 0036."""
+    now = int(time.time())
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO sender_profiles (sender_email, last_action_ts) VALUES (?, ?)",
+            (sender_email, now),
+        )
+        cur.execute(
+            "UPDATE sender_profiles SET auto_calendar_eligible = ? WHERE sender_email = ?",
+            (int(bool(enabled)), sender_email),
+        )
+
+
+def is_sender_auto_calendar_eligible(db: Database, sender_email: Optional[str]) -> bool:
+    """Default False -- earned, opt-in per sender, same philosophy as
+    is_sender_auto_action_eligible / is_sender_auto_nudge_eligible."""
+    if not sender_email:
+        return False
+    row = db.execute_sql(
+        "SELECT auto_calendar_eligible FROM sender_profiles WHERE sender_email = ?",
+        (sender_email,),
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row["auto_calendar_eligible"])
+
+
+# ---------------------------------------------------------------------------
+# Unified audit log ("deeper agent autonomy" transparency -- client-strategy
+# reframe V3). Autonomous actions today span three different tables (labels
+# via action_queue, sent replies/Loop Radar nudges via drafts, calendar
+# events via calendar_holds) with no single place a user could see
+# everything MailMind actually did. This unions all three into one
+# chronological, filterable timeline.
+# ---------------------------------------------------------------------------
+
+
+def get_unified_audit_log(
+    db: Database, account: Optional[str] = None, since_ts: int = 0, limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Return every autonomous/executed action across labels, sent
+    drafts/nudges, and created calendar events, newest first.
+
+    Each row: {kind: 'label'|'sent'|'calendar', ref_id, when_ts, summary,
+    detail, account, was_auto}. ``was_auto`` is True when the action fired
+    without a human review step this cycle (autopilot label, an
+    autonomously-sent Loop Radar nudge, or an auto-created calendar hold);
+    False when a human explicitly approved it.
+    """
+    account_clause_aq = " AND aq.account = ?" if account else ""
+    account_clause_d = " AND d.account = ?" if account else ""
+    account_clause_ch = " AND ch.account = ?" if account else ""
+    params: List[Any] = [since_ts]
+    if account:
+        params.append(account)
+    params.append(since_ts)
+    if account:
+        params.append(account)
+    params.append(since_ts)
+    if account:
+        params.append(account)
+    params.append(limit)
+
+    rows = db.execute_sql(
+        f"""
+        SELECT 'label' AS kind, aq.id AS ref_id, aq.executed_at AS when_ts,
+               e.subject AS summary, p.primary_label AS detail, aq.account AS account,
+               CASE WHEN aq.reviewed_at IS NULL THEN 1 ELSE 0 END AS was_auto
+        FROM action_queue aq
+        LEFT JOIN emails e ON e.gmail_id = aq.email_gmail_id
+        LEFT JOIN predictions p ON p.id = aq.prediction_id
+        WHERE aq.status = 'executed' AND aq.executed_at >= ?{account_clause_aq}
+
+        UNION ALL
+
+        SELECT 'sent' AS kind, d.id AS ref_id, d.sent_at AS when_ts,
+               d.subject AS summary, d.to_addrs AS detail, d.account AS account,
+               CASE WHEN d.generated_by = 'llm' THEN 1 ELSE 0 END AS was_auto
+        FROM drafts d
+        WHERE d.status = 'sent' AND d.sent_at >= ?{account_clause_d}
+
+        UNION ALL
+
+        SELECT 'calendar' AS kind, ch.id AS ref_id, ch.updated_at AS when_ts,
+               ch.summary AS summary, ch.deadline_text AS detail, ch.account AS account,
+               CASE WHEN ch.created_by = 'auto' THEN 1 ELSE 0 END AS was_auto
+        FROM calendar_holds ch
+        WHERE ch.status = 'created' AND ch.updated_at >= ?{account_clause_ch}
+
+        ORDER BY when_ts DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+    return [dict(r) for r in rows]

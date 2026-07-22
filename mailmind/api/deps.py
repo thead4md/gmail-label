@@ -53,6 +53,27 @@ def get_action_executor(account: Optional[str] = None):
     return _get_action_executor_cached(account)
 
 
+@lru_cache(maxsize=None)
+def _get_calendar_client_cached(account: Optional[str]):
+    """One CalendarClient per mailbox account, or None if it has no stored
+    credentials. Mirrors _get_action_executor_cached exactly (per-account
+    cache keying for the same reason)."""
+    from mailmind.actions.calendar import CalendarClient
+    from mailmind.actions.safety import SafetyPolicy
+    from mailmind.ingestion.auth import build_calendar_service, load_stored_credentials
+
+    creds = load_stored_credentials(account)
+    if creds is None:
+        return None
+    service = build_calendar_service(creds)
+    dry_run = os.environ.get("MAILMIND_DRY_RUN", "0") == "1"
+    return CalendarClient(service, SafetyPolicy(dry_run=dry_run))
+
+
+def get_calendar_client(account: Optional[str] = None):
+    return _get_calendar_client_cached(account)
+
+
 @lru_cache(maxsize=1)
 def get_llm_client() -> Optional[Any]:
     """DeepSeek client for AI-drafted replies, or None if unconfigured."""

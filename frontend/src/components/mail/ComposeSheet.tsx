@@ -46,6 +46,12 @@ export function ComposeSheet() {
       setBody('')
       return
     }
+    if (target.draftId) {
+      // Open directly into an existing draft (e.g. a Loop Radar nudge
+      // already awaiting human review) — skip the "new draft" form entirely.
+      setDraftId(target.draftId)
+      return
+    }
     if (target.mode === 'reply' && replyDefaults.data) {
       setTo(replyDefaults.data.to_addrs)
       setSubject(replyDefaults.data.subject)
@@ -60,9 +66,33 @@ export function ComposeSheet() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, replyDefaults.data])
 
-  if (!target) return null
-
   const draft = draftQuery.data
+
+  // ⌘Enter / Ctrl+Enter advances whichever SINGLE step is currently visible
+  // (Save Draft, Approve, or Send) — a keyboard equivalent of clicking that
+  // one button, never a shortcut that skips a step. The three-step gate
+  // itself is untouched: each step is still its own separate request:
+  useEffect(() => {
+    if (!target) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return
+      e.preventDefault()
+      if (!draftId) {
+        if (to && subject) void handleSaveDraft()
+      } else if (draft?.status === 'pending_review') {
+        void handleApprove()
+      } else if (draft?.status === 'approved') {
+        void handleSend()
+      } else if (draft?.status === 'send_failed') {
+        void handleApprove()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, draftId, draft?.status, to, subject, body])
+
+  if (!target) return null
 
   async function handleSaveDraft() {
     try {

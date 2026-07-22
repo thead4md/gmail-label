@@ -33,8 +33,13 @@ DEFAULT_STALE_AFTER_DAYS = 2
 _ADDR_RE = re.compile(r"<([^>]+)>")
 
 
-def _split_addr(raw: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Split a ``"Name <email@host>"`` / ``email@host`` string into (email, name)."""
+def split_addr(raw: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Split a ``"Name <email@host>"`` / ``email@host`` string into (email, name).
+
+    A small shared utility -- reused by intelligence/draft_reply.py (voice
+    exemplar lookup) and api/routers/now.py (VIP annotation), not just this
+    module's own loop detection.
+    """
     if not raw:
         return (None, None)
     raw = raw.strip()
@@ -52,11 +57,18 @@ def _labels_list(email: Dict[str, Any]) -> List[str]:
 
 
 def _is_outbound(email: Dict[str, Any], user_addresses: Set[str]) -> bool:
-    """A message is outbound if Gmail tagged it SENT or its sender is the user."""
+    """A message is outbound if Gmail tagged it SENT or its sender is the user.
+
+    Compares the *parsed* sender address for exact equality against
+    ``user_addresses`` rather than testing substring containment — a raw
+    ``addr in sender`` check would misclassify an unrelated inbound sender
+    whose address happens to contain the user's address as a substring (e.g.
+    user "me@x.com" vs. sender "awesome@x.com", which contains "me@x.com").
+    """
     if "SENT" in _labels_list(email):
         return True
-    sender = (email.get("sender") or "").lower()
-    return any(addr and addr in sender for addr in user_addresses)
+    sender_addr, _ = split_addr(email.get("sender"))
+    return bool(sender_addr) and sender_addr in user_addresses
 
 
 def _other_party(
@@ -66,11 +78,11 @@ def _other_party(
     message, else the first recipient of the newest outbound message."""
     for e in reversed(thread_msgs_sorted):
         if not _is_outbound(e, user_addresses):
-            return _split_addr(e.get("sender"))
+            return split_addr(e.get("sender"))
     for e in reversed(thread_msgs_sorted):
         recipients = e.get("recipients") or ""
         if recipients:
-            return _split_addr(recipients.split(",")[0])
+            return split_addr(recipients.split(",")[0])
     return (None, None)
 
 

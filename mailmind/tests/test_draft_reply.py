@@ -154,3 +154,27 @@ class TestDraftReply:
         user_msg = call_kwargs["messages"][1]["content"]
         assert "x" * 501 not in user_msg
         assert "x" * 500 in user_msg
+
+    def test_voice_examples_included_when_history_exists(self, db):
+        from mailmind.storage.models import Email
+
+        db.insert_email(Email(
+            gmail_id="sent1", thread_id="t1", sender="me@x.com", recipients=["alice@example.com"],
+            subject="s", snippet="s", body_text="Sure, sounds great, see you then!", date_ts=100,
+            labels=["SENT"],
+        ))
+        llm_client, _ = _mock_deepseek_shaped_client("Sounds good.")
+        email = {"subject": "Meeting", "sender": "alice@example.com", "body_text": "Can we meet?"}
+        draft_reply(db, llm_client, email)
+        call_kwargs = llm_client.client.chat.completions.create.call_args.kwargs
+        user_msg = call_kwargs["messages"][1]["content"]
+        assert "Sure, sounds great, see you then!" in user_msg
+        assert "how I've written to this person before" in user_msg
+
+    def test_no_voice_examples_block_when_no_history(self, db):
+        llm_client, _ = _mock_deepseek_shaped_client("A reply.")
+        email = {"subject": "hi", "sender": "nobody-seen-before@example.com", "body_text": "test"}
+        draft_reply(db, llm_client, email)
+        call_kwargs = llm_client.client.chat.completions.create.call_args.kwargs
+        user_msg = call_kwargs["messages"][1]["content"]
+        assert "how I've written to this person before" not in user_msg

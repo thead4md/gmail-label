@@ -17,6 +17,8 @@ from mailmind.storage.queries import (
     set_label_suggestion_status,
     set_sender_label_rule,
     toggle_sender_auto_action,
+    toggle_sender_auto_calendar,
+    toggle_sender_auto_nudge,
 )
 from mailmind.taxonomy import BASE_SCORES as LABEL_BASE_SCORES
 
@@ -64,6 +66,27 @@ class AutopilotBody(BaseModel):
 @router.post("/senders/{email}/autopilot")
 def set_autopilot(email: str, body: AutopilotBody) -> dict:
     toggle_sender_auto_action(get_db(), email, body.enabled)
+    return {"ok": True}
+
+
+@router.post("/senders/{email}/auto-nudge")
+def set_auto_nudge(email: str, body: AutopilotBody) -> dict:
+    """Grant or revoke earned autonomy for Loop Radar's follow-up nudges to
+    this contact. Deliberately a separate endpoint/flag from /autopilot
+    (label/star/archive autopilot) -- composing and sending new outbound
+    content is a materially more consequential, harder-to-reverse action, so
+    trusting a contact for one must never silently grant the other."""
+    toggle_sender_auto_nudge(get_db(), email, body.enabled)
+    return {"ok": True}
+
+
+@router.post("/senders/{email}/auto-calendar")
+def set_auto_calendar(email: str, body: AutopilotBody) -> dict:
+    """Grant or revoke earned autonomy for creating calendar holds from this
+    contact's detected deadlines. A third separate flag alongside /autopilot
+    and /auto-nudge -- creating an event on the user's real calendar is its
+    own distinct trust surface."""
+    toggle_sender_auto_calendar(get_db(), email, body.enabled)
     return {"ok": True}
 
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 
 from mailmind.api.auth import require_auth
 from mailmind.api.deps import get_db
-from mailmind.storage.queries import get_executed_queue_enriched, get_recent_corrections
+from mailmind.storage.queries import get_executed_queue_enriched, get_recent_corrections, get_unified_audit_log
 
 router = APIRouter(prefix="/api/history", tags=["history"], dependencies=[Depends(require_auth)])
 
@@ -32,3 +32,12 @@ def executed(account: Optional[str] = None, days: int = 7, offset: int = 0, limi
 @router.get("/corrections")
 def corrections(limit: int = 50) -> list:
     return get_recent_corrections(get_db(), limit=limit)
+
+
+@router.get("/audit")
+def audit(account: Optional[str] = None, days: int = 30, limit: int = 100) -> dict:
+    """Unified audit log ("deeper agent autonomy" transparency, V3): every
+    executed label, sent draft/nudge, and created calendar event across the
+    whole app, newest first, with a was_auto flag on each."""
+    since_ts = int(time.time()) - days * 86400
+    return {"items": get_unified_audit_log(get_db(), account=account, since_ts=since_ts, limit=limit)}
