@@ -169,30 +169,48 @@ See below. Builds on `loops` + `draft_reply` + earned autopilot + `send_message`
 - **Tech:** extend `draft_reply.py` to retrieve the user's last N sent messages to the sender (from the
   SENT mirror) as few-shot style exemplars; add prompt caching for the system+style block.
 
-### 4.3 Relationship graph (who matters most)
+### 4.3 Relationship graph (who matters most) *(built)*
 - **What:** rank contacts by reciprocity, response SLA, and trust; surface VIP loops first.
 - **10x:** Superhuman's VIPs are manual; MailMind's are *learned* from `sender_profiles` +
   approval/rejection history + response latency.
-- **Tech:** aggregate over `sender_profiles` + thread timing; a nightly `intelligence` job writes a
-  `contact_rank`. Feeds loop ordering.
+- **Tech (as actually implemented):** `intelligence/relationships.py`'s `compute_contact_rank`
+  aggregates over `sender_profiles` (trust tier, approval rate) + a new `get_contact_reciprocity` query
+  (avg days-to-close across a contact's closed `waiting_on` loops). Computed fresh on every read rather
+  than a persisted nightly job — never stale, no extra migration. Surfaced as a VIP badge on Loops
+  (annotation only, deliberately not a re-sort — see `api/routers/now.py`) and a ranked panel on Insights.
 
-### 4.4 Deadline inference → auto-scheduling
+### 4.4 Deadline inference → auto-scheduling *(built)*
 - **What:** `_DEADLINE_RE` already extracts "by Friday / péntekig / 2026.06.15"; turn a detected deadline
   into a one-click calendar hold (proposed, you approve).
-- **Tech:** deadline → `create_event` tool call gated by `SafetyPolicy`; Calendar MCP is available in this
-  environment.
+- **Tech (as actually implemented):** a new bilingual `intelligence/deadline_parser.py` resolves the
+  extracted string to a real timestamp; `actions/calendar.py`'s `CalendarClient` wraps the real Google
+  Calendar API (`googleapiclient`, `calendar.events` OAuth scope — not this environment's own Calendar
+  MCP tools, which operate on the *assistant's* calendar, not a future end-user's) behind the same
+  dry-run-first, fail-safe contract as every other Google API client in this codebase. Two states, not
+  drafts' three-step gate — see `actions/calendar.py`'s module docstring for why a calendar hold's risk
+  profile doesn't call for the extra step irreversible email-sending does.
 
-### 4.5 Thread → project conversion
+### 4.5 Thread → project conversion *(built)*
 - **What:** promote a long multi-party thread into a mini-project (participants, open questions, action
   items, deadline) — a durable `loops` cluster.
-- **Tech:** `thread_analyzer` already extracts action_items/open_questions; group by `thread_id` into a
-  parent loop with children.
+- **Tech (as actually implemented):** `intelligence/projects.py`'s `promote_thread_to_project` aggregates
+  across every message in a thread: participants (union of senders/recipients), the union of each
+  message's already-extracted `action_items`/`deadlines` (`predictions.thread_context_json` —
+  `thread_analyzer` did the extraction, this is pure aggregation, no re-analysis), and the earliest
+  resolvable deadline via `deadline_parser`. A new `projects` table + `/api/projects` + a Projects page;
+  "Promote to project" lives in the Inbox reading pane. Idempotent — re-promoting the same thread
+  refreshes the existing project rather than duplicating it.
 
-### 4.6 Inbox simulation — "what breaks if I ignore this week?"
+### 4.6 Inbox simulation — "what breaks if I ignore this week?" *(built)*
 - **What:** a forward projection: which loops will slip, which relationships decay, which deadlines pass.
 - **10x:** nobody does consequence-modeling of an inbox. It turns anxiety ("I'm behind") into a ranked,
   finite list ("these 3 things break Thursday").
-- **Tech:** score open loops by `due_ts` proximity × contact_rank × historical slip cost; render a timeline.
+- **Tech (as actually implemented):** `intelligence/simulation.py`'s `simulate_week` projects both
+  "you owe" items (deadline parsed from the detected phrase, or — clearly flagged `is_estimated` —
+  3 days after the item entered the queue, when an unanswered reply-needed message starts to feel stale)
+  and "waiting on" loops (their real `due_ts`) into a 7-day window, weighted by the relationship graph's
+  `stakes` (§4.3) as a proxy for "historical slip cost." Surfaced as a collapsible panel on Loops, never
+  silently presenting an estimate as a real deadline.
 
 ---
 
@@ -296,17 +314,40 @@ that, but it's a sustained investment.
   retained; no autonomy.
 - **Ignore:** autonomous send, embeddings, calendar writes, multi-tenant, mobile, re-theme.
 
-### V2 — 6 weeks
-- **Ship:** **Loop Radar** (draft → earned-autopilot send → track → auto-close → escalate); per-sender
-  voice drafting (§4.2); semantic recall via `sqlite-vec`; SSE live updates; deadline → calendar hold;
-  ⌘Enter compose flow; prompt caching + concurrent LLM tier.
-- **Tradeoffs:** autonomy stays strictly gated to eligible senders; recall indexes locally only.
+### V2 — 6 weeks *(built in this branch)*
+- **Shipped:** **Loop Radar** (draft → earned-autopilot send → track → auto-close → escalate); per-sender
+  voice drafting (§4.2, both replies and nudges condition on the user's own past sent mail to that
+  contact); ⌘Enter compose flow (advances whichever single step is visible — Save Draft/Approve/Send —
+  never skips the three-step send gate).
+- **Deliberately deferred, not shipped:** SSE live updates (genuinely separate infra — a pub/sub layer +
+  a new streaming endpoint + reworking the query-cache update path — not a fast-follow; 30s polling is a
+  latency nicety, not a correctness gap); semantic recall via `sqlite-vec`; prompt caching + concurrent
+  LLM tier.
+- **Tradeoffs:** autonomy stays strictly gated to eligible senders (`auto_nudge_eligible`, a separate
+  flag from label autopilot — sending new outbound content is a materially bigger trust grant).
 - **Ignore:** teams, mobile app, fine-tuning.
 
-### V3 — 3 months
-- **Ship:** relationship graph + VIP loop ranking (§4.3); "what breaks if I ignore this week" inbox
-  simulation (§4.6); thread → project (§4.5); deeper agent autonomy with a full audit log; PWA/mobile;
-  **optional** multi-tenant re-platform (Section 9) *iff* productizing.
+### V3 — 3 months *(four of six items built in this branch; two deliberately deferred)*
+- **Shipped:** relationship graph + VIP contact ranking (§4.3, `intelligence/relationships.py` —
+  deterministic score from trust tier, approval rate, and reciprocity, surfaced as a badge on Loops and
+  a panel on Insights); "what breaks if I ignore this week" inbox simulation (§4.6,
+  `intelligence/simulation.py` — a 7-day forward projection over the same you-owe/waiting-on data,
+  clearly distinguishing real deadlines from aged-pending estimates); thread → project conversion (§4.5,
+  `intelligence/projects.py` + a new Projects page — participants/action-items/deadline aggregated from
+  a whole thread); deadline → calendar hold auto-scheduling (§4.4 — this was originally scoped for V2 and
+  had been missed; built here instead, alongside a new shared `intelligence/deadline_parser.py`
+  bilingual EN/HU date resolver that also powers the inbox simulation's real deadlines); a unified audit
+  log (`get_unified_audit_log`, a History page tab) unioning executed labels, sent drafts/nudges, and
+  created calendar events into one transparent, filterable "everything MailMind did" timeline with a
+  `was_auto` flag on every row — the concrete form "deeper agent autonomy with a full audit log" takes.
+- **A third earned-autopilot flag:** calendar event creation gets its own `auto_calendar_eligible` flag,
+  independent of both label autopilot and Loop Radar's nudge autopilot — granting one never silently
+  grants another. Autonomous creation still leaves a distinguishable `created_by='auto'` trail from a
+  human's one-click Approve, so the audit log never has to guess which happened.
+- **Deliberately deferred, not shipped:** PWA/mobile (packaging/distribution, not core differentiation —
+  lower priority than the AI-native substance above); the optional multi-tenant re-platform (Section 9)
+  — correctly gated on a product decision (self-host vs. productize) that hasn't been made, so building
+  Postgres/job-queue/multi-tenant-auth infrastructure now would be speculative.
 - **Ignore:** anything that trades away the trust/privacy wedge for feature parity with Shortwave.
 
 ---
@@ -330,7 +371,12 @@ makes the personal experience excellent while leaving every door open.
 ---
 
 *Appendix — key modules this strategy builds on:* `processing/pipeline.py`, `processing/queue_manager.py`
-(`filter_now_items`), `intelligence/thread_analyzer.py`, `intelligence/loops.py` (new),
-`intelligence/draft_reply.py`, `intelligence/sender_memory.py`, `actions/safety.py`,
-`storage/migrations.py` (0032), `storage/queries.py` (`upsert_loop`/`get_open_loops`/`close_loop`),
-`api/routers/now.py`, and the React `frontend/src/pages/NowPage.tsx` + `components/layout/ShortcutsHelp.tsx`.
+(`filter_now_items`), `intelligence/thread_analyzer.py`, `intelligence/loops.py`,
+`intelligence/loop_radar.py`, `intelligence/draft_reply.py`, `intelligence/sender_memory.py`,
+`intelligence/deadline_parser.py`, `intelligence/relationships.py`, `intelligence/simulation.py`,
+`intelligence/projects.py`, `intelligence/calendar_scheduler.py`, `actions/safety.py`,
+`actions/calendar.py`, `storage/migrations.py` (0032–0037), `storage/queries.py`
+(`upsert_loop`/`get_open_loops`/`close_loop`/`compute_contact_rank`/`get_unified_audit_log` and more),
+`api/routers/{now,projects,calendar_holds,automate,history,insights}.py`, and the React
+`frontend/src/pages/{NowPage,ProjectsPage,AutomatePage,HistoryPage,InsightsPage}.tsx` +
+`components/layout/ShortcutsHelp.tsx`.

@@ -54,6 +54,15 @@ export function useSetAutoNudge() {
   })
 }
 
+export function useSetAutoCalendar() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ email, enabled }: { email: string; enabled: boolean }) =>
+      api.post(`/api/automate/senders/${encodeURIComponent(email)}/auto-calendar`, { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['automate'] }),
+  })
+}
+
 export function useSetLabelPriority() {
   const qc = useQueryClient()
   return useMutation({

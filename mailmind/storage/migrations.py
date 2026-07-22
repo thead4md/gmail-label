@@ -444,6 +444,89 @@ MIGRATIONS: List[Tuple[str, str]] = [
         -- grant the other. Default 0 -- off, opt-in per contact, exactly like
         -- auto_action_eligible.""",
     ),
+    (
+        "0034_create_projects",
+        """
+        -- Thread -> project conversion (client-strategy reframe §4.5): a
+        -- durable "mini-project" promoted from a long multi-party thread --
+        -- participants, action items, and (if a deadline was detected and
+        -- parseable -- see intelligence/deadline_parser.py) a due date.
+        --
+        -- UNIQUE(account, thread_id) has the same NULL-account caveat as
+        -- migration 0032's loops table (SQLite treats every NULL as distinct
+        -- in a UNIQUE index) -- queries.create_project normalizes account to
+        -- '' before it reaches this constraint, exactly like upsert_loop.
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account TEXT,
+            thread_id TEXT NOT NULL,
+            title TEXT,
+            participants_json TEXT,
+            action_items_json TEXT,
+            deadline_ts INTEGER,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER,
+            UNIQUE(account, thread_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+        CREATE INDEX IF NOT EXISTS idx_projects_account ON projects(account);
+        """,
+    ),
+    (
+        "0035_create_calendar_holds",
+        """
+        -- Deadline -> calendar hold auto-scheduling (client-strategy reframe
+        -- §4.4). A hold is PROPOSED automatically when a detected deadline
+        -- string (thread_analyzer._DEADLINE_RE) resolves to a real timestamp
+        -- (intelligence/deadline_parser.py); it becomes 'created' via a
+        -- single human approval, or immediately for a contact the user has
+        -- explicitly opted into auto_calendar_eligible (migration 0036).
+        -- Two states, not the drafts flow's three -- see actions/calendar.py
+        -- for why a calendar hold doesn't need the extra gate irreversible
+        -- email-sending does.
+        --
+        -- UNIQUE(account, email_gmail_id, deadline_text) has the same
+        -- NULL-account caveat as migrations 0032/0034 -- normalized to ''
+        -- in queries.create_calendar_hold, same fix as upsert_loop.
+        CREATE TABLE IF NOT EXISTS calendar_holds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account TEXT,
+            email_gmail_id TEXT NOT NULL,
+            deadline_text TEXT NOT NULL,
+            summary TEXT,
+            start_ts INTEGER NOT NULL,
+            end_ts INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'proposed',
+            gcal_event_id TEXT,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER,
+            UNIQUE(account, email_gmail_id, deadline_text)
+        );
+        CREATE INDEX IF NOT EXISTS idx_calendar_holds_status ON calendar_holds(status);
+        CREATE INDEX IF NOT EXISTS idx_calendar_holds_email ON calendar_holds(email_gmail_id);
+        """,
+    ),
+    (
+        "0036_add_auto_calendar_eligible_to_sender_profiles",
+        """-- Handled in apply_migrations: adds auto_calendar_eligible column
+        -- to sender_profiles. A THIRD separate earned-autopilot flag
+        -- (alongside auto_action_eligible and auto_nudge_eligible) --
+        -- creating a calendar event on the user's real calendar is its own
+        -- distinct trust surface from labeling or nudging, so granting one
+        -- must never silently grant another. Default 0.""",
+    ),
+    (
+        "0037_add_created_by_to_calendar_holds",
+        """-- Handled in apply_migrations: adds created_by column to
+        -- calendar_holds ('human' default). Both the single-click human
+        -- Approve path and the autonomous earned-eligible-sender path end
+        -- at status='created' with otherwise identical columns -- without
+        -- this, the unified audit log (queries.get_unified_audit_log) has
+        -- no way to tell a human-approved calendar event apart from an
+        -- autonomously-created one, undermining the whole point of an
+        -- autonomy-transparency audit log.""",
+    ),
 ]
 
 PREDICTION_PIPELINE_COLUMNS: List[Tuple[str, str]] = [
@@ -492,6 +575,8 @@ SENDER_RULE_PATTERN_COLUMN: List[Tuple[str, str]] = [("match_pattern", "TEXT")]
 # silently overwritten by the next auto-recompute. Existing rows default to 'auto'.
 SENDER_TIER_SOURCE_COLUMN: List[Tuple[str, str]] = [("tier_source", "TEXT DEFAULT 'auto'")]
 SENDER_AUTO_NUDGE_COLUMN: List[Tuple[str, str]] = [("auto_nudge_eligible", "INTEGER DEFAULT 0")]
+SENDER_AUTO_CALENDAR_COLUMN: List[Tuple[str, str]] = [("auto_calendar_eligible", "INTEGER DEFAULT 0")]
+CALENDAR_HOLD_CREATED_BY_COLUMN: List[Tuple[str, str]] = [("created_by", "TEXT DEFAULT 'human'")]
 
 # Content/threading fields (Phase 1): full HTML body, RFC 5322 threading
 # headers, and the mailbox history cursor. Promoted from dynamic setattr on
@@ -649,6 +734,10 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             _ensure_columns(conn, "sender_profiles", SENDER_TIER_SOURCE_COLUMN)
         elif name == "0033_add_auto_nudge_eligible_to_sender_profiles":
             _ensure_columns(conn, "sender_profiles", SENDER_AUTO_NUDGE_COLUMN)
+        elif name == "0036_add_auto_calendar_eligible_to_sender_profiles":
+            _ensure_columns(conn, "sender_profiles", SENDER_AUTO_CALENDAR_COLUMN)
+        elif name == "0037_add_created_by_to_calendar_holds":
+            _ensure_columns(conn, "calendar_holds", CALENDAR_HOLD_CREATED_BY_COLUMN)
         elif name == "0027_extend_emails_for_content_and_threading":
             _ensure_columns(conn, "emails", EMAIL_CONTENT_THREADING_COLUMNS)
             conn.execute(

@@ -58,10 +58,10 @@ def _voice_examples_block(
     (including "no such contact") returns "" rather than blocking drafting.
     """
     try:
-        from .loops import _split_addr
+        from .loops import split_addr
         from ..storage.queries import get_sent_replies_to_contact
 
-        contact_email, _ = _split_addr(contact_raw)
+        contact_email, _ = split_addr(contact_raw)
         if not contact_email:
             return ""
         examples = get_sent_replies_to_contact(

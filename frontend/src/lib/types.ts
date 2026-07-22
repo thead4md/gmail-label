@@ -42,6 +42,25 @@ export interface QueueItem {
   llm_confidence: number | null
   channel: string | null
   was_auto?: boolean
+  // Annotated by the /api/now route (relationship graph, §4.3):
+  vip?: boolean
+  rank_score?: number | null
+  // Annotated by the /api/now route (calendar auto-scheduling, §4.4):
+  calendar_hold?: CalendarHold | null
+}
+
+export interface CalendarHold {
+  id: number
+  account: string | null
+  email_gmail_id: string
+  deadline_text: string
+  summary: string | null
+  start_ts: number
+  end_ts: number
+  status: string
+  gcal_event_id: string | null
+  created_at: number
+  updated_at: number | null
 }
 
 export interface Loop {
@@ -62,6 +81,8 @@ export interface Loop {
   // Annotated by the /api/now route:
   waiting_days: number | null
   slipping: boolean
+  vip: boolean
+  rank_score: number | null
 }
 
 export interface EmailListItem {
@@ -90,4 +111,5 @@ export interface SenderProfile {
   approval_rate: number
   auto_action_eligible: number | boolean
   auto_nudge_eligible: number | boolean
+  auto_calendar_eligible: number | boolean
 }

@@ -7,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { LabelChip } from '../components/ui/LabelChip'
 import { ReasonPanel } from '../components/mail/ReasonPanel'
 import { useAccount } from '../hooks/useAccount'
-import { useCorrections, useExecutedHistory } from '../hooks/useHistory'
+import { useAuditLog, useCorrections, useExecutedHistory } from '../hooks/useHistory'
 import { useCorrectQueueItem } from '../hooks/useQueue'
 import { useInboxLabels } from '../hooks/useMail'
 import { formatTs, timeAgo, truncate } from '../lib/format'
@@ -21,6 +21,7 @@ export function HistoryPage() {
   const { data, isLoading } = useExecutedHistory(account, days)
   const { data: corrections } = useCorrections()
   const { data: labels } = useInboxLabels(account)
+  const { data: audit } = useAuditLog(account, days)
 
   return (
     <div>
@@ -38,6 +39,29 @@ export function HistoryPage() {
           <div className="mb-8 flex flex-col gap-2">
             {data.items.map((item) => (
               <HistoryRow key={item.id} item={item} labels={labels ?? []} account={account} />
+            ))}
+          </div>
+        )}
+
+        <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-text-faint">
+          <span>🔍</span>
+          <span>Audit trail</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+        {!audit?.items.length ? (
+          <div className="mb-8 text-xs text-text-faint">No autonomous or sent actions in this window.</div>
+        ) : (
+          <div className="mb-8 flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
+            {audit.items.map((a) => (
+              <div key={`${a.kind}-${a.ref_id}`} className="flex items-center gap-2 px-3.5 py-2 text-[12px]">
+                <span className="shrink-0">{a.kind === 'label' ? '🏷️' : a.kind === 'sent' ? '📧' : '📅'}</span>
+                <span className="min-w-0 flex-1 truncate text-text">{a.summary || '(no subject)'}</span>
+                <span className="shrink-0 truncate text-text-faint">{a.detail}</span>
+                {!!a.was_auto && (
+                  <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-[10px] font-bold text-warning">AUTO</span>
+                )}
+                <span className="shrink-0 text-[11px] text-text-faint">{timeAgo(a.when_ts)}</span>
+              </div>
             ))}
           </div>
         )}

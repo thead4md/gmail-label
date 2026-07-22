@@ -13,7 +13,10 @@ import time
 from unittest.mock import MagicMock
 
 import mailmind.main as main_mod
-from mailmind.main import _maybe_run_loop_radar, _maybe_send_scheduled_drafts, _maybe_unsnooze
+from mailmind.main import (
+    _maybe_propose_calendar_holds, _maybe_run_loop_radar,
+    _maybe_send_scheduled_drafts, _maybe_unsnooze,
+)
 from mailmind.storage.database import Database
 from mailmind.storage.models import Email
 from mailmind.storage.queries import (
@@ -292,4 +295,82 @@ class TestMaybeRunLoopRadar:
 
         monkeypatch.setattr("mailmind.intelligence.loop_radar.run_loop_radar_sweep", _fake_sweep)
         _maybe_run_loop_radar(db, interval_seconds=0)  # must not raise
+        assert seen == ["a@b.com", "c@d.com"]
+
+
+class TestMaybeProposeCalendarHolds:
+    def test_respects_interval(self, monkeypatch):
+        db = _db()
+        monkeypatch.setattr(main_mod.MailMindConfig, "load_accounts", staticmethod(lambda: ["a@b.com"]))
+        calls = {"n": 0}
+        monkeypatch.setattr(
+            "mailmind.intelligence.calendar_scheduler.run_calendar_propose_sweep",
+            lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), {"proposed": 0, "auto_created": 0, "create_failed": 0})[1],
+        )
+        _maybe_propose_calendar_holds(db, interval_seconds=300)
+        _maybe_propose_calendar_holds(db, interval_seconds=300)
+        assert calls["n"] == 1
+
+    def test_sweep_runs_once_per_configured_account(self, monkeypatch):
+        db = _db()
+        monkeypatch.setattr(main_mod.MailMindConfig, "load_accounts", staticmethod(lambda: ["a@b.com", "c@d.com"]))
+        seen_accounts = []
+
+        def _fake_sweep(db_arg, client_for_account, account=None, now_ts=None):
+            seen_accounts.append(account)
+            return {"proposed": 0, "auto_created": 0, "create_failed": 0}
+
+        monkeypatch.setattr("mailmind.intelligence.calendar_scheduler.run_calendar_propose_sweep", _fake_sweep)
+        _maybe_propose_calendar_holds(db, interval_seconds=0)
+        assert seen_accounts == ["a@b.com", "c@d.com"]
+
+    def test_client_callback_builds_real_client_from_mocked_credentials(self, monkeypatch):
+        db = _db()
+        monkeypatch.setattr(main_mod.MailMindConfig, "load_accounts", staticmethod(lambda: ["a@b.com"]))
+
+        mock_creds = MagicMock()
+        mock_service = MagicMock()
+        monkeypatch.setattr(main_mod, "load_stored_credentials", lambda account: mock_creds)
+        monkeypatch.setattr("mailmind.ingestion.auth.build_calendar_service", lambda creds: mock_service)
+
+        captured = {}
+
+        def _fake_sweep(db_arg, client_for_account, account=None, now_ts=None):
+            captured["client"] = client_for_account(account)
+            return {"proposed": 0, "auto_created": 0, "create_failed": 0}
+
+        monkeypatch.setattr("mailmind.intelligence.calendar_scheduler.run_calendar_propose_sweep", _fake_sweep)
+        _maybe_propose_calendar_holds(db, interval_seconds=0)
+
+        assert captured["client"] is not None
+        assert captured["client"].service is mock_service
+
+    def test_account_with_no_credentials_gets_none_client_not_crashed(self, monkeypatch):
+        db = _db()
+        monkeypatch.setattr(main_mod.MailMindConfig, "load_accounts", staticmethod(lambda: ["no_creds@x.com"]))
+        monkeypatch.setattr(main_mod, "load_stored_credentials", lambda account: None)
+
+        captured = {}
+
+        def _fake_sweep(db_arg, client_for_account, account=None, now_ts=None):
+            captured["client"] = client_for_account(account)
+            return {"proposed": 0, "auto_created": 0, "create_failed": 0}
+
+        monkeypatch.setattr("mailmind.intelligence.calendar_scheduler.run_calendar_propose_sweep", _fake_sweep)
+        _maybe_propose_calendar_holds(db, interval_seconds=0)  # must not raise
+        assert captured["client"] is None
+
+    def test_sweep_exception_for_one_account_does_not_abort_others(self, monkeypatch):
+        db = _db()
+        monkeypatch.setattr(main_mod.MailMindConfig, "load_accounts", staticmethod(lambda: ["a@b.com", "c@d.com"]))
+        seen = []
+
+        def _fake_sweep(db_arg, client_for_account, account=None, now_ts=None):
+            seen.append(account)
+            if account == "a@b.com":
+                raise RuntimeError("boom")
+            return {"proposed": 0, "auto_created": 0, "create_failed": 0}
+
+        monkeypatch.setattr("mailmind.intelligence.calendar_scheduler.run_calendar_propose_sweep", _fake_sweep)
+        _maybe_propose_calendar_holds(db, interval_seconds=0)  # must not raise
         assert seen == ["a@b.com", "c@d.com"]

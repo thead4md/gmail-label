@@ -2,6 +2,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Loop, QueueItem } from '../lib/types'
 
+export interface SimulationItem {
+  kind: 'you_owe' | 'waiting_on'
+  ref_id: number
+  subject: string | null
+  contact: string | null
+  contact_email: string | null
+  breaks_at: number
+  breaks_in_days: number
+  is_estimated: boolean
+  stakes: number
+  vip: boolean
+}
+
 interface Kpi {
   icon: string
   label: string
@@ -38,6 +51,14 @@ export function useDailyBrief(account: string | null) {
     queryKey: ['now-brief', account],
     queryFn: () => api.get<{ brief: string | null }>('/api/now/brief', { account }),
     staleTime: 60 * 60_000,
+  })
+}
+
+export function useWeeklySimulation(account: string | null) {
+  return useQuery({
+    queryKey: ['now-simulation', account],
+    queryFn: () => api.get<{ items: SimulationItem[] }>('/api/now/simulation', { account }),
+    staleTime: 5 * 60_000,
   })
 }
 

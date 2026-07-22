@@ -22,7 +22,7 @@ from mailmind.storage.queries import (
 from mailmind.intelligence.loops import (
     compute_thread_states,
     detect_waiting_on_loops,
-    _split_addr,
+    split_addr,
     _is_outbound,
 )
 
@@ -67,13 +67,13 @@ def _seed_email(
 # --------------------------------------------------------------------------- #
 class TestAddressHelpers:
     def test_split_addr_with_name(self):
-        assert _split_addr("Bob Smith <bob@y.com>") == ("bob@y.com", "Bob Smith")
+        assert split_addr("Bob Smith <bob@y.com>") == ("bob@y.com", "Bob Smith")
 
     def test_split_addr_bare(self):
-        assert _split_addr("bob@y.com") == ("bob@y.com", None)
+        assert split_addr("bob@y.com") == ("bob@y.com", None)
 
     def test_split_addr_none(self):
-        assert _split_addr(None) == (None, None)
+        assert split_addr(None) == (None, None)
 
     def test_is_outbound_by_sent_label(self):
         assert _is_outbound({"labels": "SENT,IMPORTANT", "sender": "anyone@z.com"}, USERS)

@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from mailmind.api import auth as auth_module
 from mailmind.api.routers import (
     automate,
+    calendar_holds,
     drafts,
     folders,
     history,
@@ -25,6 +26,7 @@ from mailmind.api.routers import (
     insights,
     meta,
     now,
+    projects,
     queue,
     review,
     search,
@@ -45,6 +47,8 @@ for router in (
     insights.router,
     automate.router,
     drafts.router,
+    projects.router,
+    calendar_holds.router,
 ):
     app.include_router(router)
 
