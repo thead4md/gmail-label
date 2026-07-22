@@ -1,5 +1,9 @@
 app = "mailmind-adam"
-primary_region = "ams"
+# waw (Warsaw) is the closest Fly region to Hungary. NOTE: the existing
+# mailmind_data volume lives in ams — this setting alone doesn't move it;
+# a `fly volumes create`/data-copy in waw plus a machine cutover is needed
+# for the running app and its data to actually relocate.
+primary_region = "waw"
 
 [build]
 
