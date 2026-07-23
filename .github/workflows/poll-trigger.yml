@@ -1,0 +1,38 @@
+name: External poll trigger
+#
+# Drives MailMind's watch-loop cycle from outside the Fly machine, so the
+# machine itself can scale to zero (see fly.toml MAILMIND_RUN_MODE=external,
+# auto_stop_machines=true, min_machines_running=0) instead of needing to stay
+# up forever for an in-process `run --watch` loop.
+#
+# Required GitHub repo secret:
+#   MAILMIND_POLL_SECRET_TOKEN   Must be the SAME value as the Fly secret of
+#                                the same name (`fly secrets set
+#                                MAILMIND_POLL_SECRET_TOKEN=... --app
+#                                mailmind-adam`). Add the GitHub copy under
+#                                Settings -> Secrets and variables -> Actions.
+#
+# TRADEOFF, read before relying on this in production: GitHub Actions'
+# `schedule` trigger is best-effort — on the free/standard tier, scheduled
+# runs are frequently delayed by several minutes at high load, and can be
+# skipped entirely during outages. A "every 5 minutes" cron here can easily
+# mean 10-15+ minutes between actual runs in practice. Combined with the
+# Fly cold-start time when the machine has scaled to zero, that's a real
+# regression from the in-process loop's steady 120s poll cadence for a tool
+# whose whole point is timely mail labeling. Use workflow_dispatch to force
+# an immediate cycle when you need one now.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger one MailMind poll cycle
+        run: |
+          curl -fsS -X POST \
+            -H "X-Poll-Secret: ${{ secrets.MAILMIND_POLL_SECRET_TOKEN }}" \
+            https://mailmind-adam.fly.dev/internal/poll

@@ -1,16 +1,26 @@
 # Litestream config for the Fly.io container.
 # DB path is resolved from $MAILMIND_DB_PATH (set to /data/mailmind.db on Fly).
 #
+# Endpoint is fully generic ($LITESTREAM_S3_ENDPOINT), so any S3-compatible
+# store works. RECOMMENDED: Cloudflare R2 — S3-compatible, zero egress fees
+# (this matters here: a restore, or a disaster-recovery drill restore, pulls
+# the whole DB back down), generous free tier. Endpoint format:
+#   https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+# Alternatives that also work unchanged via the same endpoint var: AWS S3
+# (endpoint s3.<region>.amazonaws.com), Backblaze B2, MinIO, Tigris.
+#
 # Required env vars (Fly secrets):
 #   MAILMIND_DB_PATH             e.g. /data/mailmind.db
 #   LITESTREAM_ACCESS_KEY_ID
 #   LITESTREAM_SECRET_ACCESS_KEY
 #   LITESTREAM_S3_BUCKET
-#   LITESTREAM_S3_ENDPOINT       required for B2 / Tigris / MinIO;
-#                                for AWS S3 use s3.<region>.amazonaws.com
+#   LITESTREAM_S3_ENDPOINT       e.g. https://<ACCOUNT_ID>.r2.cloudflarestorage.com (R2);
+#                                s3.<region>.amazonaws.com for AWS S3
 #
 # If any of these are absent, fly-start.sh falls back to local-only mode
 # (Litestream is never started, no replication runs).
+#
+# Restore procedure (including disaster-recovery drills): see docs/backups.md.
 
 dbs:
   - path: $MAILMIND_DB_PATH
