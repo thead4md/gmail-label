@@ -24,6 +24,7 @@ from mailmind.api.routers import (
     history,
     inbox,
     insights,
+    internal,
     meta,
     now,
     projects,
@@ -49,6 +50,7 @@ for router in (
     drafts.router,
     projects.router,
     calendar_holds.router,
+    internal.router,
 ):
     app.include_router(router)
 

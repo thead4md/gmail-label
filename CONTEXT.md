@@ -56,6 +56,7 @@ graph TD
 | `mailmind/api/routers/history.py` |  | executed(), corrections(), audit() |
 | `mailmind/api/routers/inbox.py` |  | list_inbox(), thread(), BulkActionBody, bulk_action(), labels() |
 | `mailmind/api/routers/insights.py` |  | insights() |
+| `mailmind/api/routers/internal.py` | Internal, machine-to-machine endpoints. | run_one_poll_cycle() |
 | `mailmind/api/routers/meta.py` |  | get_meta() |
 | `mailmind/api/routers/now.py` |  | get_now(), get_weekly_simulation(), get_daily_brief() |
 | `mailmind/api/routers/projects.py` |  | list_projects(), read_project(), PromoteThreadBody, promote_thread(), close() |
@@ -243,6 +244,6 @@ None found.
 
 ## Current Pass Notes
 <!-- AUTO:START:current_pass_notes -->
-Pass 8 complete. 792 tests passing.
+Pass 8 complete. 797 tests passing.
 Next: Pass 9 — TBD
 <!-- AUTO:END:current_pass_notes -->

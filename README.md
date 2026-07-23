@@ -278,7 +278,9 @@ fly deploy --app mailmind-adam
 The container starts via `fly-start.sh` which:
 1. Optionally restores the DB from S3 via Litestream (when `LITESTREAM_*` secrets are set)
 2. Launches the FastAPI web app (`uvicorn mailmind.api.main:app`) on `:8501`
-3. Starts the MailMind polling daemon (`run --watch`)
+3. Starts the MailMind polling daemon (`run --watch`) — unless `MAILMIND_RUN_MODE=external`, in which case the watch loop is skipped and `POST /internal/poll` drives cycles instead (see `fly.toml`'s comments and `.github/workflows/poll-trigger.yml`)
+
+See [`docs/backups.md`](docs/backups.md) for the Litestream restore / disaster-recovery procedure.
 
 ### Operational commands
 

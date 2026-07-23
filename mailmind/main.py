@@ -90,15 +90,17 @@ def _build_components(
         safety_policy: Optional shared SafetyPolicy instance. The watch loop
             constructs ONE SafetyPolicy outside its per-cycle loop and passes
             it in here on every cycle so its rate-limiter state (see
-            SafetyPolicy._action_timestamps) survives across cycles instead of
-            being rebuilt empty every call. When omitted (one-shot commands),
-            a fresh instance is built as before.
+            SafetyPolicy._action_timestamps, or its db-persisted equivalent)
+            survives across cycles instead of being rebuilt empty every call.
+            When omitted (one-shot commands), a fresh instance is built as
+            before — now db-backed too, so its rate limit still persists
+            across process restarts (see SafetyPolicy's `db` param).
     """
     config = MailMindConfig.from_env()
     user_email = os.environ.get("MAILMIND_USER_EMAIL", "")
     rules_engine = RulesEngine(user_email=user_email)
     scorer = PriorityScorer(user_email=user_email)
-    safety = safety_policy if safety_policy is not None else SafetyPolicy(dry_run=dry_run)
+    safety = safety_policy if safety_policy is not None else SafetyPolicy(dry_run=dry_run, db=db)
     if service is not None:
         executor = ActionExecutor(
             service=service,
@@ -924,7 +926,7 @@ def _maybe_run_loop_radar(
                     service = build_gmail_service(creds)
                     executors[account] = ActionExecutor(
                         service=service, db=db,
-                        safety_policy=SafetyPolicy(dry_run=dry_run),
+                        safety_policy=SafetyPolicy(dry_run=dry_run, db=db),
                     )
             except Exception as exc:
                 LOG.warning("Loop Radar: failed to build executor for mailbox %s: %s", label, exc)
@@ -992,7 +994,7 @@ def _maybe_propose_calendar_holds(
                     from mailmind.actions.calendar import CalendarClient
 
                     service = build_calendar_service(creds)
-                    clients[account] = CalendarClient(service, SafetyPolicy(dry_run=dry_run))
+                    clients[account] = CalendarClient(service, SafetyPolicy(dry_run=dry_run, db=db))
             except Exception as exc:
                 LOG.warning("Calendar propose: failed to build client for mailbox %s: %s", label, exc)
                 clients[account] = None
@@ -1075,7 +1077,7 @@ def _maybe_send_scheduled_drafts(
                         service = build_gmail_service(creds)
                         executors[account] = ActionExecutor(
                             service=service, db=db,
-                            safety_policy=SafetyPolicy(dry_run=dry_run),
+                            safety_policy=SafetyPolicy(dry_run=dry_run, db=db),
                         )
                 except Exception as exc:
                     LOG.warning(
@@ -1198,8 +1200,11 @@ def run(
         # rate-limiter state — rebuilding the policy every cycle wiped it
         # empty every ~120s, making max_actions_per_hour unenforceable across
         # cycles. One shared instance for the life of this watch loop fixes
-        # that without changing the limit's value or semantics.
-        safety_policy = SafetyPolicy(dry_run=dry_run)
+        # that without changing the limit's value or semantics. db=db also
+        # makes the limiter persist across a process restart (see
+        # SafetyPolicy's `db` param) — required for MAILMIND_RUN_MODE=external,
+        # where there is no long-lived process for in-memory state to survive in.
+        safety_policy = SafetyPolicy(dry_run=dry_run, db=db)
         while True:
             try:
                 _run_all_accounts(db, dry_run=dry_run, fetch_max=fetch_max, no_llm=no_llm,
