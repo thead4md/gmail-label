@@ -46,7 +46,8 @@ def _get_action_executor_cached(account: Optional[str]):
         return None
     service = build_gmail_service(creds)
     dry_run = os.environ.get("MAILMIND_DRY_RUN", "0") == "1"
-    return ActionExecutor(service=service, db=get_db(), safety_policy=SafetyPolicy(dry_run=dry_run))
+    db = get_db()
+    return ActionExecutor(service=service, db=db, safety_policy=SafetyPolicy(dry_run=dry_run, db=db))
 
 
 def get_action_executor(account: Optional[str] = None):
@@ -67,7 +68,7 @@ def _get_calendar_client_cached(account: Optional[str]):
         return None
     service = build_calendar_service(creds)
     dry_run = os.environ.get("MAILMIND_DRY_RUN", "0") == "1"
-    return CalendarClient(service, SafetyPolicy(dry_run=dry_run))
+    return CalendarClient(service, SafetyPolicy(dry_run=dry_run, db=get_db()))
 
 
 def get_calendar_client(account: Optional[str] = None):

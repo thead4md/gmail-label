@@ -5,6 +5,17 @@ app = "mailmind-adam"
 # for the running app and its data to actually relocate.
 primary_region = "waw"
 
+# Fly secrets required (set via `fly secrets set NAME=value --app mailmind-adam`;
+# NEVER put these in [env] below — [env] is plaintext in this file):
+#   MAILMIND_POLL_SECRET_TOKEN   Shared secret for POST /internal/poll's
+#                                X-Poll-Secret header (see MAILMIND_RUN_MODE
+#                                below and .github/workflows/poll-trigger.yml).
+#                                Must match the GitHub Actions repo secret of
+#                                the same name. The endpoint 503s until this
+#                                is set — required for MAILMIND_RUN_MODE=external.
+#   DEEPSEEK_API_KEY / OPENAI_API_KEY, DASHBOARD_PASSWORD, DASHBOARD_SECRET,
+#   GMAIL_TOKEN[_<SLUG>], LITESTREAM_* — see README.md's "Required Fly secrets".
+
 [build]
 
 [env]
@@ -13,6 +24,15 @@ primary_region = "waw"
   MAILMIND_DATA_DIR = "/data/.mailmind"
   MAILMIND_MODEL_PATH = "/data/.mailmind/model.pkl"
   MAILMIND_POLL_SECONDS = "120"
+  # "external" disables the in-process `run --watch` loop (see
+  # mailmind/fly-start.sh) and lets an outside trigger drive cycles via
+  # POST /internal/poll instead (see .github/workflows/poll-trigger.yml).
+  # This is what makes the scale-to-zero settings below ([http_service]
+  # auto_stop_machines/min_machines_running) safe: no background loop's
+  # state is lost when the machine suspends. Requires the
+  # MAILMIND_POLL_SECRET_TOKEN Fly secret to be set (see below) — the
+  # endpoint returns 503 until it is.
+  MAILMIND_RUN_MODE = "external"
   # Content-first labeling: fold the content-rules vote into the 80/20 blend
   # instead of letting the rules engine hard-short-circuit. See classifier_router.
   FOLD_RULES_INTO_CONTENT = "true"
@@ -45,9 +65,16 @@ primary_region = "waw"
 [http_service]
   internal_port = 8501
   force_https = true
-  auto_stop_machines = false
+  # Scale-to-zero: the machine stops when idle and cold-starts on the next
+  # request/poll trigger. Safe only because MAILMIND_RUN_MODE=external above
+  # means there's no long-lived watch-loop process/state to lose between
+  # stops, AND because SafetyPolicy's action rate limiter is now persisted
+  # to the DB (see mailmind/actions/safety.py's `db` param) rather than
+  # living only in-process. Do not flip these back without also reverting
+  # MAILMIND_RUN_MODE to unset/"watch".
+  auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ["app"]
 
   # uvicorn takes a moment to bind 8501 on boot. Without an explicit check,
